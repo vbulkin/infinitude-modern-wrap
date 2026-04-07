@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Infinitude",
+        "description": "Enter the URL of your Infinitude instance. If running the Infinitude add-on, the default should work.",
+        "data": {
+          "host": "Infinitude URL"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect — check the URL and that Infinitude is running.",
+      "invalid_response": "Connected but got an unexpected response. Is this an Infinitude instance?",
+      "unknown": "An unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "Infinitude is already configured."
+    }
+  }
+}
