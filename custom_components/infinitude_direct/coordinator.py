@@ -131,6 +131,19 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
 
     # ── Write methods ──────────────────────────────────────────────────────
 
+    @staticmethod
+    def otmr_from_now(hours: int = 2) -> str:
+        """Return an HH:MM string *hours* from now, rounded to 15 min."""
+        from datetime import datetime, timedelta
+
+        target = datetime.now() + timedelta(hours=hours)
+        minutes = round(target.minute / 15) * 15
+        if minutes == 60:
+            target = target.replace(minute=0) + timedelta(hours=1)
+        else:
+            target = target.replace(minute=minutes, second=0, microsecond=0)
+        return target.strftime("%H:%M")
+
     async def async_set_mode(self, mode: str) -> None:
         await self._session.put(
             f"{self.host}/api/config",
@@ -138,8 +151,10 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         )
 
     async def async_set_hold(
-        self, zone_id: str, activity: str, until: str = "nextTransition"
+        self, zone_id: str, activity: str, until: str | None = None
     ) -> None:
+        if until is None:
+            until = self.otmr_from_now(2)
         await self._session.put(
             f"{self.host}/api/{zone_id}/hold",
             params={"activity": activity, "until": until},

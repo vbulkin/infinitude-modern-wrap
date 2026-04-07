@@ -351,17 +351,28 @@
       </select>
     </div>
     <div id="holdSpPreview" style="font-size:12px;color:var(--text2);margin-bottom:14px;padding:8px 10px;background:var(--bg3);border-radius:var(--radius-sm)"></div>
+    <div class="field" id="holdFanField" style="display:none">
+      <label>Fan</label>
+      <select id="holdFan">
+        <option value="auto">Auto</option>
+        <option value="low">Low</option>
+        <option value="med">Medium</option>
+        <option value="high">High</option>
+      </select>
+    </div>
     <div class="field">
-      <label>Hold until</label>
+      <label>Hold duration</label>
       <select id="holdUntil">
+        <option value="120">2 hours</option>
+        <option value="60">1 hour</option>
+        <option value="240">4 hours</option>
         <option value="forever">Indefinite</option>
-        <option value="nextTransition">Next schedule change</option>
-        <option value="custom">Custom time (HH:MM)</option>
+        <option value="custom">Custom time</option>
       </select>
     </div>
     <div class="field" id="holdCustomTimeField" style="display:none">
-      <label>Time (HH:00, HH:15, HH:30, or HH:45)</label>
-      <input type="text" id="holdUntilTime" placeholder="23:00" maxlength="5">
+      <label>Hold until</label>
+      <input type="time" id="holdUntilTime" step="900">
     </div>
     <div class="modal-footer">
       <button class="btn" onclick="closeHoldModal()">Cancel</button>
@@ -392,8 +403,8 @@
       </select>
     </div>
     <div class="field" id="whCustomTimeField" style="display:none">
-      <label>Time (HH:00, HH:15, HH:30, or HH:45)</label>
-      <input type="text" id="whUntilTime" placeholder="23:00" maxlength="5">
+      <label>Hold until</label>
+      <input type="time" id="whUntilTime" step="900">
     </div>
     <div class="modal-footer">
       <button class="btn" style="color:#f87171;margin-right:auto" onclick="cancelWhHold()">Cancel Hold</button>
@@ -438,7 +449,7 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.21';
+const APP_VERSION = '1.0.22';
 const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
 const SCHEDULE_ACTIVITIES = ['home','away','sleep','wake'];
@@ -512,6 +523,31 @@ document.querySelectorAll('.tab').forEach(t => {
 document.getElementById('holdUntil').addEventListener('change', function() {
   document.getElementById('holdCustomTimeField').style.display = this.value === 'custom' ? 'block' : 'none';
 });
+
+function durationToOtmr(minutes) {
+  const now = new Date();
+  now.setMinutes(now.getMinutes() + minutes);
+  // Round to nearest 15 minutes
+  const m = Math.round(now.getMinutes() / 15) * 15;
+  now.setMinutes(m, 0, 0);
+  const hh = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+function otmrToRelative(otmr) {
+  if (!otmr) return '';
+  const [h, m] = otmr.split(':').map(Number);
+  const now = new Date();
+  const target = new Date();
+  target.setHours(h, m, 0, 0);
+  if (target <= now) target.setDate(target.getDate() + 1);
+  const diffMin = Math.round((target - now) / 60000);
+  if (diffMin < 60) return `${diffMin}m left`;
+  const hrs = Math.floor(diffMin / 60);
+  const mins = diffMin % 60;
+  return mins > 0 ? `${hrs}h ${mins}m left` : `${hrs}h left`;
+}
 
 // ── Load ──────────────────────────────────────────────────────────────────────
 async function loadAll() {
@@ -726,7 +762,7 @@ function zoneCard(z) {
       <div class="zone-meta-item">Damper <span class="zone-meta-val">${z.damper ? z.damper + '%' : '–'}</span></div>
     </div>
     <div class="zone-controls">
-      ${hasHold ? `<div class="hold-badge">⏱ ${z.holdActivity}${z.otmr ? ' until ' + z.otmr : ''}</div>` : ''}
+      ${hasHold ? `<div class="hold-badge">⏱ ${z.holdActivity}${z.otmr ? ' · ' + otmrToRelative(z.otmr) : ''}</div>` : ''}
       <button class="btn btn-sm" onclick='openHoldModal(${JSON.stringify({id:z.id,name:z.name,htsp:z.htsp,clsp:z.clsp,currentActivity:z.currentActivity,holdActivity:z.holdActivity,otmr:z.otmr})})'>Set hold</button>
       ${hasHold ? `<button class="btn btn-sm" style="color:#f87171" onclick="cancelHold('${z.id}')">Cancel hold</button>` : ''}
     </div>
@@ -782,29 +818,56 @@ function openHoldModal(z) {
   holdZoneId = z.id;
   document.getElementById('holdModalSub').textContent = z.name;
   document.getElementById('holdActivity').value = z.currentActivity || 'home';
-  document.getElementById('holdUntil').value = z.otmr ? 'custom' : 'forever';
-  document.getElementById('holdCustomTimeField').style.display = z.otmr ? 'block' : 'none';
-  document.getElementById('holdUntilTime').value = z.otmr || '';
+  document.getElementById('holdUntil').value = '120';
+  document.getElementById('holdCustomTimeField').style.display = 'none';
+  document.getElementById('holdUntilTime').value = '';
+  toggleHoldFanField();
   updateHoldPreview();
   document.getElementById('holdModal').classList.add('open');
+}
+
+function toggleHoldFanField() {
+  const isManual = document.getElementById('holdActivity').value === 'manual';
+  document.getElementById('holdFanField').style.display = isManual ? 'block' : 'none';
 }
 
 function closeHoldModal() { document.getElementById('holdModal').classList.remove('open'); }
 document.getElementById('holdModal').addEventListener('click', e => { if (e.target === e.currentTarget) closeHoldModal(); });
 
-document.getElementById('holdActivity').addEventListener('change', updateHoldPreview);
+document.getElementById('holdActivity').addEventListener('change', () => {
+  updateHoldPreview();
+  toggleHoldFanField();
+});
 
 async function submitHold() {
   const activity = document.getElementById('holdActivity').value;
   const untilType = document.getElementById('holdUntil').value;
   const untilTime = document.getElementById('holdUntilTime').value;
-  const until = untilType === 'custom' ? untilTime : untilType;
+
+  let until;
+  if (untilType === 'custom') {
+    if (!untilTime) { toast('Please select a time', 'error'); return; }
+    until = untilTime;
+  } else if (untilType === 'forever') {
+    until = 'forever';
+  } else {
+    // Duration in minutes — convert to otmr (HH:MM)
+    until = durationToOtmr(parseInt(untilType));
+  }
 
   try {
+    // If manual, set fan speed on the manual activity first
+    if (activity === 'manual') {
+      const fan = document.getElementById('holdFan').value;
+      const z = state.zones.find(z => z.id === holdZoneId);
+      const htsp = z ? Math.round(parseFloat(z.htsp) || 68) : 68;
+      const clsp = z ? Math.round(parseFloat(z.clsp) || 76) : 76;
+      await apiFetch(`/api/${holdZoneId}/activity/manual?htsp=${htsp}&clsp=${clsp}&fan=${fan}`, { method: 'PUT' });
+    }
     await apiFetch(`/api/${holdZoneId}/hold?activity=${activity}&until=${until}`, { method: 'PUT' });
     toast('Hold applied', 'success');
     closeHoldModal();
-    setTimeout(loadAll, 1500);
+    setTimeout(loadAll, 2000);
   } catch(e) {
     toast('Failed: ' + e.message, 'error');
   }
@@ -842,11 +905,12 @@ async function _commitTemp(zoneId) {
 
   const htsp = Math.round(parseFloat(z.htsp) || 68);
   const clsp = Math.round(parseFloat(z.clsp) || 76);
+  const otmr = durationToOtmr(120);
 
   try {
     await apiFetch(`/api/${zoneId}/activity/manual?htsp=${htsp}&clsp=${clsp}`, { method: 'PUT' });
-    await apiFetch(`/api/${zoneId}/hold?activity=manual&until=nextTransition`, { method: 'PUT' });
-    toast(`${z.name}: heat ${htsp}° · cool ${clsp}° (manual hold)`, 'success');
+    await apiFetch(`/api/${zoneId}/hold?activity=manual&until=${otmr}`, { method: 'PUT' });
+    toast(`${z.name}: heat ${htsp}° · cool ${clsp}° (manual, ${otmr})`, 'success');
   } catch(e) {
     toast('Failed: ' + e.message, 'error');
   }
@@ -859,8 +923,9 @@ async function _commitTemp(zoneId) {
   if (htEl) htEl.classList.remove('sp-pending');
   if (clEl) clEl.classList.remove('sp-pending');
 
-  // Refresh after a short delay to pick up thermostat confirmation
-  setTimeout(loadAll, 2000);
+  // Don't do a full loadAll here — the 30s poll will pick up the confirmed
+  // values. A premature reload would overwrite our optimistic local state
+  // with stale server data.
 }
 
 async function cancelHold(zoneId) {

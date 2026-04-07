@@ -223,7 +223,7 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
             self._zone_id, "manual", new_htsp, new_clsp
         )
         await self.coordinator.async_set_hold(
-            self._zone_id, "manual", "nextTransition"
+            self._zone_id, "manual"
         )
         await self.coordinator.async_request_refresh()
 
