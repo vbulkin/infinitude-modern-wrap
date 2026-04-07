@@ -21,6 +21,7 @@
     --accent2: #3d7ae8;
     --heat: #f97316;
     --cool: #38bdf8;
+    --dehum: #a78bfa;
     --idle: #6b7280;
     --success: #34d399;
     --warn: #fbbf24;
@@ -92,6 +93,7 @@
   .zone-card:hover { border-color: var(--border2); }
   .zone-card.active-heat { border-top: 2px solid var(--heat); }
   .zone-card.active-cool { border-top: 2px solid var(--cool); }
+  .zone-card.active-dehum { border-top: 2px solid var(--dehum); }
   .zone-card.idle { border-top: 2px solid var(--bg4); }
 
   .zone-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 8px; }
@@ -120,6 +122,7 @@
   .cond-label { font-weight: 500; }
   .cond-heat { color: var(--heat); }
   .cond-cool { color: var(--cool); }
+  .cond-dehum { color: var(--dehum); }
   .cond-idle { color: var(--idle); }
 
   .zone-controls { padding: 8px 16px 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -414,7 +417,7 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.15';
+const APP_VERSION = '1.0.16';
 const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
 const SCHEDULE_ACTIVITIES = ['home','away','sleep','wake'];
@@ -645,9 +648,11 @@ function zoneCard(z) {
 
   const condStr = z.conditioning === 'active_heat' ? 'Heating'
                 : z.conditioning === 'active_cool' ? 'Cooling'
+                : z.conditioning.includes('dehum') ? 'Dehumidifying'
                 : 'Idle';
   const condCls = z.conditioning === 'active_heat' ? 'cond-heat'
                 : z.conditioning === 'active_cool' ? 'cond-cool'
+                : z.conditioning.includes('dehum') ? 'cond-dehum'
                 : 'cond-idle';
 
   return `
@@ -691,6 +696,7 @@ function zoneCard(z) {
 function condClass(c) {
   if (c === 'active_heat') return 'active-heat';
   if (c === 'active_cool') return 'active-cool';
+  if (c && c.includes('dehum')) return 'active-dehum';
   return 'idle';
 }
 

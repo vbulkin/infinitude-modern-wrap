@@ -140,6 +140,8 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
             return HVACAction.HEATING
         if cond == "active_cool":
             return HVACAction.COOLING
+        if "dehum" in cond:
+            return HVACAction.DRYING
         mode = self.coordinator.data.get("mode", "off")
         if mode == "off":
             return HVACAction.OFF
