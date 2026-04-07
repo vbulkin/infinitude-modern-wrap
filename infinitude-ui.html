@@ -150,39 +150,48 @@
 
   .sched-wrap { overflow-x: auto; }
   .sched-grid { display: inline-block; min-width: 420px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-  .sched-head { display: grid; grid-template-columns: 62px repeat(7, 56px); background: var(--bg3); border-bottom: 1px solid var(--border); }
+  .sched-head { display: grid; grid-template-columns: 50px repeat(7, 72px); background: var(--bg3); border-bottom: 1px solid var(--border); }
   .sched-head-cell { padding: 7px 0; text-align: center; font-size: 10px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; }
-  .sched-row { display: grid; grid-template-columns: 62px repeat(7, 56px); border-bottom: 1px solid var(--border); }
+  .sched-row { display: grid; grid-template-columns: 50px repeat(7, 72px); border-bottom: 1px solid var(--border); }
   .sched-row:last-child { border-bottom: none; }
-  .sched-row-label { display: flex; align-items: center; padding: 0 8px; font-size: 10px; color: var(--text3); border-right: 1px solid var(--border); font-weight: 500; }
-  .sched-cell { padding: 5px 3px; border-right: 1px solid var(--border); cursor: pointer; transition: background 0.12s; width: 56px; }
+  .sched-row-label { display: flex; align-items: center; justify-content: center; font-size: 10px; color: var(--text3); border-right: 1px solid var(--border); font-weight: 500; }
+  .sched-cell { padding: 0; border-right: 1px solid var(--border); cursor: pointer; transition: background 0.12s; }
   .sched-cell:last-child { border-right: none; }
   .sched-cell:hover { background: var(--bg4); }
   .sched-cell.today { background: rgba(79,142,247,0.06); }
-  .sched-act { font-size: 10px; font-weight: 500; padding: 2px 3px; border-radius: 4px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sched-act { font-size: 10px; font-weight: 500; padding: 1px 4px; border-radius: 4px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
   .act-home { background: rgba(79,142,247,0.15); color: #6fa8f8; }
   .act-away { background: rgba(107,114,128,0.2); color: #9ca3af; }
   .act-sleep { background: rgba(139,92,246,0.15); color: #a78bfa; }
   .act-wake { background: rgba(251,191,36,0.15); color: #fbbf24; }
   .act-manual { background: rgba(52,211,153,0.15); color: #34d399; }
-  .sched-time { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--text3); margin-top: 2px; text-align: center; }
+  .sched-time { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--text3); margin-top: 1px; text-align: center; display: block; }
   .sched-disabled { opacity: 0.3; }
-  .sched-period-off { cursor: pointer; background: rgba(255,255,255,0.01); }
+  .sched-period-off { cursor: pointer; }
+  .sched-zone-row { padding: 3px 4px; border-bottom: 1px solid var(--border); }
+  .sched-zone-row:last-child { border-bottom: none; }
+  .sched-zone-row-inner { display: flex; align-items: center; gap: 3px; }
+  .sched-time-inline { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--text3); }
+  .sched-sp-badge { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--text3); cursor: pointer; margin-left: auto; padding: 0 2px; border-radius: 3px; border: 1px solid transparent; white-space: nowrap; }
+  .sched-sp-badge:hover { border-color: var(--border2); color: var(--accent); }
 
   /* Cell editor */
   .cell-editor {
     display: none; position: fixed; z-index: 200;
     background: var(--bg2); border: 1px solid var(--border2); border-radius: var(--radius-sm);
-    padding: 12px; width: 200px;
+    padding: 12px; width: 220px; max-height: 80vh; overflow-y: auto;
   }
   .cell-editor.open { display: block; }
   .ce-title { font-size: 12px; font-weight: 600; margin-bottom: 10px; color: var(--text2); }
-  .ce-acts { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
-  .ce-act { padding: 3px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; border: 1px solid var(--border); transition: all 0.12s; }
+  .ce-acts { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+  .ce-act { padding: 2px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; border: 1px solid var(--border); transition: all 0.12s; }
   .ce-act:hover, .ce-act.selected { border-color: var(--accent); background: rgba(79,142,247,0.15); }
-  .ce-time { width: 100%; background: var(--bg3); border: 1px solid var(--border2); border-radius: 4px; color: var(--text); font-family: 'DM Mono', monospace; font-size: 12px; padding: 4px 8px; outline: none; margin-bottom: 10px; }
+  .ce-time { width: 80px; background: var(--bg3); border: 1px solid var(--border2); border-radius: 4px; color: var(--text); font-family: 'DM Mono', monospace; font-size: 12px; padding: 3px 6px; outline: none; }
   .ce-time:focus { border-color: var(--accent); }
-  .ce-footer { display: flex; justify-content: flex-end; gap: 6px; }
+  .ce-footer { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
+  .ce-zone-row { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  .ce-zone-row:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+  .ce-sp-hint { font-size: 10px; color: var(--text3); font-family: 'DM Mono', monospace; margin: 2px 0 4px; }
 
   /* Loader / notice */
   .loader { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 0; gap: 14px; }
@@ -227,10 +236,14 @@
   .sched-time-inline { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--text3); min-width: 32px; }
   .sched-sp-badge { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--text3); cursor: pointer; padding: 1px 3px; border-radius: 3px; border: 1px solid transparent; }
   .sched-sp-badge:hover { border-color: var(--border2); color: var(--accent); }
-  .ce-zone-row { margin-bottom: 4px; }
-  .ce-sp-hint { font-size: 10px; color: var(--text3); font-family: 'DM Mono', monospace; margin: 2px 0 4px; }
-
-  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  .sched-action-bar {
+    display: none; position: sticky; bottom: 0; left: 0; right: 0;
+    background: var(--bg2); border-top: 1px solid var(--border2);
+    padding: 10px 16px; z-index: 50;
+    flex-direction: row; align-items: center; gap: 10px; justify-content: flex-end;
+  }
+  .sched-action-bar.visible { display: flex; }
+  .sched-action-bar-label { font-size: 12px; color: var(--warn); margin-right: auto; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--bg4); border-radius: 3px; }
 </style>
@@ -394,13 +407,13 @@
 </div>
 
 <!-- Cell Editor -->
-<div class="cell-editor" id="cellEditor" style="width:230px">
+<div class="cell-editor" id="cellEditor">
   <div class="ce-title" id="ceTitle">Period</div>
   <div id="ceActs"></div>
   <div id="ceSpHint" style="display:none"></div>
   <div class="ce-footer">
     <button class="btn btn-sm" onclick="closeCellEditor()">Cancel</button>
-    <button class="btn btn-primary btn-sm" onclick="saveCellEdit()">Save</button>
+    <button class="btn btn-primary btn-sm" onclick="saveCellEdit()">Apply</button>
   </div>
 </div>
 
@@ -408,13 +421,14 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.7';
+const APP_VERSION = '1.0.8';
 const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
 const ACT_CLASS = { home:'act-home', away:'act-away', sleep:'act-sleep', wake:'act-wake', manual:'act-manual' };
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let state = { zones: [], summary: {}, scheduleZoneIdx: 0 };
+let scheduleDirty = false;
 let holdZoneId = null;
 let cellEditCtx = null;
 let pollingTimer = null;
@@ -807,6 +821,7 @@ function renderSchedule() {
   ).join('');
 
   const maxPeriods = 5;
+  setScheduleDirty(false);
 
   function zoneRow(z, zIdx, period, day, pi) {
     if (!period) return `<div class="sched-zone-row sched-disabled"><span class="sched-act act-home" style="opacity:0.2">–</span></div>`;
@@ -817,9 +832,11 @@ function renderSchedule() {
     const tempBadge = `<span class="sched-sp-badge" onclick="event.stopPropagation();openProfileTempModal('${z.id}','${act}')">${sp.htsp}/${sp.clsp}</span>`;
     const opacity = enabled ? '1' : '0.35';
     return `<div class="sched-zone-row" style="opacity:${opacity}" data-zone-idx="${zIdx}" data-enabled="${enabled ? 'on' : 'off'}" data-act="${act}" data-time="${time}" data-pid="${v(period.id) || (pi+1)}">
-      <span class="sched-act ${ACT_CLASS[act] || 'act-home'}">${act}</span>
-      <span class="sched-time-inline">${enabled ? time : 'off'}</span>
-      ${tempBadge}
+      <div class="sched-zone-row-inner">
+        <span class="sched-act ${ACT_CLASS[act] || 'act-home'}">${act}</span>
+        <span class="sched-time-inline">${enabled ? time : 'off'}</span>
+        ${tempBadge}
+      </div>
     </div>`;
   }
 
@@ -844,7 +861,6 @@ function renderSchedule() {
   document.getElementById('scheduleContent').innerHTML = `
     <div class="refresh-row">
       <div class="section-title">Weekly schedule</div>
-      <button class="btn btn-sm" onclick="saveSchedule()">Save schedule</button>
     </div>
     <div style="display:flex;gap:12px;margin-bottom:14px;align-items:center">${legend}</div>
     <div class="sched-wrap">
@@ -854,6 +870,11 @@ function renderSchedule() {
       </div>
     </div>
     <div style="margin-top:10px;font-size:11px;color:var(--text3)">Today (${todayName}) highlighted. Click cell to edit · Click temp to edit profile.</div>
+    <div class="sched-action-bar" id="schedActionBar">
+      <span class="sched-action-bar-label">● Unsaved changes</span>
+      <button class="btn btn-sm" onclick="cancelScheduleChanges()">Discard</button>
+      <button class="btn btn-primary btn-sm" onclick="saveSchedule()">Save schedule</button>
+    </div>
   `;
 }
 
@@ -923,7 +944,7 @@ function closeCellEditor() { document.getElementById('cellEditor').classList.rem
 
 document.addEventListener('click', e => {
   const editor = document.getElementById('cellEditor');
-  if (!editor.contains(e.target) && !e.target.closest('.sched-cell')) closeCellEditor();
+  if (!editor.contains(e.target) && !e.target.closest('.sched-cell') && !e.target.closest('.sched-zone-row')) closeCellEditor();
 });
 
 function saveCellEdit() {
@@ -958,7 +979,8 @@ function saveCellEdit() {
   });
 
   closeCellEditor();
-  toast('Updated — click Save schedule to apply', 'success');
+  setScheduleDirty(true);
+  toast('Applied — click Save schedule to send to thermostat', 'success');
 }
 
 async function saveSchedule() {
@@ -990,9 +1012,23 @@ async function saveSchedule() {
       });
     }
     toast('Schedule saved', 'success');
+    setScheduleDirty(false);
   } catch(e) {
     toast('Save failed: ' + e.message, 'error');
   }
+}
+
+function setScheduleDirty(dirty) {
+  scheduleDirty = dirty;
+  const bar = document.getElementById('schedActionBar');
+  if (!bar) return;
+  bar.classList.toggle('visible', dirty);
+}
+
+function cancelScheduleChanges() {
+  setScheduleDirty(false);
+  renderSchedule();
+  toast('Changes discarded', 'success');
 }
 
 // ── Profile Temp Modal ────────────────────────────────────────────────────────
