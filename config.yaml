@@ -1,0 +1,33 @@
+name: "Infinitude"
+description: "Open control of Carrier/Bryant Infinity thermostats"
+version: "1.0.7"
+slug: "infinitude"
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+
+# Ingress — HA handles auth and proxying
+ingress: true
+ingress_port: 3000
+panel_icon: mdi:thermostat
+panel_title: Infinitude
+
+# Optional: allow direct port access too (disabled by default)
+# Users can enable in add-on Network settings if needed
+ports:
+  3000/tcp: 3000
+ports_description:
+  3000/tcp: "Thermostat proxy port"
+
+# Infinitude needs to reach the thermostat on your LAN
+host_network: false
+
+options:
+  pass_reqs: 60
+  serial_tty: ""
+
+schema:
+  pass_reqs: int
+  serial_tty: str

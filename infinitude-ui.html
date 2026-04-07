@@ -1,0 +1,1117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Infinitude</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0f1117;
+    --bg2: #161b26;
+    --bg3: #1e2535;
+    --bg4: #252d3d;
+    --border: rgba(255,255,255,0.07);
+    --border2: rgba(255,255,255,0.12);
+    --text: #e8eaf0;
+    --text2: #8b92a8;
+    --text3: #555e74;
+    --accent: #4f8ef7;
+    --accent2: #3d7ae8;
+    --heat: #f97316;
+    --cool: #38bdf8;
+    --idle: #6b7280;
+    --success: #34d399;
+    --warn: #fbbf24;
+    --radius: 12px;
+    --radius-sm: 8px;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; font-size: 14px; line-height: 1.5; }
+
+  .app { display: flex; flex-direction: column; min-height: 100vh; }
+
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 24px; height: 56px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg); position: sticky; top: 0; z-index: 100;
+  }
+  .topbar-left { display: flex; align-items: center; gap: 16px; }
+  .logo { font-family: 'DM Mono', monospace; font-size: 15px; font-weight: 500; letter-spacing: -0.3px; }
+  .logo span { color: var(--accent); }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text3); }
+  .status-dot.ok { background: var(--success); animation: pulse 2.5s ease infinite; }
+  .status-dot.error { background: #ef4444; }
+  .status-dot.connecting { background: var(--warn); }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  .topbar-right { display: flex; align-items: center; gap: 10px; }
+  .host-input {
+    background: var(--bg3); border: 1px solid var(--border2); border-radius: var(--radius-sm);
+    color: var(--text2); font-family: 'DM Mono', monospace; font-size: 12px;
+    padding: 5px 10px; width: 220px; outline: none; transition: border-color 0.2s, color 0.2s;
+  }
+  .host-input:focus { border-color: var(--accent); color: var(--text); }
+  .btn {
+    background: var(--bg3); border: 1px solid var(--border2); border-radius: var(--radius-sm);
+    color: var(--text2); font-family: 'DM Sans', sans-serif; font-size: 13px;
+    padding: 5px 14px; cursor: pointer; transition: all 0.15s;
+  }
+  .btn:hover { background: var(--bg4); color: var(--text); border-color: var(--accent); }
+  .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent2); }
+  .btn-primary:hover { background: var(--accent2); color: #fff; }
+  .btn-sm { padding: 3px 10px; font-size: 12px; }
+  .btn-ghost { background: transparent; border-color: transparent; color: var(--text3); font-size: 12px; padding: 4px 10px; }
+  .btn-ghost:hover { color: var(--text); border-color: var(--border2); background: var(--bg3); }
+
+  .tabs { display: flex; gap: 2px; padding: 0 24px; border-bottom: 1px solid var(--border); background: var(--bg); }
+  .tab { padding: 12px 16px; font-size: 13px; font-weight: 500; color: var(--text3); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: all 0.15s; user-select: none; }
+  .tab:hover { color: var(--text2); }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+
+  .content { padding: 24px; flex: 1; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* Summary bar */
+  .summary-bar { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-bottom: 24px; }
+  .stat { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 14px; }
+  .stat-label { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.7px; margin-bottom: 4px; }
+  .stat-val { font-family: 'DM Mono', monospace; font-size: 18px; font-weight: 400; color: var(--text); }
+  .stat-val.heat { color: var(--heat); }
+  .stat-val.cool { color: var(--cool); }
+  .stat-val.auto { color: var(--success); }
+
+  /* Zone grid */
+  .zone-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+  .zone-card {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius);
+    overflow: hidden; transition: border-color 0.2s;
+  }
+  .zone-card:hover { border-color: var(--border2); }
+  .zone-card.active-heat { border-top: 2px solid var(--heat); }
+  .zone-card.active-cool { border-top: 2px solid var(--cool); }
+  .zone-card.idle { border-top: 2px solid var(--bg4); }
+
+  .zone-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 8px; }
+  .zone-name { font-size: 13px; font-weight: 600; }
+  .zone-activity { font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 20px; background: var(--bg4); color: var(--text2); }
+
+  .zone-temps { display: flex; align-items: flex-end; gap: 8px; padding: 4px 16px 10px; }
+  .temp-current { font-family: 'DM Mono', monospace; font-size: 44px; font-weight: 300; line-height: 1; }
+  .temp-unit { font-size: 18px; color: var(--text3); margin-bottom: 6px; }
+  .temp-setpoints { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; margin-left: 6px; }
+  .temp-sp { font-family: 'DM Mono', monospace; font-size: 12px; display: flex; align-items: center; gap: 5px; }
+  .temp-sp .ico { font-size: 10px; width: 16px; }
+  .sp-heat { color: var(--heat); }
+  .sp-cool { color: var(--cool); }
+
+  .zone-meta { display: flex; gap: 14px; padding: 8px 16px 12px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text3); }
+  .zone-meta-item { display: flex; align-items: center; gap: 4px; }
+  .zone-meta-val { color: var(--text2); font-weight: 500; }
+  .cond-label { font-weight: 500; }
+  .cond-heat { color: var(--heat); }
+  .cond-cool { color: var(--cool); }
+  .cond-idle { color: var(--idle); }
+
+  .zone-controls { padding: 8px 16px 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .hold-badge {
+    display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--warn);
+    background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.25); border-radius: 20px; padding: 2px 10px;
+  }
+
+  /* Refresh row */
+  .refresh-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .section-title { font-size: 11px; font-weight: 500; color: var(--text3); text-transform: uppercase; letter-spacing: 0.8px; }
+  .last-updated { font-size: 11px; color: var(--text3); font-family: 'DM Mono', monospace; }
+
+  /* Hold modal */
+  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 500; align-items: center; justify-content: center; }
+  .modal-overlay.open { display: flex; }
+  .modal { background: var(--bg2); border: 1px solid var(--border2); border-radius: var(--radius); padding: 24px; width: 340px; max-width: 95vw; }
+  .modal h3 { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .modal-sub { font-size: 12px; color: var(--text3); margin-bottom: 20px; }
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: 12px; color: var(--text2); margin-bottom: 5px; }
+  .field select, .field input[type=number], .field input[type=text] {
+    width: 100%; background: var(--bg3); border: 1px solid var(--border2);
+    border-radius: var(--radius-sm); color: var(--text); font-family: 'DM Sans', sans-serif;
+    font-size: 13px; padding: 7px 10px; outline: none; appearance: none;
+  }
+  .field select:focus, .field input:focus { border-color: var(--accent); }
+  .setpoint-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .modal-footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
+
+  /* Schedule panel */
+  .schedule-zone-pills { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+  .zone-pill { padding: 5px 14px; border-radius: 20px; font-size: 12px; font-weight: 500; cursor: pointer; border: 1px solid var(--border2); background: var(--bg3); color: var(--text2); transition: all 0.15s; }
+  .zone-pill.active { background: var(--accent); color: #fff; border-color: var(--accent2); }
+
+  .sched-wrap { overflow-x: auto; }
+  .sched-grid { display: inline-block; min-width: 420px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .sched-head { display: grid; grid-template-columns: 62px repeat(7, 56px); background: var(--bg3); border-bottom: 1px solid var(--border); }
+  .sched-head-cell { padding: 7px 0; text-align: center; font-size: 10px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; }
+  .sched-row { display: grid; grid-template-columns: 62px repeat(7, 56px); border-bottom: 1px solid var(--border); }
+  .sched-row:last-child { border-bottom: none; }
+  .sched-row-label { display: flex; align-items: center; padding: 0 8px; font-size: 10px; color: var(--text3); border-right: 1px solid var(--border); font-weight: 500; }
+  .sched-cell { padding: 5px 3px; border-right: 1px solid var(--border); cursor: pointer; transition: background 0.12s; width: 56px; }
+  .sched-cell:last-child { border-right: none; }
+  .sched-cell:hover { background: var(--bg4); }
+  .sched-cell.today { background: rgba(79,142,247,0.06); }
+  .sched-act { font-size: 10px; font-weight: 500; padding: 2px 3px; border-radius: 4px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .act-home { background: rgba(79,142,247,0.15); color: #6fa8f8; }
+  .act-away { background: rgba(107,114,128,0.2); color: #9ca3af; }
+  .act-sleep { background: rgba(139,92,246,0.15); color: #a78bfa; }
+  .act-wake { background: rgba(251,191,36,0.15); color: #fbbf24; }
+  .act-manual { background: rgba(52,211,153,0.15); color: #34d399; }
+  .sched-time { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--text3); margin-top: 2px; text-align: center; }
+  .sched-disabled { opacity: 0.3; }
+  .sched-period-off { cursor: pointer; background: rgba(255,255,255,0.01); }
+
+  /* Cell editor */
+  .cell-editor {
+    display: none; position: fixed; z-index: 200;
+    background: var(--bg2); border: 1px solid var(--border2); border-radius: var(--radius-sm);
+    padding: 12px; width: 200px;
+  }
+  .cell-editor.open { display: block; }
+  .ce-title { font-size: 12px; font-weight: 600; margin-bottom: 10px; color: var(--text2); }
+  .ce-acts { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+  .ce-act { padding: 3px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; border: 1px solid var(--border); transition: all 0.12s; }
+  .ce-act:hover, .ce-act.selected { border-color: var(--accent); background: rgba(79,142,247,0.15); }
+  .ce-time { width: 100%; background: var(--bg3); border: 1px solid var(--border2); border-radius: 4px; color: var(--text); font-family: 'DM Mono', monospace; font-size: 12px; padding: 4px 8px; outline: none; margin-bottom: 10px; }
+  .ce-time:focus { border-color: var(--accent); }
+  .ce-footer { display: flex; justify-content: flex-end; gap: 6px; }
+
+  /* Loader / notice */
+  .loader { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 0; gap: 14px; }
+  .spinner { width: 28px; height: 28px; border: 2px solid var(--border2); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loader-text { font-size: 13px; color: var(--text3); }
+  .notice { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 28px; text-align: center; color: var(--text3); font-size: 13px; }
+  .notice strong { display: block; font-size: 15px; color: var(--text2); margin-bottom: 6px; }
+
+  /* Toast */
+  .toast-wrap { position: fixed; bottom: 24px; right: 24px; z-index: 999; display: flex; flex-direction: column; gap: 8px; }
+  .toast { padding: 10px 16px; border-radius: var(--radius-sm); font-size: 13px; background: var(--bg3); border: 1px solid var(--border2); color: var(--text); animation: toastIn 0.2s ease; max-width: 300px; }
+  .toast.success { border-color: rgba(52,211,153,0.4); color: var(--success); }
+  .toast.error { border-color: rgba(239,68,68,0.4); color: #f87171; }
+  @keyframes toastIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+
+  /* Profiles */
+  .profiles-zone { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 20px; overflow: hidden; display: inline-block; min-width: 340px; }
+  .profiles-zone-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+  .profiles-zone-name { font-size: 13px; font-weight: 600; }
+  .profiles-table { border-collapse: collapse; }
+  .profiles-table th { font-size: 10px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.7px; padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .profiles-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; white-space: nowrap; }
+  .profiles-table tr:last-child td { border-bottom: none; }
+  .profiles-table td:first-child { width: 80px; }
+  .profiles-table input[type=number] {
+    width: 56px; background: var(--bg3); border: 1px solid var(--border2);
+    border-radius: var(--radius-sm); color: var(--text); font-family: 'DM Mono', monospace;
+    font-size: 12px; padding: 4px 8px; outline: none; text-align: center;
+  }
+  .profiles-table input[type=number]:focus { border-color: var(--accent); }
+  .profiles-table select {
+    background: var(--bg3); border: 1px solid var(--border2); border-radius: var(--radius-sm);
+    color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 12px;
+    padding: 4px 8px; outline: none; appearance: none; width: 64px;
+  }
+  .profiles-table select:focus { border-color: var(--accent); }
+  .profiles-save-row { padding: 12px 16px; display: flex; justify-content: flex-end; border-top: 1px solid var(--border); }
+  .profiles-zones-wrap { display: flex; flex-wrap: wrap; gap: 16px; }
+
+  .sched-zone-row { display: flex; align-items: center; gap: 4px; padding: 2px 3px; }
+  .sched-time-inline { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--text3); min-width: 32px; }
+  .sched-sp-badge { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--text3); cursor: pointer; padding: 1px 3px; border-radius: 3px; border: 1px solid transparent; }
+  .sched-sp-badge:hover { border-color: var(--border2); color: var(--accent); }
+  .ce-zone-row { margin-bottom: 4px; }
+  .ce-sp-hint { font-size: 10px; color: var(--text3); font-family: 'DM Mono', monospace; margin: 2px 0 4px; }
+
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--bg4); border-radius: 3px; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="logo">infin<span>itude</span></div>
+      <div class="status-dot" id="statusDot"></div>
+      <div style="font-family:'DM Mono',monospace;font-size:10px;color:var(--text3)" id="versionBadge"></div>
+    </div>
+    <div class="topbar-right">
+      <span id="hostControls">
+        <input class="host-input" id="hostInput" type="text" value="http://localhost:3000" placeholder="http://host:3000" style="margin-right:6px" />
+        <button class="btn btn-primary btn-sm" onclick="loadAll()">Connect</button>
+      </span>
+      <a href="http://192.168.1.233:3000/native.html" target="_blank" class="btn btn-ghost btn-sm">Native UI ↗</a>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="status">Status</div>
+    <div class="tab" data-tab="schedule">Schedule</div>
+    <div class="tab" data-tab="profiles">Profiles</div>
+  </div>
+
+  <div class="content">
+    <div class="panel active" id="panel-status">
+      <div class="summary-bar" id="summaryBar"></div>
+      <div class="refresh-row">
+        <div class="section-title">Zones</div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="last-updated" id="lastUpdated"></span>
+          <button class="btn btn-sm" onclick="loadAll()">↻ Refresh</button>
+        </div>
+      </div>
+      <div id="zoneContent">
+        <div class="loader"><div class="spinner"></div><div class="loader-text">Connecting…</div></div>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-schedule">
+      <div id="scheduleContent">
+        <div class="notice"><strong>Not loaded</strong>Load status first.</div>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-profiles">
+      <div id="profilesContent">
+        <div class="notice"><strong>Not loaded</strong>Load status first.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Hold Modal -->
+<div class="modal-overlay" id="holdModal">
+  <div class="modal">
+    <h3>Set Hold</h3>
+    <div class="modal-sub" id="holdModalSub"></div>
+    <div class="field">
+      <label>Activity</label>
+      <select id="holdActivity" onchange="updateHoldSetpoints()">
+        <option value="home">Home</option>
+        <option value="away">Away</option>
+        <option value="sleep">Sleep</option>
+        <option value="wake">Wake</option>
+        <option value="manual">Manual</option>
+      </select>
+    </div>
+    <div class="setpoint-row">
+      <div class="field">
+        <label>Heat to (°F)</label>
+        <input type="number" id="holdHeat" min="50" max="90" step="1" value="68">
+      </div>
+      <div class="field">
+        <label>Cool to (°F)</label>
+        <input type="number" id="holdCool" min="60" max="99" step="1" value="76">
+      </div>
+    </div>
+    <div class="field" style="font-size:11px;color:var(--text3);margin-top:-8px;margin-bottom:8px">
+      Setpoints are saved to the activity profile.
+    </div>
+    <div class="field">
+      <label>Hold until</label>
+      <select id="holdUntil">
+        <option value="forever">Indefinite</option>
+        <option value="nextTransition">Next schedule change</option>
+        <option value="custom">Custom time (HH:MM)</option>
+      </select>
+    </div>
+    <div class="field" id="holdCustomTimeField" style="display:none">
+      <label>Time (HH:00, HH:15, HH:30, or HH:45)</label>
+      <input type="text" id="holdUntilTime" placeholder="23:00" maxlength="5">
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeHoldModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitHold()">Apply Hold</button>
+    </div>
+  </div>
+</div>
+
+<!-- Whole House Hold Modal -->
+<div class="modal-overlay" id="whModal">
+  <div class="modal">
+    <h3>Whole House Hold</h3>
+    <div class="modal-sub">Controls all zones simultaneously</div>
+    <div class="field">
+      <label>Activity</label>
+      <select id="whActivity">
+        <option value="home">Home</option>
+        <option value="away">Away</option>
+        <option value="sleep">Sleep</option>
+        <option value="wake">Wake</option>
+        <option value="manual">Manual</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Hold until</label>
+      <select id="whUntil">
+        <option value="forever">Indefinite</option>
+        <option value="nextTransition">Next schedule change</option>
+        <option value="custom">Custom time (HH:MM)</option>
+      </select>
+    </div>
+    <div class="field" id="whCustomTimeField" style="display:none">
+      <label>Time (HH:00, HH:15, HH:30, or HH:45)</label>
+      <input type="text" id="whUntilTime" placeholder="23:00" maxlength="5">
+    </div>
+    <div class="modal-footer">
+      <button class="btn" style="color:#f87171;margin-right:auto" onclick="cancelWhHold()">Cancel Hold</button>
+      <button class="btn" onclick="closeWhModal()">Close</button>
+      <button class="btn btn-primary" onclick="submitWhHold()">Apply</button>
+    </div>
+  </div>
+</div>
+
+<!-- Profile Temp Modal -->
+<div class="modal-overlay" id="profileTempModal">
+  <div class="modal" style="width:280px">
+    <h3>Edit Profile Temps</h3>
+    <div class="modal-sub" id="profileTempSub"></div>
+    <div style="font-size:11px;color:var(--warn);margin-bottom:14px">Applies to all schedule periods using this activity.</div>
+    <div class="setpoint-row">
+      <div class="field">
+        <label>Heat to (°F)</label>
+        <input type="number" id="profileTempHeat" min="50" max="90" step="1">
+      </div>
+      <div class="field">
+        <label>Cool to (°F)</label>
+        <input type="number" id="profileTempCool" min="60" max="99" step="1">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeProfileTempModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveProfileTemp()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Cell Editor -->
+<div class="cell-editor" id="cellEditor" style="width:230px">
+  <div class="ce-title" id="ceTitle">Period</div>
+  <div id="ceActs"></div>
+  <div id="ceSpHint" style="display:none"></div>
+  <div class="ce-footer">
+    <button class="btn btn-sm" onclick="closeCellEditor()">Cancel</button>
+    <button class="btn btn-primary btn-sm" onclick="saveCellEdit()">Save</button>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toastWrap"></div>
+
+<script>
+// ── Constants ─────────────────────────────────────────────────────────────────
+const APP_VERSION = '1.0.7';
+const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+const ACTIVITIES = ['home','away','sleep','wake','manual'];
+const ACT_CLASS = { home:'act-home', away:'act-away', sleep:'act-sleep', wake:'act-wake', manual:'act-manual' };
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let state = { zones: [], summary: {}, scheduleZoneIdx: 0 };
+let holdZoneId = null;
+let cellEditCtx = null;
+let pollingTimer = null;
+
+// ── Value unwrapper ───────────────────────────────────────────────────────────
+// Infinitude wraps everything in single-element arrays.
+// Empty/missing values come as [{}] — an array containing an empty object.
+function v(x) {
+  if (!Array.isArray(x) || x.length === 0) return null;
+  const val = x[0];
+  if (val === null || val === undefined) return null;
+  if (typeof val === 'object' && Object.keys(val).length === 0) return null; // [{}]
+  return val;
+}
+
+// ── Origin detection ──────────────────────────────────────────────────────────
+function detectMode() {
+  const path = window.location.pathname;
+  const ingressMatch = path.match(/^(\/api\/hassio_ingress\/[^/]+)/);
+  if (ingressMatch) return { mode: 'ingress', prefix: ingressMatch[1] };
+  return { mode: 'standalone' };
+}
+const MODE = detectMode();
+document.getElementById('versionBadge').textContent = 'v' + APP_VERSION;
+
+(function initHostBar() {
+  const controls = document.getElementById('hostControls');
+  const input = document.getElementById('hostInput');
+  if (MODE.mode === 'ingress') {
+    controls.style.display = 'none';
+  } else {
+    const guessed = window.location.port === '3000' ? window.location.origin : 'http://localhost:3000';
+    if (input.value === 'http://localhost:3000') input.value = guessed;
+  }
+})();
+
+function base() {
+  return MODE.mode === 'ingress' ? MODE.prefix : document.getElementById('hostInput').value.replace(/\/$/, '');
+}
+
+// ── API ───────────────────────────────────────────────────────────────────────
+async function apiFetch(path, opts) {
+  const r = await fetch(base() + path, opts || {});
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const ct = r.headers.get('content-type') || '';
+  return ct.includes('json') ? r.json() : r.text();
+}
+
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    document.getElementById('panel-' + t.dataset.tab).classList.add('active');
+    if (t.dataset.tab === 'schedule' && state.zones.length) renderSchedule();
+    if (t.dataset.tab === 'profiles' && state.zones.length) renderProfiles();
+  });
+});
+
+document.getElementById('holdUntil').addEventListener('change', function() {
+  document.getElementById('holdCustomTimeField').style.display = this.value === 'custom' ? 'block' : 'none';
+});
+
+// ── Load ──────────────────────────────────────────────────────────────────────
+async function loadAll() {
+  setDot('connecting');
+  clearInterval(pollingTimer);
+  try {
+    const [sysData, statusData] = await Promise.all([
+      apiFetch('/systems.json'),
+      apiFetch('/status.json'),
+    ]);
+    processData(sysData, statusData);
+    setDot('ok');
+    document.getElementById('lastUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    pollingTimer = setInterval(refreshStatus, 30000);
+  } catch(e) {
+    setDot('error');
+    document.getElementById('zoneContent').innerHTML = `<div class="notice"><strong>Connection failed</strong>${e.message}</div>`;
+  }
+}
+
+async function refreshStatus() {
+  try {
+    const statusData = await apiFetch('/status.json');
+    mergeStatus(statusData);
+    renderStatus();
+    document.getElementById('lastUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  } catch(e) { /* silent on poll failures */ }
+}
+
+// ── Process ───────────────────────────────────────────────────────────────────
+function processData(sysData, statusData) {
+  // systems.json: { system: [{ config: [{ ... }] }] }
+  const cfg = sysData.system[0].config[0];
+  // status.json: { status: [{ ... }] }
+  const st = statusData.status[0];
+
+  // System summary — mode lives in systems.json config, live stats in status.json
+  state.summary = {
+    mode: v(cfg.mode) || '–',
+    oat: v(st.oat) || '–',
+    opStatus: v(st.oprstsmsg) || '–',
+    localTime: v(st.localTime),
+  };
+
+  // Whole house hold from systems.json
+  const wh = cfg.wholeHouse ? cfg.wholeHouse[0] : {};
+  state.wholeHouse = {
+    hold: v(wh.hold) === 'on',
+    holdActivity: v(wh.holdActivity),
+    otmr: v(wh.otmr),
+  };
+
+  // Build zone map from systems.json (has schedule + activities)
+  const cfgZones = forceArray(cfg.zones[0].zone);
+  const zoneMap = {};
+  cfgZones.forEach(z => { zoneMap[z.id] = z; });
+
+  // Live data from status.json
+  const statusZones = forceArray(st.zones[0].zone);
+
+  state.zones = statusZones
+    .filter(sz => v(sz.enabled) === 'on')
+    .map(sz => {
+      const cz = zoneMap[sz.id] || {};
+      const holdActivity = v(cz.holdActivity);
+      const otmr = v(cz.otmr);
+      return {
+        id: sz.id,
+        name: v(sz.name) || `Zone ${sz.id}`,
+        temp: v(sz.rt),
+        rh: v(sz.rh),
+        htsp: v(sz.htsp),
+        clsp: v(sz.clsp),
+        conditioning: v(sz.zoneconditioning) || 'idle',
+        currentActivity: v(sz.currentActivity) || '–',
+        hold: v(cz.hold) === 'on',
+        holdActivity: holdActivity,
+        otmr: otmr,
+        fan: v(sz.fan),
+        damper: v(sz.damperposition),
+        // Schedule from config
+        program: cz.program ? forceArray(cz.program[0].day) : [],
+        activities: cz.activities ? forceArray(cz.activities[0].activity) : [],
+      };
+    });
+
+  renderStatus();
+  if (document.getElementById('panel-schedule').classList.contains('active')) renderSchedule();
+  if (document.getElementById('panel-profiles').classList.contains('active')) renderProfiles();
+}
+
+function mergeStatus(statusData) {
+  const st = statusData.status[0];
+  state.summary.oat = v(st.oat) || '–';
+  state.summary.opStatus = v(st.oprstsmsg) || '–';
+
+  const statusZones = forceArray(st.zones[0].zone);
+  statusZones.forEach(sz => {
+    const z = state.zones.find(z => z.id === sz.id);
+    if (!z) return;
+    z.temp = v(sz.rt);
+    z.rh = v(sz.rh);
+    z.htsp = v(sz.htsp);
+    z.clsp = v(sz.clsp);
+    z.conditioning = v(sz.zoneconditioning) || 'idle';
+    z.currentActivity = v(sz.currentActivity) || '–';
+    z.fan = v(sz.fan);
+    z.damper = v(sz.damperposition);
+  });
+}
+
+function forceArray(x) { return Array.isArray(x) ? x : (x ? [x] : []); }
+
+// ── Render Status ─────────────────────────────────────────────────────────────
+function renderStatus() {
+  const s = state.summary;
+  const modeColors = { heat: 'heat', cool: 'cool', auto: 'auto', heatcool: 'auto' };
+  const modeClass = modeColors[s.mode] || '';
+
+  const wh = state.wholeHouse || {};
+  const whHoldLabel = wh.hold ? `${capitalize(wh.holdActivity || '–')}${wh.otmr ? ' until ' + wh.otmr : ' forever'}` : 'Off';
+  const whHoldColor = wh.hold ? 'var(--warn)' : 'var(--text3)';
+
+  document.getElementById('summaryBar').innerHTML = `
+    <div class="stat">
+      <div class="stat-label">System mode</div>
+      <div class="stat-val ${modeClass}">${capitalize(s.mode)}</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Status</div>
+      <div class="stat-val">${capitalize(s.opStatus)}</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Outdoor temp</div>
+      <div class="stat-val">${s.oat !== '–' ? s.oat + '°' : '–'}</div>
+    </div>
+    <div class="stat" style="cursor:pointer" onclick="openWholeHouseModal()">
+      <div class="stat-label">Whole house hold</div>
+      <div class="stat-val" style="font-size:14px;color:${whHoldColor}">${whHoldLabel} ✎</div>
+    </div>
+  `;
+
+  if (!state.zones.length) {
+    document.getElementById('zoneContent').innerHTML = `<div class="notice"><strong>No enabled zones</strong>All zones appear disabled.</div>`;
+    return;
+  }
+
+  document.getElementById('zoneContent').innerHTML =
+    `<div class="zone-grid">${state.zones.map(zoneCard).join('')}</div>`;
+}
+
+function zoneCard(z) {
+  const cc = condClass(z.conditioning);
+  const tempDisplay = z.temp ? Math.round(parseFloat(z.temp)) + '°' : '–';
+  const hasHold = z.hold && z.holdActivity;
+
+  const condStr = z.conditioning === 'active_heat' ? 'Heating'
+                : z.conditioning === 'active_cool' ? 'Cooling'
+                : 'Idle';
+  const condCls = z.conditioning === 'active_heat' ? 'cond-heat'
+                : z.conditioning === 'active_cool' ? 'cond-cool'
+                : 'cond-idle';
+
+  return `
+  <div class="zone-card ${cc}">
+    <div class="zone-header">
+      <div class="zone-name">${z.name}</div>
+      <div class="zone-activity">${z.currentActivity}</div>
+    </div>
+    <div class="zone-temps">
+      <div class="temp-current">${tempDisplay.replace('°','')}</div>
+      <div class="temp-unit">°F</div>
+      <div class="temp-setpoints">
+        <div class="temp-sp"><span class="ico sp-heat">▲</span><span class="sp-heat">${z.htsp ? Math.round(parseFloat(z.htsp)) + '°' : '–'}</span></div>
+        <div class="temp-sp"><span class="ico sp-cool">▼</span><span class="sp-cool">${z.clsp ? Math.round(parseFloat(z.clsp)) + '°' : '–'}</span></div>
+      </div>
+    </div>
+    <div class="zone-meta">
+      <div class="zone-meta-item">
+        <span class="cond-label ${condCls}">${condStr}</span>
+      </div>
+      <div class="zone-meta-item">RH <span class="zone-meta-val">${z.rh ? z.rh + '%' : '–'}</span></div>
+      <div class="zone-meta-item">Fan <span class="zone-meta-val">${z.fan || '–'}</span></div>
+      <div class="zone-meta-item">Damper <span class="zone-meta-val">${z.damper ? z.damper + '%' : '–'}</span></div>
+    </div>
+    <div class="zone-controls">
+      ${hasHold ? `<div class="hold-badge">⏱ ${z.holdActivity}${z.otmr ? ' until ' + z.otmr : ''}</div>` : ''}
+      <button class="btn btn-sm" onclick='openHoldModal(${JSON.stringify({id:z.id,name:z.name,htsp:z.htsp,clsp:z.clsp,currentActivity:z.currentActivity,holdActivity:z.holdActivity,otmr:z.otmr})})'>Set hold</button>
+      ${hasHold ? `<button class="btn btn-sm" style="color:#f87171" onclick="cancelHold('${z.id}')">Cancel hold</button>` : ''}
+    </div>
+  </div>`;
+}
+
+function condClass(c) {
+  if (c === 'active_heat') return 'active-heat';
+  if (c === 'active_cool') return 'active-cool';
+  return 'idle';
+}
+
+function capitalize(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : '–'; }
+
+// ── Hold Modal ────────────────────────────────────────────────────────────────
+function getActivitySetpoints(zoneId, activityId) {
+  const z = state.zones.find(z => z.id === zoneId);
+  if (!z) return { htsp: 68, clsp: 76 };
+  const act = z.activities.find(a => a.id === activityId);
+  if (!act) return { htsp: 68, clsp: 76 };
+  return {
+    htsp: Math.round(parseFloat(v(act.htsp) || 68)),
+    clsp: Math.round(parseFloat(v(act.clsp) || 76)),
+  };
+}
+
+function updateHoldSetpoints() {
+  if (!holdZoneId) return;
+  const act = document.getElementById('holdActivity').value;
+  const sp = getActivitySetpoints(holdZoneId, act);
+  document.getElementById('holdHeat').value = sp.htsp;
+  document.getElementById('holdCool').value = sp.clsp;
+}
+
+function openHoldModal(z) {
+  holdZoneId = z.id;
+  document.getElementById('holdModalSub').textContent = z.name;
+  document.getElementById('holdActivity').value = z.currentActivity || 'home';
+  document.getElementById('holdUntil').value = z.otmr ? 'custom' : 'forever';
+  document.getElementById('holdCustomTimeField').style.display = z.otmr ? 'block' : 'none';
+  document.getElementById('holdUntilTime').value = z.otmr || '';
+  updateHoldSetpoints();
+  document.getElementById('holdModal').classList.add('open');
+}
+
+function closeHoldModal() { document.getElementById('holdModal').classList.remove('open'); }
+document.getElementById('holdModal').addEventListener('click', e => { if (e.target === e.currentTarget) closeHoldModal(); });
+
+async function submitHold() {
+  const activity = document.getElementById('holdActivity').value;
+  const htsp = document.getElementById('holdHeat').value;
+  const clsp = document.getElementById('holdCool').value;
+  const untilType = document.getElementById('holdUntil').value;
+  const untilTime = document.getElementById('holdUntilTime').value;
+  const until = untilType === 'custom' ? untilTime : untilType;
+
+  try {
+    // Save setpoints to activity profile first
+    await apiFetch(`/api/${holdZoneId}/activity/${activity}?htsp=${htsp}&clsp=${clsp}`, { method: 'PUT' });
+    // Then set the hold
+    await apiFetch(`/api/${holdZoneId}/hold?activity=${activity}&until=${until}`, { method: 'PUT' });
+    toast('Hold applied', 'success');
+    closeHoldModal();
+    setTimeout(loadAll, 1500);
+  } catch(e) {
+    toast('Failed: ' + e.message, 'error');
+  }
+}
+
+async function cancelHold(zoneId) {
+  try {
+    await apiFetch(`/api/${zoneId}/hold?hold=off`, { method: 'PUT' });
+    toast('Hold cancelled', 'success');
+    setTimeout(loadAll, 1500);
+  } catch(e) {
+    toast('Failed: ' + e.message, 'error');
+  }
+}
+
+// ── Whole House Hold ──────────────────────────────────────────────────────────
+function openWholeHouseModal() {
+  const wh = state.wholeHouse || {};
+  document.getElementById('whActivity').value = wh.holdActivity || 'home';
+  document.getElementById('whUntil').value = wh.otmr ? 'custom' : 'forever';
+  document.getElementById('whCustomTimeField').style.display = wh.otmr ? 'block' : 'none';
+  document.getElementById('whUntilTime').value = wh.otmr || '';
+  document.getElementById('whModal').classList.add('open');
+}
+
+function closeWhModal() { document.getElementById('whModal').classList.remove('open'); }
+document.getElementById('whModal').addEventListener('click', e => { if (e.target === e.currentTarget) closeWhModal(); });
+document.getElementById('whUntil').addEventListener('change', function() {
+  document.getElementById('whCustomTimeField').style.display = this.value === 'custom' ? 'block' : 'none';
+});
+
+async function submitWhHold() {
+  const activity = document.getElementById('whActivity').value;
+  const untilType = document.getElementById('whUntil').value;
+  const untilTime = document.getElementById('whUntilTime').value;
+  const otmr = untilType === 'custom' ? `&otmr=${untilTime}` : '';
+  try {
+    await apiFetch(`/api/config/wholeHouse?hold=on&holdActivity=${activity}${otmr}&set_changes=true`, { method: 'PUT' });
+    toast('Whole house hold applied', 'success');
+    closeWhModal();
+    setTimeout(loadAll, 1500);
+  } catch(e) {
+    toast('Failed: ' + e.message, 'error');
+  }
+}
+
+async function cancelWhHold() {
+  try {
+    await apiFetch(`/api/config/wholeHouse?hold=off&set_changes=true`, { method: 'PUT' });
+    toast('Whole house hold cancelled', 'success');
+    closeWhModal();
+    setTimeout(loadAll, 1500);
+  } catch(e) {
+    toast('Failed: ' + e.message, 'error');
+  }
+}
+
+// ── Schedule ──────────────────────────────────────────────────────────────────
+function renderSchedule() {
+  if (!state.zones.length) {
+    document.getElementById('scheduleContent').innerHTML = `<div class="notice"><strong>No data</strong>Load status first.</div>`;
+    return;
+  }
+
+  const todayName = DAYS[new Date().getDay()];
+
+  // Build dayMap per zone
+  const zoneMaps = state.zones.map(z => {
+    const m = {};
+    forceArray(z.program).forEach(day => { m[day.id] = forceArray(day.period); });
+    return m;
+  });
+
+  const headCells = DAYS.map(d =>
+    `<div class="sched-head-cell" style="${d === todayName ? 'color:var(--accent)' : ''}">${d.slice(0,3)}</div>`
+  ).join('');
+
+  const maxPeriods = 5;
+
+  function zoneRow(z, zIdx, period, day, pi) {
+    if (!period) return `<div class="sched-zone-row sched-disabled"><span class="sched-act act-home" style="opacity:0.2">–</span></div>`;
+    const enabled = v(period.enabled) === 'on';
+    const act = v(period.activity) || 'home';
+    const time = v(period.time) || '–';
+    const sp = getActivitySetpoints(z.id, act);
+    const tempBadge = `<span class="sched-sp-badge" onclick="event.stopPropagation();openProfileTempModal('${z.id}','${act}')">${sp.htsp}/${sp.clsp}</span>`;
+    const opacity = enabled ? '1' : '0.35';
+    return `<div class="sched-zone-row" style="opacity:${opacity}" data-zone-idx="${zIdx}" data-enabled="${enabled ? 'on' : 'off'}" data-act="${act}" data-time="${time}" data-pid="${v(period.id) || (pi+1)}">
+      <span class="sched-act ${ACT_CLASS[act] || 'act-home'}">${act}</span>
+      <span class="sched-time-inline">${enabled ? time : 'off'}</span>
+      ${tempBadge}
+    </div>`;
+  }
+
+  let rows = '';
+  for (let pi = 0; pi < maxPeriods; pi++) {
+    const cells = DAYS.map((day) => {
+      const isToday = day === todayName;
+      const zonesHtml = state.zones.map((z, zIdx) => {
+        const period = (zoneMaps[zIdx][day] || [])[pi];
+        return zoneRow(z, zIdx, period, day, pi);
+      }).join('');
+      return `<div class="sched-cell${isToday ? ' today' : ''}" onclick="openCellEditor(this, '${day}', ${pi})">${zonesHtml}</div>`;
+    }).join('');
+    rows += `<div class="sched-row"><div class="sched-row-label">P${pi + 1}</div>${cells}</div>`;
+  }
+
+  // Zone legend
+  const legend = state.zones.map(z =>
+    `<span style="font-size:11px;color:var(--text2)">● ${z.name}</span>`
+  ).join('<span style="margin:0 8px;color:var(--text3)">·</span>');
+
+  document.getElementById('scheduleContent').innerHTML = `
+    <div class="refresh-row">
+      <div class="section-title">Weekly schedule</div>
+      <button class="btn btn-sm" onclick="saveSchedule()">Save schedule</button>
+    </div>
+    <div style="display:flex;gap:12px;margin-bottom:14px;align-items:center">${legend}</div>
+    <div class="sched-wrap">
+      <div class="sched-grid">
+        <div class="sched-head"><div class="sched-head-cell"></div>${headCells}</div>
+        ${rows}
+      </div>
+    </div>
+    <div style="margin-top:10px;font-size:11px;color:var(--text3)">Today (${todayName}) highlighted. Click cell to edit · Click temp to edit profile.</div>
+  `;
+}
+
+// ── Cell Editor ───────────────────────────────────────────────────────────────
+function openCellEditor(el, dayName, periodIdx) {
+  cellEditCtx = { dayName, periodIdx, el };
+  document.getElementById('ceTitle').textContent = `${dayName} · Period ${periodIdx + 1}`;
+
+  // Build one row per zone
+  const zoneRows = state.zones.map((z, zIdx) => {
+    const zoneRow = el.querySelector(`[data-zone-idx="${zIdx}"]`);
+    const act = zoneRow ? zoneRow.dataset.act : 'home';
+    const time = (zoneRow && zoneRow.dataset.time !== '–') ? zoneRow.dataset.time : '06:00';
+    const enabled = zoneRow ? zoneRow.dataset.enabled !== 'off' : true;
+    const pid = zoneRow ? zoneRow.dataset.pid : String(periodIdx + 1);
+
+    const actPills = ACTIVITIES.map(a =>
+      `<div class="ce-act ${ACT_CLASS[a]}${a === act ? ' selected' : ''}" data-act="${a}" data-zidx="${zIdx}" onclick="selectCeActZone(this)">${a}</div>`
+    ).join('');
+
+    const sp = getActivitySetpoints(z.id, act);
+
+    return `<div class="ce-zone-row" data-zidx="${zIdx}" data-pid="${pid}">
+      <div style="font-size:10px;color:var(--text3);margin-bottom:4px;font-weight:600">${z.name}</div>
+      <div class="ce-acts">${actPills}</div>
+      <div class="ce-sp-hint" id="ceSpHint${zIdx}">${sp.htsp}/${sp.clsp}</div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
+        <div>
+          <div style="font-size:10px;color:var(--text3);margin-bottom:3px">Time</div>
+          <input class="ce-time" type="text" id="ceTime${zIdx}" value="${time}" placeholder="06:00" maxlength="5">
+        </div>
+        <div style="display:flex;align-items:center;gap:5px;margin-top:14px">
+          <input type="checkbox" id="ceEnabled${zIdx}" ${enabled ? 'checked' : ''} style="cursor:pointer">
+          <label for="ceEnabled${zIdx}" style="font-size:11px;color:var(--text3)">on</label>
+        </div>
+      </div>
+    </div>`;
+  }).join('<div style="border-top:1px solid var(--border);margin:8px 0"></div>');
+
+  document.getElementById('ceActs').innerHTML = zoneRows;
+  document.getElementById('ceSpHint').textContent = '';
+
+  const rect = el.getBoundingClientRect();
+  const editor = document.getElementById('cellEditor');
+  editor.style.top = (rect.bottom + window.scrollY + 6) + 'px';
+  editor.style.left = Math.min(rect.left, window.innerWidth - 230) + 'px';
+  editor.classList.add('open');
+}
+
+function selectCeActZone(el) {
+  const zIdx = el.dataset.zidx;
+  el.closest('.ce-zone-row').querySelectorAll('.ce-act').forEach(a => a.classList.remove('selected'));
+  el.classList.add('selected');
+  // Update setpoint hint for this zone
+  const z = state.zones[parseInt(zIdx)];
+  if (z) {
+    const sp = getActivitySetpoints(z.id, el.dataset.act);
+    const hint = document.getElementById(`ceSpHint${zIdx}`);
+    if (hint) hint.textContent = `${sp.htsp}/${sp.clsp}`;
+  }
+}
+
+// Keep legacy selectCeAct as no-op to avoid errors
+function selectCeAct(el) { selectCeActZone(el); }
+
+function closeCellEditor() { document.getElementById('cellEditor').classList.remove('open'); }
+
+document.addEventListener('click', e => {
+  const editor = document.getElementById('cellEditor');
+  if (!editor.contains(e.target) && !e.target.closest('.sched-cell')) closeCellEditor();
+});
+
+function saveCellEdit() {
+  const { dayName, periodIdx, el } = cellEditCtx;
+
+  state.zones.forEach((z, zIdx) => {
+    const zoneRow = el.querySelector(`[data-zone-idx="${zIdx}"]`);
+    if (!zoneRow) return;
+
+    const ceRow = document.querySelector(`.ce-zone-row[data-zidx="${zIdx}"]`);
+    if (!ceRow) return;
+
+    const actEl = ceRow.querySelector('.ce-act.selected');
+    if (!actEl) return;
+
+    const act = actEl.dataset.act;
+    const time = document.getElementById(`ceTime${zIdx}`).value;
+    const enabled = document.getElementById(`ceEnabled${zIdx}`).checked;
+
+    // Update DOM data attributes
+    zoneRow.dataset.act = act;
+    zoneRow.dataset.time = time;
+    zoneRow.dataset.enabled = enabled ? 'on' : 'off';
+
+    // Update visual
+    const sp = getActivitySetpoints(z.id, act);
+    zoneRow.style.opacity = enabled ? '1' : '0.35';
+    zoneRow.querySelector('.sched-act').className = `sched-act ${ACT_CLASS[act] || 'act-home'}`;
+    zoneRow.querySelector('.sched-act').textContent = act;
+    zoneRow.querySelector('.sched-time-inline').textContent = enabled ? time : 'off';
+    zoneRow.querySelector('.sched-sp-badge').textContent = `${sp.htsp}/${sp.clsp}`;
+  });
+
+  closeCellEditor();
+  toast('Updated — click Save schedule to apply', 'success');
+}
+
+async function saveSchedule() {
+  try {
+    for (let zIdx = 0; zIdx < state.zones.length; zIdx++) {
+      const z = state.zones[zIdx];
+      const dayData = {};
+      DAYS.forEach(d => { dayData[d] = []; });
+
+      document.querySelectorAll('.sched-row').forEach((row, pi) => {
+        const cells = row.querySelectorAll('.sched-cell');
+        cells.forEach((cell, di) => {
+          const day = DAYS[di];
+          const zoneRow = cell.querySelector(`[data-zone-idx="${zIdx}"]`);
+          if (!zoneRow || zoneRow.classList.contains('sched-disabled')) return;
+          const act = zoneRow.dataset.act;
+          const time = zoneRow.dataset.time || '00:00';
+          const enabled = zoneRow.dataset.enabled !== 'off' ? 'on' : 'off';
+          const pid = zoneRow.dataset.pid || String(pi + 1);
+          if (act) dayData[day].push({ id: pid, activity: act, time, enabled });
+        });
+      });
+
+      const program = { day: DAYS.map(d => ({ id: d, period: dayData[d] })) };
+      await apiFetch(`/api/config/zones/zone/${z.id}/program`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(program),
+      });
+    }
+    toast('Schedule saved', 'success');
+  } catch(e) {
+    toast('Save failed: ' + e.message, 'error');
+  }
+}
+
+// ── Profile Temp Modal ────────────────────────────────────────────────────────
+let profileTempCtx = null;
+
+function openProfileTempModal(zoneId, actId) {
+  profileTempCtx = { zoneId, actId };
+  const z = state.zones.find(z => z.id === zoneId);
+  const zoneName = z ? z.name : zoneId;
+  document.getElementById('profileTempSub').textContent = `${capitalize(actId)} · ${zoneName}`;
+  const sp = getActivitySetpoints(zoneId, actId);
+  document.getElementById('profileTempHeat').value = sp.htsp;
+  document.getElementById('profileTempCool').value = sp.clsp;
+  document.getElementById('profileTempModal').classList.add('open');
+}
+
+function closeProfileTempModal() {
+  document.getElementById('profileTempModal').classList.remove('open');
+}
+document.getElementById('profileTempModal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeProfileTempModal();
+});
+
+async function saveProfileTemp() {
+  const { zoneId, actId } = profileTempCtx;
+  const htsp = document.getElementById('profileTempHeat').value;
+  const clsp = document.getElementById('profileTempCool').value;
+  try {
+    await apiFetch(`/api/${zoneId}/activity/${actId}?htsp=${htsp}&clsp=${clsp}`, { method: 'PUT' });
+    toast(`${capitalize(actId)} profile updated`, 'success');
+    closeProfileTempModal();
+    setTimeout(loadAll, 1500);
+  } catch(e) {
+    toast('Failed: ' + e.message, 'error');
+  }
+}
+function renderProfiles() {
+  if (!state.zones.length) {
+    document.getElementById('profilesContent').innerHTML = `<div class="notice"><strong>No data</strong>Load status first.</div>`;
+    return;
+  }
+
+  const FAN_OPTIONS = ['off','low','med','high'];
+
+  const html = state.zones.map(z => {
+    const rows = ACTIVITIES.map(actId => {
+      const act = z.activities.find(a => a.id === actId) || {};
+      const htsp = Math.round(parseFloat(v(act.htsp) || 68));
+      const clsp = Math.round(parseFloat(v(act.clsp) || 76));
+      const fan = v(act.fan) || 'low';
+      const fanOpts = FAN_OPTIONS.map(f => `<option value="${f}"${f === fan ? ' selected' : ''}>${f}</option>`).join('');
+      return `<tr>
+        <td><span class="sched-act ${ACT_CLASS[actId] || 'act-home'}" style="display:inline-block">${actId}</span></td>
+        <td><input type="number" min="50" max="90" step="1" value="${htsp}" data-zone="${z.id}" data-act="${actId}" data-field="htsp"></td>
+        <td><input type="number" min="60" max="99" step="1" value="${clsp}" data-zone="${z.id}" data-act="${actId}" data-field="clsp"></td>
+        <td><select data-zone="${z.id}" data-act="${actId}" data-field="fan">${fanOpts}</select></td>
+      </tr>`;
+    }).join('');
+
+    return `<div class="profiles-zone">
+      <div class="profiles-zone-header">
+        <div class="profiles-zone-name">${z.name}</div>
+      </div>
+      <table class="profiles-table">
+        <thead><tr>
+          <th>Activity</th><th>Heat (°F)</th><th>Cool (°F)</th><th>Fan</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="profiles-save-row">
+        <button class="btn btn-primary btn-sm" onclick="saveProfile('${z.id}')">Save ${z.name}</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('profilesContent').innerHTML = `
+    <div class="refresh-row">
+      <div class="section-title">Comfort profiles</div>
+    </div>
+    <div class="profiles-zones-wrap">${html}</div>
+  `;
+}
+
+async function saveProfile(zoneId) {
+  const inputs = document.querySelectorAll(`[data-zone="${zoneId}"]`);
+  // Group by activity
+  const byAct = {};
+  inputs.forEach(el => {
+    const act = el.dataset.act;
+    if (!byAct[act]) byAct[act] = {};
+    byAct[act][el.dataset.field] = el.value;
+  });
+  try {
+    for (const [actId, fields] of Object.entries(byAct)) {
+      await apiFetch(`/api/${zoneId}/activity/${actId}?htsp=${fields.htsp}&clsp=${fields.clsp}&fan=${fields.fan}`, { method: 'PUT' });
+    }
+    toast('Profiles saved', 'success');
+    setTimeout(loadAll, 1500);
+  } catch(e) {
+    toast('Failed: ' + e.message, 'error');
+  }
+}
+function setDot(s) {
+  const d = document.getElementById('statusDot');
+  d.className = 'status-dot ' + s;
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function toast(msg, type) {
+  const wrap = document.getElementById('toastWrap');
+  const el = document.createElement('div');
+  el.className = `toast ${type || ''}`;
+  el.textContent = msg;
+  wrap.appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+loadAll();
+</script>
+</body>
+</html>
