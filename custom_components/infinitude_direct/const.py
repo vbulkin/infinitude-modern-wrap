@@ -1,6 +1,8 @@
 """Constants for the Infinitude Direct integration."""
 
 DOMAIN = "infinitude_direct"
+MANUFACTURER = "Carrier/Bryant"
+MODEL = "Infinity"
 
 CONF_HOST = "host"
 

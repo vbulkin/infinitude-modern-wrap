@@ -19,6 +19,20 @@
     }
   },
   "entity": {
+    "climate": {
+      "infinitude_zone": {
+        "state_attributes": {
+          "preset_mode": {
+            "state": {
+              "home": "Home",
+              "away": "Away",
+              "sleep": "Sleep",
+              "wake": "Wake"
+            }
+          }
+        }
+      }
+    },
     "select": {
       "whole_house_hold": {
         "name": "Whole house hold",

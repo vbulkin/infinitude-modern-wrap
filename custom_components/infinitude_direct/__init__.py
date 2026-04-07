@@ -11,7 +11,7 @@ from .coordinator import InfinitudeDataCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.CLIMATE, Platform.SELECT]
+PLATFORMS = [Platform.CLIMATE, Platform.SELECT, Platform.SENSOR]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

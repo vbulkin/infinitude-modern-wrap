@@ -11,6 +11,7 @@ from homeassistant.components.climate import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -18,6 +19,8 @@ from .const import (
     DOMAIN,
     HA_TO_INFINITUDE_HVAC,
     INFINITUDE_TO_HA_HVAC,
+    MANUFACTURER,
+    MODEL,
     PRESET_MODES,
 )
 from .coordinator import InfinitudeDataCoordinator
@@ -43,6 +46,7 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
     """Climate entity for a single Infinitude zone."""
 
     _attr_has_entity_name = True
+    _attr_translation_key = "infinitude_zone"
     _attr_temperature_unit = UnitOfTemperature.FAHRENHEIT
     _attr_hvac_modes = [
         HVACMode.OFF,
@@ -64,6 +68,12 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
         name = zone["name"] if zone else f"Zone {zone_id}"
         self._attr_unique_id = f"infinitude_{zone_id}"
         self._attr_name = name
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, f"zone_{zone_id}")},
+            name=f"Infinitude {name}",
+            manufacturer=MANUFACTURER,
+            model=MODEL,
+        )
 
     @property
     def _zone_data(self) -> dict | None:

@@ -5,10 +5,11 @@ import logging
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, PRESET_MODES
+from .const import DOMAIN, MANUFACTURER, MODEL, PRESET_MODES
 from .coordinator import InfinitudeDataCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -37,6 +38,12 @@ class InfinitudeWholeHouseHoldSelect(CoordinatorEntity, SelectEntity):
     def __init__(self, coordinator: InfinitudeDataCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = "infinitude_whole_house_hold"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, "system")},
+            name="Infinitude System",
+            manufacturer=MANUFACTURER,
+            model=MODEL,
+        )
 
     @property
     def current_option(self) -> str:
