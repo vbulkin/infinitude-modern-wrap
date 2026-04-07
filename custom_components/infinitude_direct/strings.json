@@ -17,5 +17,19 @@
     "abort": {
       "already_configured": "Infinitude is already configured."
     }
+  },
+  "entity": {
+    "select": {
+      "whole_house_hold": {
+        "name": "Whole house hold",
+        "state": {
+          "off": "Off",
+          "home": "Home",
+          "away": "Away",
+          "sleep": "Sleep",
+          "wake": "Wake"
+        }
+      }
+    }
   }
 }

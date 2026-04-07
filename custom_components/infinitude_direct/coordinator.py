@@ -97,6 +97,18 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
             "mode": mode,
             "oat": oat,
             "zones": zones,
+            "whole_house_hold": self._parse_whole_house(cfg),
+        }
+
+    def _parse_whole_house(self, cfg: dict) -> dict:
+        wh = cfg.get("wholeHouse")
+        if not wh:
+            return {"hold": False, "holdActivity": None, "otmr": None}
+        wh = wh[0] if isinstance(wh, list) else wh
+        return {
+            "hold": self._v(wh.get("hold")) == "on",
+            "holdActivity": self._v(wh.get("holdActivity")),
+            "otmr": self._v(wh.get("otmr")),
         }
 
     @staticmethod
@@ -145,4 +157,25 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         await self._session.put(
             f"{self.host}/api/{zone_id}/activity/{activity}",
             params={"htsp": str(htsp), "clsp": str(clsp)},
+        )
+
+    async def async_set_whole_house_hold(
+        self, activity: str, otmr: str | None = None
+    ) -> None:
+        params = {
+            "hold": "on",
+            "holdActivity": activity,
+            "set_changes": "true",
+        }
+        if otmr:
+            params["otmr"] = otmr
+        await self._session.put(
+            f"{self.host}/api/config/wholeHouse",
+            params=params,
+        )
+
+    async def async_cancel_whole_house_hold(self) -> None:
+        await self._session.put(
+            f"{self.host}/api/config/wholeHouse",
+            params={"hold": "off", "set_changes": "true"},
         )

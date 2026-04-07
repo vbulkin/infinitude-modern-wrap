@@ -171,6 +171,10 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
         oat = self.coordinator.data.get("oat")
         if oat:
             attrs["outdoor_temperature"] = float(oat)
+        wh = self.coordinator.data.get("whole_house_hold", {})
+        attrs["whole_house_hold_active"] = wh.get("hold", False)
+        if wh.get("holdActivity"):
+            attrs["whole_house_hold_activity"] = wh["holdActivity"]
         return attrs
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:

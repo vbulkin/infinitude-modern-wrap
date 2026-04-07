@@ -84,6 +84,19 @@
   .stat-val.cool { color: var(--cool); }
   .stat-val.auto { color: var(--success); }
 
+  .mode-pills { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+  .mode-pill {
+    font-family: 'DM Sans', sans-serif; font-size: 11px; font-weight: 500;
+    padding: 3px 10px; border-radius: 14px; border: 1px solid var(--border2);
+    background: var(--bg3); color: var(--text3); cursor: pointer; transition: all 0.15s;
+    user-select: none;
+  }
+  .mode-pill:hover { border-color: var(--accent); color: var(--text2); }
+  .mode-pill.active { background: var(--accent); color: #fff; border-color: var(--accent2); cursor: default; }
+  .mode-pill.active.heat { background: var(--heat); border-color: var(--heat); }
+  .mode-pill.active.cool { background: var(--cool); border-color: var(--cool); }
+  .mode-pill.active.auto { background: var(--success); border-color: var(--success); }
+
   /* Zone grid */
   .zone-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
   .zone-card {
@@ -103,18 +116,25 @@
   .zone-temps { display: flex; align-items: flex-end; gap: 8px; padding: 4px 16px 10px; }
   .temp-current { font-family: 'DM Mono', monospace; font-size: 44px; font-weight: 300; line-height: 1; }
   .temp-unit { font-size: 18px; color: var(--text3); margin-bottom: 6px; }
-  .temp-setpoints { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; margin-left: 6px; }
-  .temp-sp { font-family: 'DM Mono', monospace; font-size: 12px; display: flex; align-items: center; gap: 5px; }
+  .temp-setpoints { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; margin-left: 6px; }
+  .temp-sp { font-family: 'DM Mono', monospace; font-size: 13px; display: flex; align-items: center; gap: 6px; }
   .temp-sp .ico { font-size: 10px; width: 16px; }
+  .sp-val { min-width: 28px; text-align: right; }
   .sp-heat { color: var(--heat); }
   .sp-cool { color: var(--cool); }
   .btn-adj {
-    width: 22px; height: 22px; border-radius: 4px; border: 1px solid var(--border2);
-    background: var(--bg3); color: var(--text2); font-size: 14px; font-weight: 500;
+    width: 32px; height: 32px; border-radius: 6px; border: 1px solid var(--border2);
+    background: var(--bg3); color: var(--text2); font-size: 16px; font-weight: 600;
     cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
     padding: 0; line-height: 1; transition: all 0.12s; margin-left: 2px;
+    user-select: none; -webkit-tap-highlight-color: transparent;
   }
   .btn-adj:hover { background: var(--bg4); color: var(--text); border-color: var(--accent); }
+  .btn-adj:active { transform: scale(0.92); }
+  .btn-adj:disabled { opacity: 0.3; cursor: default; transform: none; }
+
+  .sp-pending { opacity: 0.5; }
+  .sp-pending::after { content: ' …'; }
 
   .zone-meta { display: flex; gap: 14px; padding: 8px 16px 12px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text3); }
   .zone-meta-item { display: flex; align-items: center; gap: 4px; }
@@ -362,14 +382,12 @@
         <option value="away">Away</option>
         <option value="sleep">Sleep</option>
         <option value="wake">Wake</option>
-        <option value="manual">Manual</option>
       </select>
     </div>
     <div class="field">
       <label>Hold until</label>
       <select id="whUntil">
         <option value="forever">Indefinite</option>
-        <option value="nextTransition">Next schedule change</option>
         <option value="custom">Custom time (HH:MM)</option>
       </select>
     </div>
@@ -420,7 +438,7 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.19';
+const APP_VERSION = '1.0.20';
 const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
 const SCHEDULE_ACTIVITIES = ['home','away','sleep','wake'];
@@ -536,6 +554,7 @@ function processData(sysData, statusData) {
     oat: v(st.oat) || '–',
     opStatus: v(st.oprstsmsg) || '–',
     localTime: v(st.localTime),
+    indoorRh: '–',
   };
 
   // Whole house hold from systems.json
@@ -581,6 +600,7 @@ function processData(sysData, statusData) {
     });
 
   renderStatus();
+  updateIndoorRh();
   if (document.getElementById('panel-schedule').classList.contains('active')) renderSchedule();
   if (document.getElementById('panel-profiles').classList.contains('active')) renderProfiles();
 }
@@ -603,9 +623,15 @@ function mergeStatus(statusData) {
     z.fan = v(sz.fan);
     z.damper = v(sz.damperposition);
   });
+  updateIndoorRh();
 }
 
 function forceArray(x) { return Array.isArray(x) ? x : (x ? [x] : []); }
+
+function updateIndoorRh() {
+  const vals = state.zones.map(z => z.rh).filter(Boolean).map(Number);
+  state.summary.indoorRh = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : '–';
+}
 
 // ── Render Status ─────────────────────────────────────────────────────────────
 function renderStatus() {
@@ -620,7 +646,13 @@ function renderStatus() {
   document.getElementById('summaryBar').innerHTML = `
     <div class="stat">
       <div class="stat-label">System mode</div>
-      <div class="stat-val ${modeClass}">${capitalize(s.mode)}</div>
+      <div class="mode-pills">
+        ${['off','heat','cool','auto','fanonly'].map(m => {
+          const label = m === 'auto' ? 'Auto' : m === 'fanonly' ? 'Fan' : capitalize(m);
+          const cls = m === s.mode ? `active ${modeColors[m] || ''}` : '';
+          return `<span class="mode-pill ${cls}" onclick="setSystemMode('${m}')">${label}</span>`;
+        }).join('')}
+      </div>
     </div>
     <div class="stat">
       <div class="stat-label">Status</div>
@@ -629,6 +661,10 @@ function renderStatus() {
     <div class="stat">
       <div class="stat-label">Outdoor temp</div>
       <div class="stat-val">${s.oat !== '–' ? s.oat + '°' : '–'}</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Indoor humidity</div>
+      <div class="stat-val">${s.indoorRh !== '–' ? s.indoorRh + '%' : '–'}</div>
     </div>
     <div class="stat" style="cursor:pointer" onclick="openWholeHouseModal()">
       <div class="stat-label">Whole house hold</div>
@@ -670,14 +706,14 @@ function zoneCard(z) {
       <div class="temp-unit">°F</div>
       <div class="temp-setpoints">
         <div class="temp-sp">
-          <span class="ico sp-heat">▲</span><span class="sp-heat">${z.htsp ? Math.round(parseFloat(z.htsp)) + '°' : '–'}</span>
-          <button class="btn-adj" onclick="event.stopPropagation();adjustTemp('${z.id}','htsp',1)">+</button>
           <button class="btn-adj" onclick="event.stopPropagation();adjustTemp('${z.id}','htsp',-1)">−</button>
+          <span class="ico sp-heat">▲</span><span class="sp-heat sp-val" id="sp-htsp-${z.id}">${z.htsp ? Math.round(parseFloat(z.htsp)) + '°' : '–'}</span>
+          <button class="btn-adj" onclick="event.stopPropagation();adjustTemp('${z.id}','htsp',1)">+</button>
         </div>
         <div class="temp-sp">
-          <span class="ico sp-cool">▼</span><span class="sp-cool">${z.clsp ? Math.round(parseFloat(z.clsp)) + '°' : '–'}</span>
-          <button class="btn-adj" onclick="event.stopPropagation();adjustTemp('${z.id}','clsp',1)">+</button>
           <button class="btn-adj" onclick="event.stopPropagation();adjustTemp('${z.id}','clsp',-1)">−</button>
+          <span class="ico sp-cool">▼</span><span class="sp-cool sp-val" id="sp-clsp-${z.id}">${z.clsp ? Math.round(parseFloat(z.clsp)) + '°' : '–'}</span>
+          <button class="btn-adj" onclick="event.stopPropagation();adjustTemp('${z.id}','clsp',1)">+</button>
         </div>
       </div>
     </div>
@@ -705,6 +741,23 @@ function condClass(c) {
 }
 
 function capitalize(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : '–'; }
+
+// ── System Mode ───────────────────────────────────────────────────────────────
+async function setSystemMode(mode) {
+  if (mode === state.summary.mode) return;
+  const prev = state.summary.mode;
+  state.summary.mode = mode;
+  renderStatus();
+  try {
+    await apiFetch(`/api/config?mode=${mode}&set_changes=true`, { method: 'PUT' });
+    toast(`System mode → ${capitalize(mode)}`, 'success');
+    setTimeout(loadAll, 2000);
+  } catch(e) {
+    state.summary.mode = prev;
+    renderStatus();
+    toast('Failed: ' + e.message, 'error');
+  }
+}
 
 // ── Hold Modal ────────────────────────────────────────────────────────────────
 function getActivitySetpoints(zoneId, activityId) {
@@ -757,21 +810,57 @@ async function submitHold() {
   }
 }
 
+const _adjTimers = {};
+const _adjPending = {};
+
 async function adjustTemp(zoneId, field, delta) {
   const z = state.zones.find(z => z.id === zoneId);
   if (!z) return;
+
+  // Optimistic update — immediately reflect in local state and UI
   const current = Math.round(parseFloat(field === 'htsp' ? z.htsp : z.clsp) || 70);
-  const next = current + delta;
-  const htsp = field === 'htsp' ? next : Math.round(parseFloat(z.htsp) || 68);
-  const clsp = field === 'clsp' ? next : Math.round(parseFloat(z.clsp) || 76);
+  const next = Math.max(50, Math.min(99, current + delta));
+  if (field === 'htsp') z.htsp = String(next);
+  else z.clsp = String(next);
+
+  const el = document.getElementById(`sp-${field}-${zoneId}`);
+  if (el) {
+    el.textContent = next + '°';
+    el.classList.add('sp-pending');
+  }
+
+  // Debounce — wait 600ms for more clicks before sending API call
+  const key = `${zoneId}_${field}`;
+  _adjPending[zoneId] = true;
+  clearTimeout(_adjTimers[key]);
+  _adjTimers[key] = setTimeout(() => _commitTemp(zoneId), 600);
+}
+
+async function _commitTemp(zoneId) {
+  const z = state.zones.find(z => z.id === zoneId);
+  if (!z) return;
+
+  const htsp = Math.round(parseFloat(z.htsp) || 68);
+  const clsp = Math.round(parseFloat(z.clsp) || 76);
+
   try {
     await apiFetch(`/api/${zoneId}/activity/manual?htsp=${htsp}&clsp=${clsp}`, { method: 'PUT' });
     await apiFetch(`/api/${zoneId}/hold?activity=manual&until=nextTransition`, { method: 'PUT' });
-    toast(`${z.name}: ${field === 'htsp' ? 'heat' : 'cool'} → ${next}°`, 'success');
-    setTimeout(loadAll, 1500);
+    toast(`${z.name}: heat ${htsp}° · cool ${clsp}° (manual hold)`, 'success');
   } catch(e) {
     toast('Failed: ' + e.message, 'error');
   }
+
+  delete _adjPending[zoneId];
+
+  // Clear pending indicators for this zone
+  const htEl = document.getElementById(`sp-htsp-${zoneId}`);
+  const clEl = document.getElementById(`sp-clsp-${zoneId}`);
+  if (htEl) htEl.classList.remove('sp-pending');
+  if (clEl) clEl.classList.remove('sp-pending');
+
+  // Refresh after a short delay to pick up thermostat confirmation
+  setTimeout(loadAll, 2000);
 }
 
 async function cancelHold(zoneId) {
