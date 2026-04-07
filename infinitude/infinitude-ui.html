@@ -106,6 +106,13 @@
   .temp-sp .ico { font-size: 10px; width: 16px; }
   .sp-heat { color: var(--heat); }
   .sp-cool { color: var(--cool); }
+  .btn-adj {
+    width: 22px; height: 22px; border-radius: 4px; border: 1px solid var(--border2);
+    background: var(--bg3); color: var(--text2); font-size: 14px; font-weight: 500;
+    cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    padding: 0; line-height: 1; transition: all 0.12s; margin-left: 2px;
+  }
+  .btn-adj:hover { background: var(--bg4); color: var(--text); border-color: var(--accent); }
 
   .zone-meta { display: flex; gap: 14px; padding: 8px 16px 12px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text3); }
   .zone-meta-item { display: flex; align-items: center; gap: 4px; }
@@ -306,7 +313,7 @@
     <div class="modal-sub" id="holdModalSub"></div>
     <div class="field">
       <label>Activity</label>
-      <select id="holdActivity" onchange="updateHoldSetpoints()">
+      <select id="holdActivity">
         <option value="home">Home</option>
         <option value="away">Away</option>
         <option value="sleep">Sleep</option>
@@ -314,19 +321,7 @@
         <option value="manual">Manual</option>
       </select>
     </div>
-    <div class="setpoint-row">
-      <div class="field">
-        <label>Heat to (°F)</label>
-        <input type="number" id="holdHeat" min="50" max="90" step="1" value="68">
-      </div>
-      <div class="field">
-        <label>Cool to (°F)</label>
-        <input type="number" id="holdCool" min="60" max="99" step="1" value="76">
-      </div>
-    </div>
-    <div class="field" style="font-size:11px;color:var(--text3);margin-top:-8px;margin-bottom:8px">
-      Setpoints are saved to the activity profile.
-    </div>
+    <div id="holdSpPreview" style="font-size:12px;color:var(--text2);margin-bottom:14px;padding:8px 10px;background:var(--bg3);border-radius:var(--radius-sm)"></div>
     <div class="field">
       <label>Hold until</label>
       <select id="holdUntil">
@@ -419,9 +414,10 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.13';
+const APP_VERSION = '1.0.14';
 const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
+const SCHEDULE_ACTIVITIES = ['home','away','sleep','wake'];
 const ACT_CLASS = { home:'act-home', away:'act-away', sleep:'act-sleep', wake:'act-wake', manual:'act-manual' };
 const ZONE_COLORS = ['#4f8ef7','#f97316','#a78bfa','#34d399','#f87171','#fbbf24','#38bdf8','#6b7280'];
 
@@ -664,8 +660,16 @@ function zoneCard(z) {
       <div class="temp-current">${tempDisplay.replace('°','')}</div>
       <div class="temp-unit">°F</div>
       <div class="temp-setpoints">
-        <div class="temp-sp"><span class="ico sp-heat">▲</span><span class="sp-heat">${z.htsp ? Math.round(parseFloat(z.htsp)) + '°' : '–'}</span></div>
-        <div class="temp-sp"><span class="ico sp-cool">▼</span><span class="sp-cool">${z.clsp ? Math.round(parseFloat(z.clsp)) + '°' : '–'}</span></div>
+        <div class="temp-sp">
+          <span class="ico sp-heat">▲</span><span class="sp-heat">${z.htsp ? Math.round(parseFloat(z.htsp)) + '°' : '–'}</span>
+          <button class="btn-adj" onclick="event.stopPropagation();adjustTemp('${z.id}','htsp',1)">+</button>
+          <button class="btn-adj" onclick="event.stopPropagation();adjustTemp('${z.id}','htsp',-1)">−</button>
+        </div>
+        <div class="temp-sp">
+          <span class="ico sp-cool">▼</span><span class="sp-cool">${z.clsp ? Math.round(parseFloat(z.clsp)) + '°' : '–'}</span>
+          <button class="btn-adj" onclick="event.stopPropagation();adjustTemp('${z.id}','clsp',1)">+</button>
+          <button class="btn-adj" onclick="event.stopPropagation();adjustTemp('${z.id}','clsp',-1)">−</button>
+        </div>
       </div>
     </div>
     <div class="zone-meta">
@@ -704,12 +708,11 @@ function getActivitySetpoints(zoneId, activityId) {
   };
 }
 
-function updateHoldSetpoints() {
+function updateHoldPreview() {
   if (!holdZoneId) return;
   const act = document.getElementById('holdActivity').value;
   const sp = getActivitySetpoints(holdZoneId, act);
-  document.getElementById('holdHeat').value = sp.htsp;
-  document.getElementById('holdCool').value = sp.clsp;
+  document.getElementById('holdSpPreview').innerHTML = `<span style="color:var(--heat)">▲ ${sp.htsp}°</span> &nbsp; <span style="color:var(--cool)">▼ ${sp.clsp}°</span> &nbsp; <span style="color:var(--text3)">(${act} profile)</span>`;
 }
 
 function openHoldModal(z) {
@@ -719,28 +722,42 @@ function openHoldModal(z) {
   document.getElementById('holdUntil').value = z.otmr ? 'custom' : 'forever';
   document.getElementById('holdCustomTimeField').style.display = z.otmr ? 'block' : 'none';
   document.getElementById('holdUntilTime').value = z.otmr || '';
-  updateHoldSetpoints();
+  updateHoldPreview();
   document.getElementById('holdModal').classList.add('open');
 }
 
 function closeHoldModal() { document.getElementById('holdModal').classList.remove('open'); }
 document.getElementById('holdModal').addEventListener('click', e => { if (e.target === e.currentTarget) closeHoldModal(); });
 
+document.getElementById('holdActivity').addEventListener('change', updateHoldPreview);
+
 async function submitHold() {
   const activity = document.getElementById('holdActivity').value;
-  const htsp = document.getElementById('holdHeat').value;
-  const clsp = document.getElementById('holdCool').value;
   const untilType = document.getElementById('holdUntil').value;
   const untilTime = document.getElementById('holdUntilTime').value;
   const until = untilType === 'custom' ? untilTime : untilType;
 
   try {
-    // Save setpoints to activity profile first
-    await apiFetch(`/api/${holdZoneId}/activity/${activity}?htsp=${htsp}&clsp=${clsp}`, { method: 'PUT' });
-    // Then set the hold
     await apiFetch(`/api/${holdZoneId}/hold?activity=${activity}&until=${until}`, { method: 'PUT' });
     toast('Hold applied', 'success');
     closeHoldModal();
+    setTimeout(loadAll, 1500);
+  } catch(e) {
+    toast('Failed: ' + e.message, 'error');
+  }
+}
+
+async function adjustTemp(zoneId, field, delta) {
+  const z = state.zones.find(z => z.id === zoneId);
+  if (!z) return;
+  const current = Math.round(parseFloat(field === 'htsp' ? z.htsp : z.clsp) || 70);
+  const next = current + delta;
+  const htsp = field === 'htsp' ? next : Math.round(parseFloat(z.htsp) || 68);
+  const clsp = field === 'clsp' ? next : Math.round(parseFloat(z.clsp) || 76);
+  try {
+    await apiFetch(`/api/${zoneId}/activity/manual?htsp=${htsp}&clsp=${clsp}`, { method: 'PUT' });
+    await apiFetch(`/api/${zoneId}/hold?activity=manual&until=nextTransition`, { method: 'PUT' });
+    toast(`${z.name}: ${field === 'htsp' ? 'heat' : 'cool'} → ${next}°`, 'success');
     setTimeout(loadAll, 1500);
   } catch(e) {
     toast('Failed: ' + e.message, 'error');
@@ -894,7 +911,7 @@ function openCellEditor(el, dayName, periodIdx) {
     const enabled = zoneRow ? zoneRow.dataset.enabled !== 'off' : true;
     const pid = zoneRow ? zoneRow.dataset.pid : String(periodIdx + 1);
 
-    const actPills = ACTIVITIES.map(a =>
+    const actPills = SCHEDULE_ACTIVITIES.map(a =>
       `<div class="ce-act ${ACT_CLASS[a]}${a === act ? ' selected' : ''}" data-act="${a}" data-zidx="${zIdx}" onclick="selectCeActZone(this)">${a}</div>`
     ).join('');
 
@@ -1083,7 +1100,7 @@ function renderProfiles() {
     rows += `<tr class="zone-group-row"><td colspan="5" style="border-left:3px solid ${zColor}">
       <span style="font-size:13px;font-weight:600;color:${zColor}">${z.name}</span>
     </td></tr>`;
-    ACTIVITIES.forEach(actId => {
+    SCHEDULE_ACTIVITIES.forEach(actId => {
       const act = z.activities.find(a => a.id === actId) || {};
       const htsp = Math.round(parseFloat(v(act.htsp) || 68));
       const clsp = Math.round(parseFloat(v(act.clsp) || 76));
