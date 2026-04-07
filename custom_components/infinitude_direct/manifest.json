@@ -3,9 +3,9 @@
   "name": "Infinitude Direct",
   "codeowners": ["@vbulkin"],
   "config_flow": true,
-  "documentation": "https://github.com/vbulkin/infinitude",
+  "documentation": "https://github.com/vbulkin/infinitude-modern-wrap",
   "iot_class": "local_polling",
-  "issue_tracker": "https://github.com/vbulkin/infinitude/issues",
+  "issue_tracker": "https://github.com/vbulkin/infinitude-modern-wrap/issues",
   "requirements": [],
   "version": "1.0.0"
 }
