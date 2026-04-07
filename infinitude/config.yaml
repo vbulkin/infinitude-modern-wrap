@@ -1,6 +1,6 @@
-name: "Infinitude"
+name: "Infinitude Direct"
 description: "Open control of Carrier/Bryant Infinity thermostats"
-version: "1.0.18"
+version: "1.0.19"
 slug: "infinitude"
 arch:
   - aarch64
@@ -12,7 +12,7 @@ arch:
 ingress: true
 ingress_port: 3000
 panel_icon: mdi:thermostat
-panel_title: Infinitude
+panel_title: Infinitude Direct
 
 # Optional: allow direct port access too (disabled by default)
 # Users can enable in add-on Network settings if needed
