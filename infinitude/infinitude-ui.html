@@ -182,8 +182,8 @@
   .sched-zone-row:last-child { border-bottom: none; }
   .sched-zone-row-inner { display: flex; align-items: center; gap: 8px; }
   .sched-zone-label { font-size: 12px; font-weight: 600; color: var(--text3); min-width: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .sched-time-inline { font-family: 'DM Mono', monospace; font-size: 13px; color: var(--text3); }
-  .sched-sp-badge { font-family: 'DM Mono', monospace; font-size: 13px; color: var(--text3); cursor: pointer; margin-left: auto; padding: 1px 4px; border-radius: 3px; border: 1px solid transparent; white-space: nowrap; }
+  .sched-time-inline { font-family: 'DM Mono', monospace; font-size: 13px; color: var(--text2); }
+  .sched-sp-badge { font-family: 'DM Mono', monospace; font-size: 13px; color: var(--text2); cursor: pointer; margin-left: auto; padding: 1px 4px; border-radius: 3px; border: 1px solid transparent; white-space: nowrap; }
   .sched-sp-badge:hover { border-color: var(--border2); color: var(--accent); }
 
   /* Cell editor */
@@ -220,29 +220,35 @@
   @keyframes toastIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
 
   /* Profiles */
-  .profiles-zone { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; width: 100%; }
-  .profiles-table { border-collapse: collapse; width: 100%; }
-  .profiles-table th { font-size: 12px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.7px; padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
-  .profiles-table td { padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 14px; white-space: nowrap; }
-  .profiles-table tr:last-child td { border-bottom: none; }
-  .profiles-table .zone-group-row td { border-bottom: 1px solid var(--border); background: var(--bg3); padding: 6px 14px; }
-  .profiles-table input[type=number] {
-    width: 64px; background: var(--bg3); border: 1px solid var(--border2);
+  .prof-wrap { overflow-x: auto; }
+  .prof-grid { display: block; width: 100%; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .prof-head { display: grid; grid-template-columns: 80px 1fr; background: var(--bg3); border-bottom: 1px solid var(--border); }
+  .prof-head-cell { padding: 10px 4px; text-align: center; font-size: 12px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; }
+  .prof-head-sub { display: grid; grid-template-columns: repeat(3, 1fr); }
+  .prof-row { display: grid; grid-template-columns: 80px 1fr; border-bottom: 1px solid var(--border); }
+  .prof-row:last-child { border-bottom: none; }
+  .prof-act-label { display: flex; align-items: center; justify-content: center; border-right: 1px solid var(--border); padding: 8px 4px; }
+  .prof-zones { display: flex; flex-direction: column; }
+  .prof-zone-row { padding: 8px 10px; border-bottom: 1px solid var(--border); border-left: 3px solid transparent; display: flex; align-items: center; gap: 10px; }
+  .prof-zone-row:last-child { border-bottom: none; }
+  .prof-zone-label { font-size: 12px; font-weight: 600; min-width: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .prof-zone-row input[type=number] {
+    width: 56px; background: var(--bg3); border: 1px solid var(--border2);
     border-radius: var(--radius-sm); color: var(--text); font-family: 'DM Mono', monospace;
-    font-size: 14px; padding: 6px 8px; outline: none; text-align: center;
+    font-size: 13px; padding: 4px 6px; outline: none; text-align: center;
   }
-  .profiles-table input[type=number]:focus { border-color: var(--accent); }
-  .profiles-table select {
+  .prof-zone-row input[type=number]:focus { border-color: var(--accent); }
+  .prof-zone-row select {
     background: var(--bg3); border: 1px solid var(--border2); border-radius: var(--radius-sm);
-    color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 14px;
-    padding: 6px 8px; outline: none; appearance: none; width: 72px;
+    color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 13px;
+    padding: 4px 6px; outline: none; appearance: none; width: 64px;
   }
-  .profiles-table select:focus { border-color: var(--accent); }
-  .profiles-save-row { padding: 14px 16px; display: flex; justify-content: flex-end; border-top: 1px solid var(--border); }
+  .prof-zone-row select:focus { border-color: var(--accent); }
+  .prof-field-label { font-size: 10px; color: var(--text3); margin-right: 2px; }
 
   .sched-zone-row { display: flex; align-items: center; gap: 4px; padding: 2px 3px; }
-  .sched-time-inline { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--text3); min-width: 32px; }
-  .sched-sp-badge { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--text3); cursor: pointer; padding: 1px 3px; border-radius: 3px; border: 1px solid transparent; }
+  .sched-time-inline { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--text2); min-width: 32px; }
+  .sched-sp-badge { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--text2); cursor: pointer; padding: 1px 3px; border-radius: 3px; border: 1px solid transparent; }
   .sched-sp-badge:hover { border-color: var(--border2); color: var(--accent); }
   .sched-action-bar {
     display: none; position: sticky; bottom: 0; left: 0; right: 0;
@@ -379,26 +385,23 @@
   </div>
 </div>
 
-<!-- Profile Temp Modal -->
-<div class="modal-overlay" id="profileTempModal">
-  <div class="modal" style="width:280px">
-    <h3>Edit Profile Temps</h3>
-    <div class="modal-sub" id="profileTempSub"></div>
-    <div style="font-size:11px;color:var(--warn);margin-bottom:14px">Applies to all schedule periods using this activity.</div>
-    <div class="setpoint-row">
-      <div class="field">
-        <label>Heat to (°F)</label>
-        <input type="number" id="profileTempHeat" min="50" max="90" step="1">
-      </div>
-      <div class="field">
-        <label>Cool to (°F)</label>
-        <input type="number" id="profileTempCool" min="60" max="99" step="1">
-      </div>
+<!-- Profile Temp Flyout -->
+<div class="cell-editor" id="profileTempFlyout">
+  <div class="ce-title" id="profileTempTitle">Edit Temps</div>
+  <div style="font-size:10px;color:var(--warn);margin-bottom:8px">Applies to all periods using this activity.</div>
+  <div style="display:flex;gap:8px;margin-bottom:6px">
+    <div>
+      <div style="font-size:10px;color:var(--text2);margin-bottom:3px">Heat (°F)</div>
+      <input class="ce-time" type="number" id="profileTempHeat" min="50" max="90" step="1" style="width:60px">
     </div>
-    <div class="modal-footer">
-      <button class="btn" onclick="closeProfileTempModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="saveProfileTemp()">Save</button>
+    <div>
+      <div style="font-size:10px;color:var(--text2);margin-bottom:3px">Cool (°F)</div>
+      <input class="ce-time" type="number" id="profileTempCool" min="60" max="99" step="1" style="width:60px">
     </div>
+  </div>
+  <div class="ce-footer">
+    <button class="btn btn-sm" onclick="closeProfileTempFlyout()">Cancel</button>
+    <button class="btn btn-primary btn-sm" onclick="saveProfileTemp()">Save</button>
   </div>
 </div>
 
@@ -417,7 +420,7 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.17';
+const APP_VERSION = '1.0.18';
 const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
 const SCHEDULE_ACTIVITIES = ['home','away','sleep','wake'];
@@ -427,6 +430,7 @@ const ZONE_COLORS = ['#4f8ef7','#f97316','#a78bfa','#34d399','#f87171','#fbbf24'
 // ── State ─────────────────────────────────────────────────────────────────────
 let state = { zones: [], summary: {}, scheduleZoneIdx: 0 };
 let scheduleDirty = false;
+let profilesDirty = false;
 let holdZoneId = null;
 let cellEditCtx = null;
 let pollingTimer = null;
@@ -851,7 +855,7 @@ function renderSchedule() {
     const act = v(period.activity) || 'home';
     const time = v(period.time) || '–';
     const sp = getActivitySetpoints(z.id, act);
-    const tempBadge = `<span class="sched-sp-badge" onclick="event.stopPropagation();openProfileTempModal('${z.id}','${act}')">${sp.htsp}/${sp.clsp}</span>`;
+    const tempBadge = `<span class="sched-sp-badge" onclick="event.stopPropagation();openProfileTempFlyout(this,'${z.id}','${act}')">${sp.htsp}/${sp.clsp}</span>`;
     const opacity = enabled ? '1' : '0.35';
     const zColor = ZONE_COLORS[zIdx % ZONE_COLORS.length];
     const zLabel = z.name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 3);
@@ -1060,22 +1064,32 @@ function cancelScheduleChanges() {
 // ── Profile Temp Modal ────────────────────────────────────────────────────────
 let profileTempCtx = null;
 
-function openProfileTempModal(zoneId, actId) {
+function openProfileTempFlyout(el, zoneId, actId) {
   profileTempCtx = { zoneId, actId };
   const z = state.zones.find(z => z.id === zoneId);
   const zoneName = z ? z.name : zoneId;
-  document.getElementById('profileTempSub').textContent = `${capitalize(actId)} · ${zoneName}`;
+  document.getElementById('profileTempTitle').textContent = `${capitalize(actId)} · ${zoneName}`;
   const sp = getActivitySetpoints(zoneId, actId);
   document.getElementById('profileTempHeat').value = sp.htsp;
   document.getElementById('profileTempCool').value = sp.clsp;
-  document.getElementById('profileTempModal').classList.add('open');
+
+  const rect = el.getBoundingClientRect();
+  const flyout = document.getElementById('profileTempFlyout');
+  flyout.style.top = (rect.bottom + window.scrollY + 6) + 'px';
+  flyout.style.left = Math.min(rect.left, window.innerWidth - 220) + 'px';
+  flyout.classList.add('open');
 }
 
-function closeProfileTempModal() {
-  document.getElementById('profileTempModal').classList.remove('open');
+function closeProfileTempFlyout() {
+  document.getElementById('profileTempFlyout').classList.remove('open');
 }
-document.getElementById('profileTempModal').addEventListener('click', e => {
-  if (e.target === e.currentTarget) closeProfileTempModal();
+// Also kept for backward compat
+function openProfileTempModal(zoneId, actId) { /* no-op, replaced by flyout */ }
+function closeProfileTempModal() { closeProfileTempFlyout(); }
+
+document.addEventListener('click', e => {
+  const flyout = document.getElementById('profileTempFlyout');
+  if (flyout && !flyout.contains(e.target) && !e.target.closest('.sched-sp-badge')) closeProfileTempFlyout();
 });
 
 async function saveProfileTemp() {
@@ -1085,7 +1099,7 @@ async function saveProfileTemp() {
   try {
     await apiFetch(`/api/${zoneId}/activity/${actId}?htsp=${htsp}&clsp=${clsp}`, { method: 'PUT' });
     toast(`${capitalize(actId)} profile updated`, 'success');
-    closeProfileTempModal();
+    closeProfileTempFlyout();
     setTimeout(loadAll, 1500);
   } catch(e) {
     toast('Failed: ' + e.message, 'error');
@@ -1099,50 +1113,78 @@ function renderProfiles() {
 
   const FAN_OPTIONS = ['off','low','med','high'];
 
-  // Build rows: group by zone, each zone gets a colored header row + activity rows
-  let rows = '';
-  state.zones.forEach((z, zIdx) => {
-    const zColor = ZONE_COLORS[zIdx % ZONE_COLORS.length];
-    rows += `<tr class="zone-group-row"><td colspan="5" style="border-left:3px solid ${zColor}">
-      <span style="font-size:13px;font-weight:600;color:${zColor}">${z.name}</span>
-    </td></tr>`;
-    SCHEDULE_ACTIVITIES.forEach(actId => {
+  // Zone legend (same style as schedule)
+  const legend = state.zones.map((z, i) => {
+    const c = ZONE_COLORS[i % ZONE_COLORS.length];
+    return `<span style="font-size:12px;color:${c};font-weight:500">● ${z.name}</span>`;
+  }).join('<span style="margin:0 8px;color:var(--text3)">·</span>');
+
+  // Build activity rows with zone sub-rows
+  let actRows = '';
+  SCHEDULE_ACTIVITIES.forEach(actId => {
+    const zoneRows = state.zones.map((z, zIdx) => {
+      const zColor = ZONE_COLORS[zIdx % ZONE_COLORS.length];
+      const zLabel = z.name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 3);
       const act = z.activities.find(a => a.id === actId) || {};
       const htsp = Math.round(parseFloat(v(act.htsp) || 68));
       const clsp = Math.round(parseFloat(v(act.clsp) || 76));
       const fan = v(act.fan) || 'low';
       const fanOpts = FAN_OPTIONS.map(f => `<option value="${f}"${f === fan ? ' selected' : ''}>${f}</option>`).join('');
-      rows += `<tr style="border-left:3px solid ${zColor}">
-        <td><span class="sched-act ${ACT_CLASS[actId] || 'act-home'}" style="display:inline-block;font-size:13px">${actId}</span></td>
-        <td><input type="number" min="50" max="90" step="1" value="${htsp}" data-zone="${z.id}" data-act="${actId}" data-field="htsp"></td>
-        <td><input type="number" min="60" max="99" step="1" value="${clsp}" data-zone="${z.id}" data-act="${actId}" data-field="clsp"></td>
-        <td><select data-zone="${z.id}" data-act="${actId}" data-field="fan">${fanOpts}</select></td>
-      </tr>`;
-    });
+      return `<div class="prof-zone-row" style="border-left-color:${zColor}">
+        <span class="prof-zone-label" style="color:${zColor}">${zLabel}</span>
+        <span class="prof-field-label">H</span><input type="number" min="50" max="90" step="1" value="${htsp}" data-zone="${z.id}" data-act="${actId}" data-field="htsp">
+        <span class="prof-field-label">C</span><input type="number" min="60" max="99" step="1" value="${clsp}" data-zone="${z.id}" data-act="${actId}" data-field="clsp">
+        <span class="prof-field-label">Fan</span><select data-zone="${z.id}" data-act="${actId}" data-field="fan">${fanOpts}</select>
+      </div>`;
+    }).join('');
+    actRows += `<div class="prof-row">
+      <div class="prof-act-label"><span class="sched-act ${ACT_CLASS[actId] || 'act-home'}" style="font-size:13px;font-weight:500">${actId}</span></div>
+      <div class="prof-zones">${zoneRows}</div>
+    </div>`;
   });
 
   document.getElementById('profilesContent').innerHTML = `
     <div class="refresh-row">
       <div class="section-title">Comfort profiles</div>
     </div>
-    <div class="profiles-zone">
-      <table class="profiles-table">
-        <thead><tr>
-          <th>Activity</th><th>Heat (°F)</th><th>Cool (°F)</th><th>Fan</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-      <div class="profiles-save-row">
-        <button class="btn btn-primary btn-sm" onclick="saveAllProfiles()">Save All Profiles</button>
+    <div style="display:flex;gap:12px;margin-bottom:14px;align-items:center">${legend}</div>
+    <div class="prof-wrap">
+      <div class="prof-grid">
+        ${actRows}
+      </div>
+      <div class="sched-action-bar" id="profActionBar">
+        <span class="sched-action-bar-label">● Unsaved changes</span>
+        <button class="btn btn-sm" onclick="cancelProfileChanges()">Discard</button>
+        <button class="btn btn-primary btn-sm" onclick="saveAllProfiles()">Save profiles</button>
       </div>
     </div>
   `;
+
+  // Attach change listeners
+  document.querySelectorAll('#panel-profiles [data-zone]').forEach(el => {
+    el.addEventListener('change', () => setProfilesDirty(true));
+    el.addEventListener('input', () => setProfilesDirty(true));
+  });
+  setProfilesDirty(false);
+}
+
+function setProfilesDirty(dirty) {
+  profilesDirty = dirty;
+  const bar = document.getElementById('profActionBar');
+  if (!bar) return;
+  bar.classList.toggle('visible', dirty);
+}
+
+function cancelProfileChanges() {
+  setProfilesDirty(false);
+  renderProfiles();
+  toast('Changes discarded', 'success');
 }
 
 async function saveAllProfiles() {
   try {
     for (const z of state.zones) {
-      const inputs = document.querySelectorAll(`[data-zone="${z.id}"]`);
+      const inputs = document.querySelectorAll(`#panel-profiles [data-zone="${z.id}"]`);
       const byAct = {};
       inputs.forEach(el => {
         const act = el.dataset.act;
@@ -1154,6 +1196,7 @@ async function saveAllProfiles() {
       }
     }
     toast('All profiles saved', 'success');
+    setProfilesDirty(false);
     setTimeout(loadAll, 1500);
   } catch(e) {
     toast('Failed: ' + e.message, 'error');
