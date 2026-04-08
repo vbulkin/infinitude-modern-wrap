@@ -446,7 +446,7 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.31';
+const APP_VERSION = '1.0.32';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const JS_DAY_MAP = [6,0,1,2,3,4,5]; // JS getDay() (0=Sun) -> DAYS index
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
@@ -583,15 +583,9 @@ function processData(sysData, statusData) {
   // status.json: { status: [{ ... }] }
   const st = statusData.status[0];
 
-  // Debug: log raw API data to find all available fields (remove after investigation)
-  console.log('=== RAW status top-level keys ===', Object.keys(st));
-  console.log('=== RAW status (non-zone) ===', Object.fromEntries(Object.entries(st).filter(([k]) => k !== 'zones')));
+  // Debug: dump full zone data (remove after investigation)
   const rawZones = forceArray(st.zones[0].zone);
-  rawZones.forEach(z => console.log(`=== RAW status zone ${z.id} keys ===`, Object.keys(z), z));
-
-  const cfg0 = sysData.system[0];
-  console.log('=== RAW systems top-level keys ===', Object.keys(cfg0));
-  console.log('=== RAW systems (non-config) ===', Object.fromEntries(Object.entries(cfg0).filter(([k]) => k !== 'config')));
+  rawZones.filter(z => z.id === '1' || z.id === '2').forEach(z => console.log(`=== RAW zone ${z.id} FULL ===`, JSON.parse(JSON.stringify(z))));
 
   // System summary — mode lives in systems.json config, live stats in status.json
   state.summary = {
