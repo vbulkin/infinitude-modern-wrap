@@ -238,9 +238,9 @@
     background-repeat: no-repeat; background-position: right 5px center; padding-right: 18px;
   }
   .sched-inline-select:focus { border-color: var(--accent); }
-  .sched-inline-temps { font-family: 'DM Mono', monospace; font-size: 11px; display: flex; gap: 6px; margin-left: auto; align-items: center; }
-  .sched-inline-temps .heat { color: var(--heat); }
-  .sched-inline-temps .cool { color: var(--cool); }
+  .sched-inline-temps { font-family: 'DM Mono', monospace; font-size: 12px; display: flex; gap: 8px; margin-left: auto; align-items: center; }
+  .sched-inline-temps .sp-heat { color: var(--heat); }
+  .sched-inline-temps .sp-cool { color: var(--cool); }
   .sched-inline-toggle { cursor: pointer; }
   .sched-zone-line.disabled { opacity: 0.35; }
   .sched-copy-bar { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
@@ -298,12 +298,6 @@
     border-bottom: 1px solid var(--border); flex-wrap: wrap;
   }
   .prof-zone-line:last-child { border-bottom: none; }
-  .prof-zone-line input[type=number] {
-    width: 52px; background: var(--bg3); border: 1px solid var(--border2);
-    border-radius: 4px; color: var(--text); font-family: 'DM Mono', monospace;
-    font-size: 12px; padding: 4px 6px; outline: none; text-align: center;
-  }
-  .prof-zone-line input[type=number]:focus { border-color: var(--accent); }
   .prof-zone-line select {
     background: var(--bg3); border: 1px solid var(--border2); border-radius: 4px;
     color: var(--text); font-size: 11px; padding: 3px 6px; outline: none;
@@ -457,14 +451,16 @@
 <div class="cell-editor" id="profileTempFlyout">
   <div class="ce-title" id="profileTempTitle">Edit Temps</div>
   <div style="font-size:10px;color:var(--warn);margin-bottom:8px">Applies to all periods using this activity.</div>
-  <div style="display:flex;gap:8px;margin-bottom:6px">
-    <div>
-      <div style="font-size:10px;color:var(--text2);margin-bottom:3px">Heat (°F)</div>
-      <input class="ce-time" type="number" id="profileTempHeat" min="50" max="90" step="1" style="width:60px">
+  <div style="display:flex;gap:12px;margin-bottom:6px;align-items:center">
+    <div class="sp-row">
+      <button class="btn-adj" onclick="adjFlyoutTemp('profileTempHeat',-1)">−</button>
+      <span class="sp-heat sp-val" id="profileTempHeat" data-value="">–</span>
+      <button class="btn-adj" onclick="adjFlyoutTemp('profileTempHeat',1)">+</button>
     </div>
-    <div>
-      <div style="font-size:10px;color:var(--text2);margin-bottom:3px">Cool (°F)</div>
-      <input class="ce-time" type="number" id="profileTempCool" min="60" max="99" step="1" style="width:60px">
+    <div class="sp-row">
+      <button class="btn-adj" onclick="adjFlyoutTemp('profileTempCool',-1)">−</button>
+      <span class="sp-cool sp-val" id="profileTempCool" data-value="">–</span>
+      <button class="btn-adj" onclick="adjFlyoutTemp('profileTempCool',1)">+</button>
     </div>
   </div>
   <div class="ce-footer">
@@ -479,7 +475,7 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.39';
+const APP_VERSION = '1.0.40';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const JS_DAY_MAP = [6,0,1,2,3,4,5]; // JS getDay() (0=Sun) -> DAYS index
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
@@ -827,13 +823,11 @@ function zoneCard(z) {
           <button class="btn-adj" onclick="event.stopPropagation();adjustTemp('${z.id}','htsp',-1)">−</button>
           <span class="sp-heat sp-val" id="sp-htsp-${z.id}">${z.htsp ? Math.round(parseFloat(z.htsp)) + '°' : '–'}</span>
           <button class="btn-adj" onclick="event.stopPropagation();adjustTemp('${z.id}','htsp',1)">+</button>
-          <span style="font-size:10px;color:var(--heat);margin-left:2px">▲</span>
         </div>
         <div class="sp-row">
           <button class="btn-adj" onclick="event.stopPropagation();adjustTemp('${z.id}','clsp',-1)">−</button>
           <span class="sp-cool sp-val" id="sp-clsp-${z.id}">${z.clsp ? Math.round(parseFloat(z.clsp)) + '°' : '–'}</span>
           <button class="btn-adj" onclick="event.stopPropagation();adjustTemp('${z.id}','clsp',1)">+</button>
-          <span style="font-size:10px;color:var(--cool);margin-left:2px">▼</span>
         </div>
       </div>
     </div>
@@ -843,9 +837,9 @@ function zoneCard(z) {
       <div class="zone-meta-item">Damper ${z.damper != null ? `<span class="damper-bar"><span class="damper-track"><span class="damper-fill" style="width:${Math.round(parseFloat(z.damper)/15*100)}%"></span></span><span class="damper-label">${Math.round(parseFloat(z.damper)/15*100)}%</span></span>` : '<span class="zone-meta-val">–</span>'}</div>
     </div>
     ${holdStrip}
-    <div class="zone-actions">
+    ${!hasHold ? `<div class="zone-actions">
       <button class="btn btn-sm" onclick='openHoldModal(${JSON.stringify({id:z.id,name:z.name,htsp:z.htsp,clsp:z.clsp,currentActivity:z.currentActivity,holdActivity:z.holdActivity,otmr:z.otmr})})'>Set hold</button>
-    </div>
+    </div>` : ''}
   </div>`;
 }
 
@@ -902,7 +896,7 @@ function updateHoldPreview() {
   if (!holdZoneId) return;
   const act = document.getElementById('holdActivity').value;
   const sp = getActivitySetpoints(holdZoneId, act);
-  document.getElementById('holdSpPreview').innerHTML = `<span style="color:var(--heat)">▲ ${sp.htsp}°</span> &nbsp; <span style="color:var(--cool)">▼ ${sp.clsp}°</span> &nbsp; <span style="color:var(--text3)">(${act} profile)</span>`;
+  document.getElementById('holdSpPreview').innerHTML = `<span class="sp-heat" style="font-family:'DM Mono',monospace">${sp.htsp}°</span> &nbsp; <span class="sp-cool" style="font-family:'DM Mono',monospace">${sp.clsp}°</span> &nbsp; <span style="color:var(--text3)">(${act} profile)</span>`;
 }
 
 function openHoldModal(z) {
@@ -1230,8 +1224,8 @@ function _zoneLine(z, zIdx, period, pi, day) {
       <span style="font-size:10px;color:var(--text3)">on</span>
     </label>
     <div class="sched-inline-temps">
-      <span class="heat" style="cursor:pointer" onclick="openProfileTempFlyout(this,'${z.id}','${act}')">▲${sp.htsp}°</span>
-      <span class="cool" style="cursor:pointer" onclick="openProfileTempFlyout(this,'${z.id}','${act}')">▼${sp.clsp}°</span>
+      <span class="sp-heat" style="cursor:pointer" onclick="openProfileTempFlyout(this,'${z.id}','${act}')">${sp.htsp}°</span>
+      <span class="sp-cool" style="cursor:pointer" onclick="openProfileTempFlyout(this,'${z.id}','${act}')">${sp.clsp}°</span>
     </div>
   </div>`;
 }
@@ -1270,8 +1264,8 @@ function onSchedLineChange(inputEl) {
     const sp = getActivitySetpoints(z.id, actSelect.value);
     const tempsEl = line.querySelector('.sched-inline-temps');
     if (tempsEl) {
-      tempsEl.innerHTML = `<span class="heat" style="cursor:pointer" onclick="openProfileTempFlyout(this,'${z.id}','${actSelect.value}')">▲${sp.htsp}°</span>
-        <span class="cool" style="cursor:pointer" onclick="openProfileTempFlyout(this,'${z.id}','${actSelect.value}')">▼${sp.clsp}°</span>`;
+      tempsEl.innerHTML = `<span class="sp-heat" style="cursor:pointer" onclick="openProfileTempFlyout(this,'${z.id}','${actSelect.value}')">${sp.htsp}°</span>
+        <span class="sp-cool" style="cursor:pointer" onclick="openProfileTempFlyout(this,'${z.id}','${actSelect.value}')">${sp.clsp}°</span>`;
     }
   }
 
@@ -1437,8 +1431,10 @@ function openProfileTempFlyout(el, zoneId, actId) {
   const zoneName = z ? z.name : zoneId;
   document.getElementById('profileTempTitle').textContent = `${capitalize(actId)} · ${zoneName}`;
   const sp = getActivitySetpoints(zoneId, actId);
-  document.getElementById('profileTempHeat').value = sp.htsp;
-  document.getElementById('profileTempCool').value = sp.clsp;
+  const hEl = document.getElementById('profileTempHeat');
+  const cEl = document.getElementById('profileTempCool');
+  hEl.dataset.value = sp.htsp; hEl.textContent = sp.htsp + '°';
+  cEl.dataset.value = sp.clsp; cEl.textContent = sp.clsp + '°';
 
   const rect = el.getBoundingClientRect();
   const flyout = document.getElementById('profileTempFlyout');
@@ -1461,8 +1457,8 @@ document.addEventListener('click', e => {
 
 async function saveProfileTemp() {
   const { zoneId, actId } = profileTempCtx;
-  const htsp = document.getElementById('profileTempHeat').value;
-  const clsp = document.getElementById('profileTempCool').value;
+  const htsp = document.getElementById('profileTempHeat').dataset.value;
+  const clsp = document.getElementById('profileTempCool').dataset.value;
   try {
     await apiFetch(`/api/${zoneId}/activity/${actId}?htsp=${htsp}&clsp=${clsp}`, { method: 'PUT' });
     toast(`${capitalize(actId)} profile updated`, 'success');
@@ -1472,6 +1468,31 @@ async function saveProfileTemp() {
     toast('Failed: ' + e.message, 'error');
   }
 }
+
+function adjProfileTemp(btn, delta, field) {
+  const span = btn.closest('.sp-row').querySelector(`[data-field="${field}"]`);
+  if (!span) return;
+  const min = field === 'htsp' ? 50 : 60;
+  const max = field === 'htsp' ? 90 : 99;
+  const cur = parseInt(span.dataset.value) || 70;
+  const next = Math.max(min, Math.min(max, cur + delta));
+  span.dataset.value = next;
+  span.textContent = next + '°';
+  setProfilesDirty(true);
+}
+
+function adjFlyoutTemp(id, delta) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const isHeat = id.includes('Heat');
+  const min = isHeat ? 50 : 60;
+  const max = isHeat ? 90 : 99;
+  const cur = parseInt(el.dataset.value) || 70;
+  const next = Math.max(min, Math.min(max, cur + delta));
+  el.dataset.value = next;
+  el.textContent = next + '°';
+}
+
 function renderProfiles() {
   if (!state.zones.length) {
     document.getElementById('profilesContent').innerHTML = `<div class="notice"><strong>No data</strong>Load status first.</div>`;
@@ -1490,10 +1511,16 @@ function renderProfiles() {
       const fanOpts = FAN_OPTIONS.map(f => `<option value="${f}"${f === fan ? ' selected' : ''}>${f}</option>`).join('');
       return `<div class="prof-zone-line" data-zone="${z.id}" data-act="${actId}">
         <span class="sched-zone-name">${z.name}</span>
-        <span class="prof-field-label" style="color:var(--heat)">▲</span>
-        <input type="number" min="50" max="90" step="1" value="${htsp}" data-field="htsp">
-        <span class="prof-field-label" style="color:var(--cool)">▼</span>
-        <input type="number" min="60" max="99" step="1" value="${clsp}" data-field="clsp">
+        <div class="sp-row">
+          <button class="btn-adj" onclick="adjProfileTemp(this,-1,'htsp')">−</button>
+          <span class="sp-heat sp-val" data-field="htsp" data-value="${htsp}">${htsp}°</span>
+          <button class="btn-adj" onclick="adjProfileTemp(this,1,'htsp')">+</button>
+        </div>
+        <div class="sp-row">
+          <button class="btn-adj" onclick="adjProfileTemp(this,-1,'clsp')">−</button>
+          <span class="sp-cool sp-val" data-field="clsp" data-value="${clsp}">${clsp}°</span>
+          <button class="btn-adj" onclick="adjProfileTemp(this,1,'clsp')">+</button>
+        </div>
         <span class="prof-field-label">Fan</span>
         <select data-field="fan">${fanOpts}</select>
       </div>`;
@@ -1514,10 +1541,9 @@ function renderProfiles() {
     </div>
   `;
 
-  // Attach change listeners
-  document.querySelectorAll('#panel-profiles .prof-zone-line input, #panel-profiles .prof-zone-line select').forEach(el => {
+  // Attach change listeners for fan selects
+  document.querySelectorAll('#panel-profiles .prof-zone-line select').forEach(el => {
     el.addEventListener('change', () => setProfilesDirty(true));
-    el.addEventListener('input', () => setProfilesDirty(true));
   });
   setProfilesDirty(false);
 }
@@ -1544,7 +1570,7 @@ async function saveAllProfiles() {
         const actId = line.dataset.act;
         if (!byAct[actId]) byAct[actId] = {};
         line.querySelectorAll('[data-field]').forEach(el => {
-          byAct[actId][el.dataset.field] = el.value;
+          byAct[actId][el.dataset.field] = el.dataset.value || el.value;
         });
       });
       for (const [actId, fields] of Object.entries(byAct)) {
