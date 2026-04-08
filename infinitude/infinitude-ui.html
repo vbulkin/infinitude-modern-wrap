@@ -164,6 +164,10 @@
   .zone-meta { display: flex; gap: 12px; padding: 0 16px 10px; font-size: 11px; color: var(--text3); flex-wrap: wrap; }
   .zone-meta-item { display: flex; align-items: center; gap: 4px; }
   .zone-meta-val { color: var(--text2); font-weight: 500; }
+  .damper-bar { display: inline-flex; align-items: center; gap: 5px; }
+  .damper-track { width: 40px; height: 5px; background: var(--bg4); border-radius: 3px; overflow: hidden; }
+  .damper-fill { height: 100%; border-radius: 3px; background: var(--accent); transition: width 0.3s; }
+  .damper-label { color: var(--text2); font-weight: 500; font-size: 11px; }
 
   .zone-hold-strip {
     display: flex; align-items: center; gap: 8px; padding: 8px 16px;
@@ -224,7 +228,7 @@
     border-bottom: 1px solid var(--border); flex-wrap: wrap;
   }
   .sched-zone-line:last-child { border-bottom: none; }
-  .sched-zone-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
   .sched-zone-name { font-size: 12px; font-weight: 600; min-width: 70px; color: var(--text2); }
   .sched-inline-select {
     background: var(--bg3); border: 1px solid var(--border2); border-radius: 4px; color: var(--text);
@@ -475,13 +479,13 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.37';
+const APP_VERSION = '1.0.38';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const JS_DAY_MAP = [6,0,1,2,3,4,5]; // JS getDay() (0=Sun) -> DAYS index
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
 const SCHEDULE_ACTIVITIES = ['home','away','sleep','wake'];
 const ACT_CLASS = { home:'act-home', away:'act-away', sleep:'act-sleep', wake:'act-wake', manual:'act-manual' };
-const ZONE_COLORS = ['#4f8ef7','#f97316','#a78bfa','#34d399','#f87171','#fbbf24','#38bdf8','#6b7280'];
+
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let state = { zones: [], summary: {}, scheduleZoneIdx: 0 };
@@ -836,7 +840,7 @@ function zoneCard(z) {
     <div class="zone-meta">
       <div class="zone-meta-item">RH <span class="zone-meta-val">${z.rh ? z.rh + '%' : '–'}</span></div>
       <div class="zone-meta-item">Fan <span class="zone-meta-val">${z.fan || '–'}</span></div>
-      <div class="zone-meta-item">Damper <span class="zone-meta-val">${z.damper ? z.damper + '%' : '–'}</span></div>
+      <div class="zone-meta-item">Damper ${z.damper != null ? `<span class="damper-bar"><span class="damper-track"><span class="damper-fill" style="width:${Math.round(parseFloat(z.damper)/15*100)}%"></span></span><span class="damper-label">${Math.round(parseFloat(z.damper)/15*100)}%</span></span>` : '<span class="zone-meta-val">–</span>'}</div>
     </div>
     ${holdStrip}
     <div class="zone-actions">
@@ -1142,15 +1146,9 @@ function _schedShell(todayName) {
     return `<div class="${cls.join(' ')}" onclick="switchSchedDay('${d}')">${d.slice(0,3)}</div>`;
   }).join('');
 
-  const legend = state.zones.map((z, i) => {
-    const c = ZONE_COLORS[i % ZONE_COLORS.length];
-    return `<span style="font-size:12px;color:${c};font-weight:500">● ${z.name}</span>`;
-  }).join('<span style="margin:0 6px;color:var(--text3)">·</span>');
-
   return `
     <div class="refresh-row"><div class="section-title">Schedule</div></div>
     <div class="sched-day-tabs">${tabs}</div>
-    <div style="margin-bottom:12px">${legend}</div>
     <div id="schedDayBody"></div>
     <div class="sched-copy-bar">
       <span style="font-size:12px;color:var(--text3)">Copy ${_schedDay.slice(0,3)} →</span>
@@ -1197,7 +1195,6 @@ function _renderDayPeriods() {
 function _zoneLine(z, zIdx, period, pi, day) {
   if (!period) {
     return `<div class="sched-zone-line disabled" style="opacity:0.2;padding:6px 14px">
-      <div class="sched-zone-dot" style="background:${ZONE_COLORS[zIdx % ZONE_COLORS.length]}"></div>
       <span class="sched-zone-name">${z.name}</span>
       <span style="font-size:11px;color:var(--text3)">—</span>
     </div>`;
@@ -1209,7 +1206,6 @@ function _zoneLine(z, zIdx, period, pi, day) {
   const act = edit ? edit.act : (v(period.activity) || 'home');
   const time = edit ? edit.time : (v(period.time) || '06:00');
   const pid = v(period.id) || (pi + 1);
-  const zColor = ZONE_COLORS[zIdx % ZONE_COLORS.length];
   const sp = getActivitySetpoints(z.id, act);
   const disabledCls = enabled ? '' : ' disabled';
 
@@ -1218,7 +1214,6 @@ function _zoneLine(z, zIdx, period, pi, day) {
   ).join('');
 
   return `<div class="sched-zone-line${disabledCls}" data-zidx="${zIdx}" data-pi="${pi}" data-pid="${pid}" data-day="${day}">
-    <div class="sched-zone-dot" style="background:${zColor}"></div>
     <span class="sched-zone-name">${z.name}</span>
     <select class="sched-inline-select" onchange="onSchedLineChange(this)" data-field="act">${actOpts}</select>
     <select class="sched-inline-select" onchange="onSchedLineChange(this)" data-field="time">${timeOptions(time)}</select>
@@ -1477,22 +1472,15 @@ function renderProfiles() {
 
   const FAN_OPTIONS = ['off','low','med','high'];
 
-  const legend = state.zones.map((z, i) => {
-    const c = ZONE_COLORS[i % ZONE_COLORS.length];
-    return `<span style="font-size:12px;color:${c};font-weight:500">● ${z.name}</span>`;
-  }).join('<span style="margin:0 6px;color:var(--text3)">·</span>');
-
   let cards = '';
   SCHEDULE_ACTIVITIES.forEach(actId => {
     const zoneLines = state.zones.map((z, zIdx) => {
-      const zColor = ZONE_COLORS[zIdx % ZONE_COLORS.length];
       const act = z.activities.find(a => a.id === actId) || {};
       const htsp = Math.round(parseFloat(v(act.htsp) || 68));
       const clsp = Math.round(parseFloat(v(act.clsp) || 76));
       const fan = v(act.fan) || 'low';
       const fanOpts = FAN_OPTIONS.map(f => `<option value="${f}"${f === fan ? ' selected' : ''}>${f}</option>`).join('');
       return `<div class="prof-zone-line" data-zone="${z.id}" data-act="${actId}">
-        <div class="sched-zone-dot" style="background:${zColor}"></div>
         <span class="sched-zone-name">${z.name}</span>
         <span class="prof-field-label" style="color:var(--heat)">▲</span>
         <input type="number" min="50" max="90" step="1" value="${htsp}" data-field="htsp">
@@ -1510,7 +1498,6 @@ function renderProfiles() {
 
   document.getElementById('profilesContent').innerHTML = `
     <div class="refresh-row"><div class="section-title">Comfort profiles</div></div>
-    <div style="margin-bottom:12px">${legend}</div>
     ${cards}
     <div class="sched-action-bar" id="profActionBar">
       <span class="sched-action-bar-label">● Unsaved changes</span>
