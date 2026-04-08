@@ -46,6 +46,8 @@
   .status-dot.ok { background: var(--success); animation: pulse 2.5s ease infinite; }
   .status-dot.error { background: #ef4444; }
   .status-dot.connecting { background: var(--warn); }
+  .topbar-updated { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--text3); cursor: pointer; padding: 2px 6px; border-radius: 4px; transition: color 0.15s, background 0.15s; user-select: none; }
+  .topbar-updated:hover { color: var(--text2); background: var(--bg3); }
   .carrier-ok { color: var(--success); font-size: 13px; font-weight: 500; }
   .carrier-err { color: #ef4444; font-size: 13px; font-weight: 500; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
@@ -219,7 +221,7 @@
   .ce-acts { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
   .ce-act { padding: 2px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; border: 1px solid var(--border); transition: all 0.12s; }
   .ce-act:hover, .ce-act.selected { border-color: var(--accent); background: rgba(79,142,247,0.15); }
-  .ce-time { width: 100px; background: var(--bg3); border: 1px solid var(--border2); border-radius: 4px; color: var(--text); font-family: 'DM Mono', monospace; font-size: 12px; padding: 3px 6px; outline: none; }
+  .ce-time { width: 90px; background: var(--bg3); border: 1px solid var(--border2); border-radius: 4px; color: var(--text); font-family: 'DM Mono', monospace; font-size: 12px; padding: 3px 6px; outline: none; appearance: none; -webkit-appearance: none; cursor: pointer; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%238b92a8'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 6px center; padding-right: 20px; }
   .ce-time:focus { border-color: var(--accent); }
   .ce-footer { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
   .ce-zone-row { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
@@ -268,9 +270,10 @@
   .prof-zone-row select:focus { border-color: var(--accent); }
   .prof-field-label { font-size: 10px; color: var(--text3); margin-right: 2px; }
 
-  .sched-zone-row { display: flex; align-items: center; gap: 4px; padding: 2px 3px; }
-  .sched-time-inline { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--text2); min-width: 32px; }
-  .sched-sp-badge { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--text2); cursor: pointer; padding: 1px 3px; border-radius: 3px; border: 1px solid transparent; }
+  .sched-zone-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; cursor: pointer; border-radius: 4px; transition: background 0.1s; }
+  .sched-zone-row:hover { background: rgba(255,255,255,0.03); }
+  .sched-time-inline { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text); min-width: 36px; }
+  .sched-sp-badge { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text2); cursor: pointer; padding: 1px 4px; border-radius: 3px; border: 1px solid transparent; }
   .sched-sp-badge:hover { border-color: var(--border2); color: var(--accent); }
   .sched-action-bar {
     display: none; position: sticky; bottom: 0; left: 0; right: 0;
@@ -290,7 +293,9 @@
   <div class="topbar">
     <div class="topbar-left">
       <div class="logo">infin<span>itude</span></div>
-      <div class="status-dot" id="statusDot"></div>
+      <div class="status-dot" id="statusDot" title="Infinitude"></div>
+      <div class="status-dot" id="carrierDot" title="Carrier cloud"></div>
+      <span class="topbar-updated" id="lastUpdated" onclick="loadAll()" title="Click to refresh"></span>
       <div style="font-family:'DM Mono',monospace;font-size:10px;color:var(--text3)" id="versionBadge"></div>
     </div>
     <div class="topbar-right">
@@ -311,13 +316,7 @@
   <div class="content">
     <div class="panel active" id="panel-status">
       <div class="summary-bar" id="summaryBar"></div>
-      <div class="refresh-row">
-        <div class="section-title">Zones</div>
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="last-updated" id="lastUpdated"></span>
-          <button class="btn btn-sm" onclick="loadAll()">↻ Refresh</button>
-        </div>
-      </div>
+      <div class="section-title" style="margin-bottom:16px">Zones</div>
       <div id="zoneContent">
         <div class="loader"><div class="spinner"></div><div class="loader-text">Connecting…</div></div>
       </div>
@@ -452,7 +451,7 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.28';
+const APP_VERSION = '1.0.29';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const JS_DAY_MAP = [6,0,1,2,3,4,5]; // JS getDay() (0=Sun) -> DAYS index
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
@@ -564,7 +563,7 @@ async function loadAll() {
     ]);
     processData(sysData, statusData);
     setDot('ok');
-    document.getElementById('lastUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    document.getElementById('lastUpdated').textContent = new Date().toLocaleTimeString();
     pollingTimer = setInterval(refreshStatus, 30000);
     checkCarrier();
   } catch(e) {
@@ -578,7 +577,7 @@ async function refreshStatus() {
     const statusData = await apiFetch('/status.json');
     mergeStatus(statusData);
     renderStatus();
-    document.getElementById('lastUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    document.getElementById('lastUpdated').textContent = new Date().toLocaleTimeString();
   } catch(e) { /* silent on poll failures */ }
 }
 
@@ -711,10 +710,6 @@ function renderStatus() {
       <div class="stat-label">Whole house hold</div>
       <div class="stat-val" style="font-size:14px;color:${whHoldColor}">${whHoldLabel} ✎</div>
     </div>
-    <div class="stat" style="cursor:pointer" onclick="checkCarrier()">
-      <div class="stat-label">Carrier cloud</div>
-      <div class="stat-val" id="carrierStatus"><span style="color:var(--text3)">–</span></div>
-    </div>
   `;
 
   if (!state.zones.length) {
@@ -786,6 +781,17 @@ function condClass(c) {
 }
 
 function capitalize(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : '–'; }
+
+function timeOptions(selected) {
+  let opts = '';
+  for (let h = 0; h < 24; h++) {
+    for (let m = 0; m < 60; m += 15) {
+      const val = String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0');
+      opts += `<option value="${val}"${val === selected ? ' selected' : ''}>${val}</option>`;
+    }
+  }
+  return opts;
+}
 
 // ── System Mode ───────────────────────────────────────────────────────────────
 async function setSystemMode(mode) {
@@ -1022,7 +1028,7 @@ function renderSchedule() {
     const opacity = enabled ? '1' : '0.35';
     const zColor = ZONE_COLORS[zIdx % ZONE_COLORS.length];
     const zLabel = z.name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 3);
-    return `<div class="sched-zone-row" style="opacity:${opacity};border-left-color:${zColor}" data-zone-idx="${zIdx}" data-enabled="${enabled ? 'on' : 'off'}" data-act="${act}" data-time="${time}" data-pid="${v(period.id) || (pi+1)}">
+    return `<div class="sched-zone-row" style="opacity:${opacity};border-left-color:${zColor}" data-zone-idx="${zIdx}" data-enabled="${enabled ? 'on' : 'off'}" data-act="${act}" data-time="${time}" data-pid="${v(period.id) || (pi+1)}" onclick="event.stopPropagation();openZoneEditor(this, '${day}', ${pi}, ${zIdx})">
       <div class="sched-zone-row-inner">
         <span class="sched-zone-label" style="color:${zColor}">${zLabel}</span>
         <span class="sched-act ${ACT_CLASS[act] || 'act-home'}">${act}</span>
@@ -1040,7 +1046,7 @@ function renderSchedule() {
         const period = (zoneMaps[zIdx][day] || [])[pi];
         return zoneRow(z, zIdx, period, day, pi);
       }).join('');
-      return `<div class="sched-cell${isToday ? ' today' : ''}" onclick="openCellEditor(this, '${day}', ${pi})">${zonesHtml}</div>`;
+      return `<div class="sched-cell${isToday ? ' today' : ''}">${zonesHtml}</div>`;
     }).join('');
     rows += `<div class="sched-row"><div class="sched-row-label">P${pi + 1}</div>${cells}</div>`;
   }
@@ -1062,7 +1068,7 @@ function renderSchedule() {
         ${rows}
       </div>
     </div>
-    <div style="margin-top:10px;font-size:11px;color:var(--text3)">Today (${todayName}) highlighted. Click cell to edit · Click temp to edit profile.</div>
+    <div style="margin-top:10px;font-size:11px;color:var(--text3)">Today (${todayName}) highlighted. Click a zone row to edit · Click temp to edit profile.</div>
     <div class="sched-action-bar" id="schedActionBar">
       <span class="sched-action-bar-label">● Unsaved changes</span>
       <button class="btn btn-sm" onclick="cancelScheduleChanges()">Discard</button>
@@ -1071,46 +1077,44 @@ function renderSchedule() {
   `;
 }
 
-// ── Cell Editor ───────────────────────────────────────────────────────────────
-function openCellEditor(el, dayName, periodIdx) {
-  cellEditCtx = { dayName, periodIdx, el };
-  document.getElementById('ceTitle').textContent = `${dayName} · Period ${periodIdx + 1}`;
+// ── Zone Editor (per-zone flyout) ──────────────────────────────────────────────
+function openZoneEditor(rowEl, dayName, periodIdx, zIdx) {
+  const z = state.zones[zIdx];
+  if (!z) return;
+  const cell = rowEl.closest('.sched-cell');
+  cellEditCtx = { dayName, periodIdx, zIdx, rowEl, cell };
 
-  // Build one row per zone
-  const zoneRows = state.zones.map((z, zIdx) => {
-    const zoneRow = el.querySelector(`[data-zone-idx="${zIdx}"]`);
-    const act = zoneRow ? zoneRow.dataset.act : 'home';
-    const time = (zoneRow && zoneRow.dataset.time !== '–') ? zoneRow.dataset.time : '06:00';
-    const enabled = zoneRow ? zoneRow.dataset.enabled !== 'off' : true;
-    const pid = zoneRow ? zoneRow.dataset.pid : String(periodIdx + 1);
+  const zColor = ZONE_COLORS[zIdx % ZONE_COLORS.length];
+  document.getElementById('ceTitle').innerHTML = `<span style="color:${zColor}">●</span> ${z.name} · ${dayName} · P${periodIdx + 1}`;
 
-    const actPills = SCHEDULE_ACTIVITIES.map(a =>
-      `<div class="ce-act ${ACT_CLASS[a]}${a === act ? ' selected' : ''}" data-act="${a}" data-zidx="${zIdx}" onclick="selectCeActZone(this)">${a}</div>`
-    ).join('');
+  const act = rowEl.dataset.act || 'home';
+  const time = (rowEl.dataset.time && rowEl.dataset.time !== '–') ? rowEl.dataset.time : '06:00';
+  const enabled = rowEl.dataset.enabled !== 'off';
+  const pid = rowEl.dataset.pid || String(periodIdx + 1);
 
-    const sp = getActivitySetpoints(z.id, act);
+  const actPills = SCHEDULE_ACTIVITIES.map(a =>
+    `<div class="ce-act ${ACT_CLASS[a]}${a === act ? ' selected' : ''}" data-act="${a}" data-zidx="${zIdx}" onclick="selectCeActZone(this)">${a}</div>`
+  ).join('');
 
-    return `<div class="ce-zone-row" data-zidx="${zIdx}" data-pid="${pid}">
-      <div style="font-size:10px;color:var(--text3);margin-bottom:4px;font-weight:600">${z.name}</div>
-      <div class="ce-acts">${actPills}</div>
-      <div class="ce-sp-hint" id="ceSpHint${zIdx}">${sp.htsp}/${sp.clsp}</div>
-      <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
-        <div>
-          <div style="font-size:10px;color:var(--text3);margin-bottom:3px">Time</div>
-          <input class="ce-time" type="time" id="ceTime${zIdx}" value="${time}" step="900">
-        </div>
-        <div style="display:flex;align-items:center;gap:5px;margin-top:14px">
-          <input type="checkbox" id="ceEnabled${zIdx}" ${enabled ? 'checked' : ''} style="cursor:pointer">
-          <label for="ceEnabled${zIdx}" style="font-size:11px;color:var(--text3)">on</label>
-        </div>
+  const sp = getActivitySetpoints(z.id, act);
+
+  document.getElementById('ceActs').innerHTML = `<div class="ce-zone-row" data-zidx="${zIdx}" data-pid="${pid}">
+    <div class="ce-acts">${actPills}</div>
+    <div class="ce-sp-hint" id="ceSpHint${zIdx}">${sp.htsp}/${sp.clsp}</div>
+    <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
+      <div>
+        <div style="font-size:10px;color:var(--text3);margin-bottom:3px">Time</div>
+        <select class="ce-time" id="ceTime${zIdx}">${timeOptions(time)}</select>
       </div>
-    </div>`;
-  }).join('<div style="border-top:1px solid var(--border);margin:8px 0"></div>');
-
-  document.getElementById('ceActs').innerHTML = zoneRows;
+      <div style="display:flex;align-items:center;gap:5px;margin-top:14px">
+        <input type="checkbox" id="ceEnabled${zIdx}" ${enabled ? 'checked' : ''} style="cursor:pointer">
+        <label for="ceEnabled${zIdx}" style="font-size:11px;color:var(--text3)">on</label>
+      </div>
+    </div>
+  </div>`;
   document.getElementById('ceSpHint').textContent = '';
 
-  const rect = el.getBoundingClientRect();
+  const rect = rowEl.getBoundingClientRect();
   const editor = document.getElementById('cellEditor');
   editor.style.top = (rect.bottom + window.scrollY + 6) + 'px';
   editor.style.left = Math.min(rect.left, window.innerWidth - 230) + 'px';
@@ -1137,76 +1141,55 @@ function closeCellEditor() { document.getElementById('cellEditor').classList.rem
 
 document.addEventListener('click', e => {
   const editor = document.getElementById('cellEditor');
-  if (!editor.contains(e.target) && !e.target.closest('.sched-cell') && !e.target.closest('.sched-zone-row')) closeCellEditor();
+  if (!editor.contains(e.target) && !e.target.closest('.sched-zone-row')) closeCellEditor();
 });
 
 function saveCellEdit() {
-  const { dayName, periodIdx, el } = cellEditCtx;
+  const { zIdx, rowEl } = cellEditCtx;
 
-  state.zones.forEach((z, zIdx) => {
-    const zoneRow = el.querySelector(`[data-zone-idx="${zIdx}"]`);
-    if (!zoneRow) return;
+  const ceRow = document.querySelector(`.ce-zone-row[data-zidx="${zIdx}"]`);
+  if (!ceRow) return;
 
-    const ceRow = document.querySelector(`.ce-zone-row[data-zidx="${zIdx}"]`);
-    if (!ceRow) return;
+  const actEl = ceRow.querySelector('.ce-act.selected');
+  if (!actEl) return;
 
-    const actEl = ceRow.querySelector('.ce-act.selected');
-    if (!actEl) return;
+  const act = actEl.dataset.act;
+  const time = document.getElementById(`ceTime${zIdx}`).value;
+  const enabled = document.getElementById(`ceEnabled${zIdx}`).checked;
 
-    const act = actEl.dataset.act;
-    const time = document.getElementById(`ceTime${zIdx}`).value;
-    const enabled = document.getElementById(`ceEnabled${zIdx}`).checked;
-
-    // Update DOM data attributes
-    zoneRow.dataset.act = act;
-    zoneRow.dataset.time = time;
-    zoneRow.dataset.enabled = enabled ? 'on' : 'off';
-
-    // Update visual
-    const sp = getActivitySetpoints(z.id, act);
-    zoneRow.style.opacity = enabled ? '1' : '0.35';
-    zoneRow.querySelector('.sched-act').className = `sched-act ${ACT_CLASS[act] || 'act-home'}`;
-    zoneRow.querySelector('.sched-act').textContent = act;
-    zoneRow.querySelector('.sched-time-inline').textContent = enabled ? time : 'off';
-    zoneRow.querySelector('.sched-sp-badge').textContent = `${sp.htsp}/${sp.clsp}`;
-  });
+  applyToZoneRow(rowEl, zIdx, act, time, enabled);
 
   closeCellEditor();
   setScheduleDirty(true);
   toast('Applied — click Save schedule to send to thermostat', 'success');
 }
 
+function applyToZoneRow(rowEl, zIdx, act, time, enabled) {
+  rowEl.dataset.act = act;
+  rowEl.dataset.time = time;
+  rowEl.dataset.enabled = enabled ? 'on' : 'off';
+
+  const sp = getActivitySetpoints(state.zones[zIdx].id, act);
+  rowEl.style.opacity = enabled ? '1' : '0.35';
+  rowEl.querySelector('.sched-act').className = `sched-act ${ACT_CLASS[act] || 'act-home'}`;
+  rowEl.querySelector('.sched-act').textContent = act;
+  rowEl.querySelector('.sched-time-inline').textContent = enabled ? time : 'off';
+  rowEl.querySelector('.sched-sp-badge').textContent = `${sp.htsp}/${sp.clsp}`;
+}
+
 function copyCellToAllDays() {
-  const { periodIdx } = cellEditCtx;
-  const sourceRow = document.querySelectorAll('.sched-row')[periodIdx];
-  if (!sourceRow) return;
-  const sourceCells = sourceRow.querySelectorAll('.sched-cell');
-  const sourceCell = cellEditCtx.el;
-  const sourceIdx = Array.from(sourceCells).indexOf(sourceCell);
-  if (sourceIdx < 0) return;
+  const { periodIdx, zIdx, rowEl } = cellEditCtx;
+  const schedRow = document.querySelectorAll('.sched-row')[periodIdx];
+  if (!schedRow) return;
 
-  sourceCells.forEach((cell, di) => {
-    if (di === sourceIdx) return; // already applied by saveCellEdit
-    state.zones.forEach((z, zIdx) => {
-      const srcRow = sourceCell.querySelector(`[data-zone-idx="${zIdx}"]`);
-      const tgtRow = cell.querySelector(`[data-zone-idx="${zIdx}"]`);
-      if (!srcRow || !tgtRow || tgtRow.classList.contains('sched-disabled')) return;
+  const act = rowEl.dataset.act;
+  const time = rowEl.dataset.time;
+  const enabled = rowEl.dataset.enabled !== 'off';
 
-      const act = srcRow.dataset.act;
-      const time = srcRow.dataset.time;
-      const enabled = srcRow.dataset.enabled;
-
-      tgtRow.dataset.act = act;
-      tgtRow.dataset.time = time;
-      tgtRow.dataset.enabled = enabled;
-
-      const sp = getActivitySetpoints(z.id, act);
-      tgtRow.style.opacity = enabled !== 'off' ? '1' : '0.35';
-      tgtRow.querySelector('.sched-act').className = `sched-act ${ACT_CLASS[act] || 'act-home'}`;
-      tgtRow.querySelector('.sched-act').textContent = act;
-      tgtRow.querySelector('.sched-time-inline').textContent = enabled !== 'off' ? time : 'off';
-      tgtRow.querySelector('.sched-sp-badge').textContent = `${sp.htsp}/${sp.clsp}`;
-    });
+  schedRow.querySelectorAll('.sched-cell').forEach(cell => {
+    const tgtRow = cell.querySelector(`[data-zone-idx="${zIdx}"]`);
+    if (!tgtRow || tgtRow === rowEl || tgtRow.classList.contains('sched-disabled')) return;
+    applyToZoneRow(tgtRow, zIdx, act, time, enabled);
   });
   toast('Copied to all days', 'success');
 }
@@ -1403,22 +1386,26 @@ async function saveAllProfiles() {
 // ── Carrier Cloud Connectivity ─────────────────────────────────────────────────
 let carrierTimer = null;
 async function checkCarrier() {
-  const el = document.getElementById('carrierStatus');
-  if (!el) return;
-  el.innerHTML = `<span style="color:var(--text3)">checking…</span>`;
+  const dot = document.getElementById('carrierDot');
+  if (!dot) return;
+  dot.className = 'status-dot connecting';
+  dot.title = 'Carrier cloud: checking…';
   try {
     const r = await fetch(base() + '/Alive', { signal: AbortSignal.timeout(10000) });
     const txt = await r.text();
     if (r.ok && txt.toLowerCase().includes('alive')) {
       state.carrierOk = true;
-      el.innerHTML = `<span class="carrier-ok">● Connected</span>`;
+      dot.className = 'status-dot ok';
+      dot.title = 'Carrier cloud: connected';
     } else {
       state.carrierOk = false;
-      el.innerHTML = `<span class="carrier-err">● HTTP ${r.status}</span>`;
+      dot.className = 'status-dot error';
+      dot.title = `Carrier cloud: HTTP ${r.status}`;
     }
   } catch(e) {
     state.carrierOk = false;
-    el.innerHTML = `<span class="carrier-err">● Unreachable</span>`;
+    dot.className = 'status-dot error';
+    dot.title = 'Carrier cloud: unreachable';
   }
   scheduleCarrierCheck();
 }
