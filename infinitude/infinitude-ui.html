@@ -182,18 +182,18 @@
   .zone-pill { padding: 5px 14px; border-radius: 20px; font-size: 12px; font-weight: 500; cursor: pointer; border: 1px solid var(--border2); background: var(--bg3); color: var(--text2); transition: all 0.15s; }
   .zone-pill.active { background: var(--accent); color: #fff; border-color: var(--accent2); }
 
-  .sched-wrap { overflow-x: auto; }
-  .sched-grid { display: block; width: 100%; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-  .sched-head { display: grid; grid-template-columns: 56px repeat(7, 1fr); background: var(--bg3); border-bottom: 1px solid var(--border); }
-  .sched-head-cell { padding: 10px 4px; text-align: center; font-size: 14px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; }
-  .sched-row { display: grid; grid-template-columns: 56px repeat(7, 1fr); border-bottom: 1px solid var(--border); }
+  .sched-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .sched-grid { display: block; min-width: 840px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .sched-head { display: grid; grid-template-columns: 40px repeat(7, 1fr); background: var(--bg3); border-bottom: 1px solid var(--border); }
+  .sched-head-cell { padding: 8px 2px; text-align: center; font-size: 12px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; }
+  .sched-row { display: grid; grid-template-columns: 40px repeat(7, 1fr); border-bottom: 1px solid var(--border); }
   .sched-row:last-child { border-bottom: none; }
-  .sched-row-label { display: flex; align-items: center; justify-content: center; font-size: 14px; color: var(--text3); border-right: 1px solid var(--border); font-weight: 500; }
-  .sched-cell { padding: 4px 0; border-right: 1px solid var(--border); cursor: pointer; transition: background 0.12s; }
+  .sched-row-label { display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--text3); border-right: 1px solid var(--border); font-weight: 500; }
+  .sched-cell { padding: 2px 0; border-right: 1px solid var(--border); transition: background 0.12s; }
   .sched-cell:last-child { border-right: none; }
   .sched-cell:hover { background: var(--bg4); }
   .sched-cell.today { background: rgba(79,142,247,0.06); }
-  .sched-act { font-size: 13px; font-weight: 500; padding: 2px 6px; border-radius: 4px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: inline-block; }
+  .sched-act { font-size: 10px; font-weight: 600; padding: 1px 4px; border-radius: 3px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: inline-block; }
   .act-home { background: rgba(79,142,247,0.15); color: #6fa8f8; }
   .act-away { background: rgba(107,114,128,0.2); color: #9ca3af; }
   .act-sleep { background: rgba(139,92,246,0.15); color: #a78bfa; }
@@ -202,12 +202,12 @@
   .sched-time { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text3); margin-top: 2px; text-align: center; display: block; }
   .sched-disabled { opacity: 0.3; }
   .sched-period-off { cursor: pointer; }
-  .sched-zone-row { padding: 8px 10px; border-bottom: 1px solid var(--border); border-left: 3px solid transparent; }
+  .sched-zone-row { padding: 3px 4px; border-bottom: 1px solid var(--border); border-left: 3px solid transparent; }
   .sched-zone-row:last-child { border-bottom: none; }
-  .sched-zone-row-inner { display: flex; align-items: center; gap: 8px; }
-  .sched-zone-label { font-size: 12px; font-weight: 600; color: var(--text3); min-width: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .sched-time-inline { font-family: 'DM Mono', monospace; font-size: 13px; color: var(--text2); }
-  .sched-sp-badge { font-family: 'DM Mono', monospace; font-size: 13px; color: var(--text2); cursor: pointer; margin-left: auto; padding: 1px 4px; border-radius: 3px; border: 1px solid transparent; white-space: nowrap; }
+  .sched-zone-row-inner { display: flex; align-items: center; gap: 4px; }
+  .sched-zone-label { font-size: 10px; font-weight: 700; color: var(--text3); min-width: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sched-time-inline { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--text2); }
+  .sched-sp-badge { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--text2); cursor: pointer; margin-left: auto; padding: 1px 3px; border-radius: 3px; border: 1px solid transparent; white-space: nowrap; }
   .sched-sp-badge:hover { border-color: var(--border2); color: var(--accent); }
 
   /* Cell editor */
@@ -270,11 +270,6 @@
   .prof-zone-row select:focus { border-color: var(--accent); }
   .prof-field-label { font-size: 10px; color: var(--text3); margin-right: 2px; }
 
-  .sched-zone-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; cursor: pointer; border-radius: 4px; transition: background 0.1s; }
-  .sched-zone-row:hover { background: rgba(255,255,255,0.03); }
-  .sched-time-inline { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text); min-width: 36px; }
-  .sched-sp-badge { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text2); cursor: pointer; padding: 1px 4px; border-radius: 3px; border: 1px solid transparent; }
-  .sched-sp-badge:hover { border-color: var(--border2); color: var(--accent); }
   .sched-action-bar {
     display: none; position: sticky; bottom: 0; left: 0; right: 0;
     background: var(--bg2); border-top: 1px solid var(--border2);
@@ -451,7 +446,7 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.30';
+const APP_VERSION = '1.0.31';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const JS_DAY_MAP = [6,0,1,2,3,4,5]; // JS getDay() (0=Sun) -> DAYS index
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
@@ -588,6 +583,16 @@ function processData(sysData, statusData) {
   // status.json: { status: [{ ... }] }
   const st = statusData.status[0];
 
+  // Debug: log raw API data to find all available fields (remove after investigation)
+  console.log('=== RAW status top-level keys ===', Object.keys(st));
+  console.log('=== RAW status (non-zone) ===', Object.fromEntries(Object.entries(st).filter(([k]) => k !== 'zones')));
+  const rawZones = forceArray(st.zones[0].zone);
+  rawZones.forEach(z => console.log(`=== RAW status zone ${z.id} keys ===`, Object.keys(z), z));
+
+  const cfg0 = sysData.system[0];
+  console.log('=== RAW systems top-level keys ===', Object.keys(cfg0));
+  console.log('=== RAW systems (non-config) ===', Object.fromEntries(Object.entries(cfg0).filter(([k]) => k !== 'config')));
+
   // System summary — mode lives in systems.json config, live stats in status.json
   state.summary = {
     mode: v(cfg.mode) || '–',
@@ -683,6 +688,16 @@ function renderStatus() {
   const whHoldLabel = wh.hold ? `${capitalize(wh.holdActivity || '–')}${wh.otmr ? ' until ' + wh.otmr : ' forever'}` : 'Off';
   const whHoldColor = wh.hold ? 'var(--warn)' : 'var(--text3)';
 
+  // Derive effective status from zone conditioning states
+  const activeHeat = state.zones.some(z => z.conditioning === 'active_heat');
+  const activeCool = state.zones.some(z => z.conditioning === 'active_cool');
+  const activeDehum = state.zones.some(z => z.conditioning && z.conditioning.includes('dehum'));
+  const effectiveStatus = activeHeat ? 'Heating'
+    : activeCool ? 'Cooling'
+    : activeDehum ? 'Dehumidifying'
+    : capitalize(s.opStatus);
+  const statusCls = activeHeat ? 'heat' : activeCool ? 'cool' : '';
+
   document.getElementById('summaryBar').innerHTML = `
     <div class="stat">
       <div class="stat-label">System mode</div>
@@ -696,7 +711,7 @@ function renderStatus() {
     </div>
     <div class="stat">
       <div class="stat-label">Status</div>
-      <div class="stat-val">${capitalize(s.opStatus)}</div>
+      <div class="stat-val ${statusCls}">${effectiveStatus}</div>
     </div>
     <div class="stat">
       <div class="stat-label">Outdoor temp</div>
