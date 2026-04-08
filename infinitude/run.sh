@@ -16,6 +16,17 @@ echo "[INFO] Starting Infinitude (pass_reqs=${PASS_REQS}, serial_tty=${SERIAL_TT
 
 mkdir -p /data/infinitude/state
 
+# Test SSL/HTTPS connectivity at startup — results readable via /api/state/ssl-test.txt
+SSL_TEST="/data/infinitude/state/ssl-test.txt"
+{
+  echo "=== SSL Test $(date) ==="
+  perl -MIO::Socket::SSL -e 'print "IO::Socket::SSL: OK v$IO::Socket::SSL::VERSION\n"' 2>&1 || echo "IO::Socket::SSL: MISSING"
+  perl -MNet::SSLeay -e 'print "Net::SSLeay: OK v$Net::SSLeay::VERSION\n"' 2>&1 || echo "Net::SSLeay: MISSING"
+  curl -sf -o /dev/null -w "HTTPS google.com: HTTP %{http_code}\n" https://www.google.com 2>&1 || echo "HTTPS google.com: FAILED"
+  curl -sf -o /dev/null -w "HTTPS Carrier Alive: HTTP %{http_code}\n" https://www.api.eng.bryant.com/Alive 2>&1 || echo "HTTPS Carrier Alive: FAILED"
+  echo "=== End ==="
+} | tee "$SSL_TEST"
+
 export APP_SECRET="${APP_SECRET:-infinitude}"
 export PASS_REQS="${PASS_REQS}"
 export MODE="Production"
