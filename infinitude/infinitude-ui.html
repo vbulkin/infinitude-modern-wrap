@@ -137,8 +137,9 @@
   .btn-adj:active { transform: scale(0.92); }
   .btn-adj:disabled { opacity: 0.3; cursor: default; transform: none; }
 
-  .sp-pending { opacity: 0.5; }
+  .sp-pending { animation: sp-pulse 0.8s ease-in-out infinite; color: var(--warn) !important; }
   .sp-pending::after { content: ' …'; }
+  @keyframes sp-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
   .zone-meta { display: flex; gap: 14px; padding: 8px 16px 12px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text3); }
   .zone-meta-item { display: flex; align-items: center; gap: 4px; }
@@ -446,7 +447,7 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.33';
+const APP_VERSION = '1.0.34';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const JS_DAY_MAP = [6,0,1,2,3,4,5]; // JS getDay() (0=Sun) -> DAYS index
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
@@ -651,8 +652,11 @@ function mergeStatus(statusData) {
     if (!z) return;
     z.temp = v(sz.rt);
     z.rh = v(sz.rh);
-    z.htsp = v(sz.htsp);
-    z.clsp = v(sz.clsp);
+    // Don't overwrite setpoints while user is adjusting
+    if (!_adjPending[sz.id]) {
+      z.htsp = v(sz.htsp);
+      z.clsp = v(sz.clsp);
+    }
     z.conditioning = v(sz.zoneconditioning) || 'idle';
     z.currentActivity = v(sz.currentActivity) || '–';
     z.fan = v(sz.fan);
@@ -895,12 +899,14 @@ async function submitHold() {
 
 const _adjTimers = {};
 const _adjPending = {};
+const _adjCommitting = {};
+const _adjDirty = {};
 
-async function adjustTemp(zoneId, field, delta) {
+function adjustTemp(zoneId, field, delta) {
   const z = state.zones.find(z => z.id === zoneId);
   if (!z) return;
 
-  // Optimistic update — immediately reflect in local state and UI
+  // Always update optimistic state and UI, even during in-flight commit
   const current = Math.round(parseFloat(field === 'htsp' ? z.htsp : z.clsp) || 70);
   const next = Math.max(50, Math.min(99, current + delta));
   if (field === 'htsp') z.htsp = String(next);
@@ -912,16 +918,26 @@ async function adjustTemp(zoneId, field, delta) {
     el.classList.add('sp-pending');
   }
 
-  // Debounce — wait 600ms for more clicks before sending API call
-  const key = `${zoneId}_${field}`;
   _adjPending[zoneId] = true;
-  clearTimeout(_adjTimers[key]);
-  _adjTimers[key] = setTimeout(() => _commitTemp(zoneId), 600);
+
+  if (_adjCommitting[zoneId]) {
+    // API call in-flight — mark dirty so we re-commit when it finishes
+    _adjDirty[zoneId] = true;
+    return;
+  }
+
+  // Debounce per zone — _commitTemp sends both setpoints
+  clearTimeout(_adjTimers[zoneId]);
+  _adjTimers[zoneId] = setTimeout(() => _commitTemp(zoneId), 800);
 }
 
 async function _commitTemp(zoneId) {
   const z = state.zones.find(z => z.id === zoneId);
   if (!z) return;
+  if (_adjCommitting[zoneId]) return;
+
+  _adjCommitting[zoneId] = true;
+  delete _adjDirty[zoneId];
 
   const htsp = Math.round(parseFloat(z.htsp) || 68);
   const clsp = Math.round(parseFloat(z.clsp) || 76);
@@ -935,17 +951,24 @@ async function _commitTemp(zoneId) {
     toast('Failed: ' + e.message, 'error');
   }
 
+  delete _adjCommitting[zoneId];
+
+  // If user clicked more while we were committing, re-commit with latest values
+  if (_adjDirty[zoneId]) {
+    delete _adjDirty[zoneId];
+    _adjTimers[zoneId] = setTimeout(() => _commitTemp(zoneId), 400);
+    return;
+  }
+
   delete _adjPending[zoneId];
 
-  // Clear pending indicators for this zone
+  // Clear pending indicators
   const htEl = document.getElementById(`sp-htsp-${zoneId}`);
   const clEl = document.getElementById(`sp-clsp-${zoneId}`);
   if (htEl) htEl.classList.remove('sp-pending');
   if (clEl) clEl.classList.remove('sp-pending');
 
-  // Don't do a full loadAll here — the 30s poll will pick up the confirmed
-  // values. A premature reload would overwrite our optimistic local state
-  // with stale server data.
+  setTimeout(loadAll, 2000);
 }
 
 async function cancelHold(zoneId) {

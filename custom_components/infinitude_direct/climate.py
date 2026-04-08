@@ -189,7 +189,8 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         inf_mode = HA_TO_INFINITUDE_HVAC.get(hvac_mode, "off")
-        await self.coordinator.async_set_mode(inf_mode)
+        async with self.coordinator.api_lock:
+            await self.coordinator.async_set_mode(inf_mode)
         await self.coordinator.async_request_refresh()
 
     async def async_set_temperature(self, **kwargs) -> None:
@@ -219,17 +220,19 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
         else:
             return
 
-        await self.coordinator.async_set_activity_temps(
-            self._zone_id, "manual", new_htsp, new_clsp
-        )
-        await self.coordinator.async_set_hold(
-            self._zone_id, "manual"
-        )
+        async with self.coordinator.api_lock:
+            await self.coordinator.async_set_activity_temps(
+                self._zone_id, "manual", new_htsp, new_clsp
+            )
+            await self.coordinator.async_set_hold(
+                self._zone_id, "manual"
+            )
         await self.coordinator.async_request_refresh()
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         if preset_mode in PRESET_MODES:
-            await self.coordinator.async_set_hold(
-                self._zone_id, preset_mode, "forever"
-            )
+            async with self.coordinator.api_lock:
+                await self.coordinator.async_set_hold(
+                    self._zone_id, preset_mode, "forever"
+                )
             await self.coordinator.async_request_refresh()

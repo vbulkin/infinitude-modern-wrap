@@ -25,6 +25,7 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         )
         self.host = host.rstrip("/")
         self._session = async_get_clientsession(hass)
+        self.api_lock = asyncio.Lock()
 
     async def _async_update_data(self) -> dict:
         try:
