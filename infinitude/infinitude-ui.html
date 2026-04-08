@@ -46,6 +46,8 @@
   .status-dot.ok { background: var(--success); animation: pulse 2.5s ease infinite; }
   .status-dot.error { background: #ef4444; }
   .status-dot.connecting { background: var(--warn); }
+  .carrier-ok { color: var(--success); font-size: 13px; font-weight: 500; }
+  .carrier-err { color: #ef4444; font-size: 13px; font-weight: 500; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
   .topbar-right { display: flex; align-items: center; gap: 10px; }
   .host-input {
@@ -449,7 +451,7 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.25';
+const APP_VERSION = '1.0.26';
 const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
 const SCHEDULE_ACTIVITIES = ['home','away','sleep','wake'];
@@ -562,6 +564,7 @@ async function loadAll() {
     setDot('ok');
     document.getElementById('lastUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString();
     pollingTimer = setInterval(refreshStatus, 30000);
+    checkCarrier();
   } catch(e) {
     setDot('error');
     document.getElementById('zoneContent').innerHTML = `<div class="notice"><strong>Connection failed</strong>${e.message}</div>`;
@@ -705,6 +708,10 @@ function renderStatus() {
     <div class="stat" style="cursor:pointer" onclick="openWholeHouseModal()">
       <div class="stat-label">Whole house hold</div>
       <div class="stat-val" style="font-size:14px;color:${whHoldColor}">${whHoldLabel} ✎</div>
+    </div>
+    <div class="stat" style="cursor:pointer" onclick="checkCarrier()">
+      <div class="stat-label">Carrier cloud</div>
+      <div class="stat-val" id="carrierStatus"><span style="color:var(--text3)">–</span></div>
     </div>
   `;
 
@@ -1356,6 +1363,27 @@ async function saveAllProfiles() {
     toast('Failed: ' + e.message, 'error');
   }
 }
+// ── Carrier Cloud Connectivity ─────────────────────────────────────────────────
+async function checkCarrier() {
+  const el = document.getElementById('carrierStatus');
+  if (!el) return;
+  el.innerHTML = `<span style="color:var(--text3)">checking…</span>`;
+  try {
+    const r = await fetch(base() + '/Alive', { signal: AbortSignal.timeout(10000) });
+    const txt = await r.text();
+    if (r.ok && txt.toLowerCase().includes('alive')) {
+      state.carrierOk = true;
+      el.innerHTML = `<span class="carrier-ok">● Connected</span>`;
+    } else {
+      state.carrierOk = false;
+      el.innerHTML = `<span class="carrier-err">● HTTP ${r.status}</span>`;
+    }
+  } catch(e) {
+    state.carrierOk = false;
+    el.innerHTML = `<span class="carrier-err">● Unreachable</span>`;
+  }
+}
+
 function setDot(s) {
   const d = document.getElementById('statusDot');
   d.className = 'status-dot ' + s;
