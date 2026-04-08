@@ -446,7 +446,7 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.32';
+const APP_VERSION = '1.0.33';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const JS_DAY_MAP = [6,0,1,2,3,4,5]; // JS getDay() (0=Sun) -> DAYS index
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
@@ -582,10 +582,6 @@ function processData(sysData, statusData) {
   const cfg = sysData.system[0].config[0];
   // status.json: { status: [{ ... }] }
   const st = statusData.status[0];
-
-  // Debug: dump full zone data (remove after investigation)
-  const rawZones = forceArray(st.zones[0].zone);
-  rawZones.filter(z => z.id === '1' || z.id === '2').forEach(z => console.log(`=== RAW zone ${z.id} FULL ===`, JSON.parse(JSON.stringify(z))));
 
   // System summary — mode lives in systems.json config, live stats in status.json
   state.summary = {
