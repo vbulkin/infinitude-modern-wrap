@@ -294,8 +294,8 @@
     background: var(--bg3); border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600;
   }
   .prof-zone-line {
-    display: flex; align-items: center; gap: 10px; padding: 8px 14px;
-    border-bottom: 1px solid var(--border); flex-wrap: wrap;
+    display: grid; grid-template-columns: 1fr auto auto auto; align-items: center; gap: 10px; padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
   }
   .prof-zone-line:last-child { border-bottom: none; }
   .prof-zone-line select {
@@ -383,15 +383,37 @@
         <option value="manual">Manual</option>
       </select>
     </div>
-    <div id="holdSpPreview" style="font-size:12px;color:var(--text2);margin-bottom:14px;padding:8px 10px;background:var(--bg3);border-radius:var(--radius-sm)"></div>
-    <div class="field" id="holdFanField" style="display:none">
-      <label>Fan</label>
-      <select id="holdFan">
-        <option value="auto">Auto</option>
-        <option value="low">Low</option>
-        <option value="med">Medium</option>
-        <option value="high">High</option>
-      </select>
+    <div id="holdSpArea" style="margin-bottom:14px;padding:10px;background:var(--bg3);border-radius:var(--radius-sm)">
+      <!-- read-only preview for non-manual -->
+      <div id="holdSpReadonly" style="display:flex;align-items:center;gap:12px;font-size:12px">
+        <span class="sp-heat" style="font-family:'DM Mono',monospace" id="holdRoHeat"></span>
+        <span class="sp-cool" style="font-family:'DM Mono',monospace" id="holdRoCool"></span>
+        <span style="color:var(--text3)" id="holdRoFan"></span>
+      </div>
+      <!-- editable for manual -->
+      <div id="holdSpEditable" style="display:none">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+          <div class="sp-row">
+            <button class="btn-adj" onclick="adjHoldTemp('holdManualHeat',-1)">−</button>
+            <span class="sp-heat sp-val" id="holdManualHeat" data-value="">–</span>
+            <button class="btn-adj" onclick="adjHoldTemp('holdManualHeat',1)">+</button>
+          </div>
+          <div class="sp-row">
+            <button class="btn-adj" onclick="adjHoldTemp('holdManualCool',-1)">−</button>
+            <span class="sp-cool sp-val" id="holdManualCool" data-value="">–</span>
+            <button class="btn-adj" onclick="adjHoldTemp('holdManualCool',1)">+</button>
+          </div>
+          <div style="display:flex;align-items:center;gap:4px">
+            <span style="font-size:10px;color:var(--text3)">Fan</span>
+            <select id="holdFan" style="background:var(--bg2);border:1px solid var(--border2);border-radius:4px;color:var(--text);font-size:11px;padding:3px 6px;outline:none">
+              <option value="auto">Auto</option>
+              <option value="low">Low</option>
+              <option value="med">Med</option>
+              <option value="high">High</option>
+            </select>
+          </div>
+        </div>
+      </div>
     </div>
     <div class="field">
       <label>Hold duration</label>
@@ -417,7 +439,7 @@
 <!-- Whole House Hold Modal -->
 <div class="modal-overlay" id="whModal">
   <div class="modal">
-    <h3>Whole House Hold</h3>
+    <h3>Set Whole House Hold</h3>
     <div class="modal-sub">Controls all zones simultaneously</div>
     <div class="field">
       <label>Activity</label>
@@ -429,10 +451,13 @@
       </select>
     </div>
     <div class="field">
-      <label>Hold until</label>
+      <label>Hold duration</label>
       <select id="whUntil">
+        <option value="120">2 hours</option>
+        <option value="60">1 hour</option>
+        <option value="240">4 hours</option>
         <option value="forever">Indefinite</option>
-        <option value="custom">Custom time (HH:MM)</option>
+        <option value="custom">Custom time</option>
       </select>
     </div>
     <div class="field" id="whCustomTimeField" style="display:none">
@@ -440,9 +465,8 @@
       <input type="time" id="whUntilTime" step="900">
     </div>
     <div class="modal-footer">
-      <button class="btn" style="color:#f87171;margin-right:auto" onclick="cancelWhHold()">Cancel Hold</button>
-      <button class="btn" onclick="closeWhModal()">Close</button>
-      <button class="btn btn-primary" onclick="submitWhHold()">Apply</button>
+      <button class="btn" onclick="closeWhModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitWhHold()">Apply Hold</button>
     </div>
   </div>
 </div>
@@ -475,7 +499,7 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.40';
+const APP_VERSION = '1.0.41';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const JS_DAY_MAP = [6,0,1,2,3,4,5]; // JS getDay() (0=Sun) -> DAYS index
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
@@ -643,9 +667,12 @@ function processData(sysData, statusData) {
       const cz = zoneMap[sz.id] || {};
       const holdActivity = v(cz.holdActivity);
       const otmr = v(cz.otmr);
+      const CIRCLED = ['\u2460','\u2461','\u2462','\u2463','\u2464','\u2465','\u2466','\u2467'];
+      const zNum = parseInt(sz.id) - 1;
+      const prefix = CIRCLED[zNum] || sz.id;
       return {
         id: sz.id,
-        name: v(sz.name) || `Zone ${sz.id}`,
+        name: `${prefix} ${v(sz.name) || 'Zone ' + sz.id}`,
         temp: v(sz.rt),
         rh: v(sz.rh),
         htsp: v(sz.htsp),
@@ -730,12 +757,13 @@ function renderStatus() {
 
   const wh = state.wholeHouse || {};
   const whHtml = wh.hold
-    ? `<div class="wh-hold-strip" onclick="openWholeHouseModal()">
-        <span>⏱</span>
-        <span>Whole house hold: <strong>${capitalize(wh.holdActivity || '–')}</strong>${wh.otmr ? ' until ' + wh.otmr : ' forever'}</span>
-        <span style="margin-left:auto;font-size:11px;opacity:0.7">Edit ✎</span>
+    ? `<div class="wh-hold-strip">
+        <span class="hold-label">⏱ Whole house: ${capitalize(wh.holdActivity || '–')}${wh.otmr ? ' · ' + wh.otmr : ''}</span>
+        <button class="btn btn-sm" style="color:#f87171" onclick="cancelWhHold()">Cancel</button>
       </div>`
-    : '';
+    : `<div style="margin-top:10px">
+        <button class="btn btn-sm" onclick="openWholeHouseModal()">Set WH hold</button>
+      </div>`;
 
   document.getElementById('summaryBar').innerHTML = `
     <div class="summary-mode-row">
@@ -763,11 +791,6 @@ function renderStatus() {
         <span class="summary-stat-label">Humidity</span>
         <span class="summary-stat-val">${s.indoorRh !== '–' ? s.indoorRh + '%' : '–'}</span>
       </div>
-      ${!wh.hold ? `<div class="summary-divider"></div>
-      <div class="summary-stat" style="cursor:pointer" onclick="openWholeHouseModal()">
-        <span class="summary-stat-label">WH hold</span>
-        <span class="summary-stat-val" style="font-size:12px;color:var(--text3)">Off ✎</span>
-      </div>` : ''}
     </div>
     ${whHtml}
   `;
@@ -895,8 +918,44 @@ function getActivitySetpoints(zoneId, activityId) {
 function updateHoldPreview() {
   if (!holdZoneId) return;
   const act = document.getElementById('holdActivity').value;
+  const isManual = act === 'manual';
+  const z = state.zones.find(z => z.id === holdZoneId);
   const sp = getActivitySetpoints(holdZoneId, act);
-  document.getElementById('holdSpPreview').innerHTML = `<span class="sp-heat" style="font-family:'DM Mono',monospace">${sp.htsp}°</span> &nbsp; <span class="sp-cool" style="font-family:'DM Mono',monospace">${sp.clsp}°</span> &nbsp; <span style="color:var(--text3)">(${act} profile)</span>`;
+  const fan = getActivityFan(holdZoneId, act);
+
+  document.getElementById('holdSpReadonly').style.display = isManual ? 'none' : 'flex';
+  document.getElementById('holdSpEditable').style.display = isManual ? 'block' : 'none';
+
+  if (isManual) {
+    const hEl = document.getElementById('holdManualHeat');
+    const cEl = document.getElementById('holdManualCool');
+    hEl.dataset.value = sp.htsp; hEl.textContent = sp.htsp + '°';
+    cEl.dataset.value = sp.clsp; cEl.textContent = sp.clsp + '°';
+    document.getElementById('holdFan').value = fan;
+  } else {
+    document.getElementById('holdRoHeat').textContent = sp.htsp + '°';
+    document.getElementById('holdRoCool').textContent = sp.clsp + '°';
+    document.getElementById('holdRoFan').textContent = 'Fan ' + fan;
+  }
+}
+
+function getActivityFan(zoneId, activityId) {
+  const z = state.zones.find(z => z.id === zoneId);
+  if (!z) return 'low';
+  const act = z.activities.find(a => a.id === activityId);
+  return act ? (v(act.fan) || 'low') : 'low';
+}
+
+function adjHoldTemp(id, delta) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const isHeat = id.includes('Heat');
+  const min = isHeat ? 50 : 60;
+  const max = isHeat ? 90 : 99;
+  const cur = parseInt(el.dataset.value) || 70;
+  const next = Math.max(min, Math.min(max, cur + delta));
+  el.dataset.value = next;
+  el.textContent = next + '°';
 }
 
 function openHoldModal(z) {
@@ -906,14 +965,8 @@ function openHoldModal(z) {
   document.getElementById('holdUntil').value = '120';
   document.getElementById('holdCustomTimeField').style.display = 'none';
   document.getElementById('holdUntilTime').value = '';
-  toggleHoldFanField();
   updateHoldPreview();
   document.getElementById('holdModal').classList.add('open');
-}
-
-function toggleHoldFanField() {
-  const isManual = document.getElementById('holdActivity').value === 'manual';
-  document.getElementById('holdFanField').style.display = isManual ? 'block' : 'none';
 }
 
 function closeHoldModal() { document.getElementById('holdModal').classList.remove('open'); }
@@ -921,7 +974,6 @@ document.getElementById('holdModal').addEventListener('click', e => { if (e.targ
 
 document.getElementById('holdActivity').addEventListener('change', () => {
   updateHoldPreview();
-  toggleHoldFanField();
 });
 
 async function submitHold() {
@@ -941,12 +993,11 @@ async function submitHold() {
   }
 
   try {
-    // If manual, set fan speed on the manual activity first
+    // If manual, apply user-adjusted temps and fan to the manual activity
     if (activity === 'manual') {
+      const htsp = document.getElementById('holdManualHeat').dataset.value;
+      const clsp = document.getElementById('holdManualCool').dataset.value;
       const fan = document.getElementById('holdFan').value;
-      const z = state.zones.find(z => z.id === holdZoneId);
-      const htsp = z ? Math.round(parseFloat(z.htsp) || 68) : 68;
-      const clsp = z ? Math.round(parseFloat(z.clsp) || 76) : 76;
       await apiFetch(`/api/${holdZoneId}/activity/manual?htsp=${htsp}&clsp=${clsp}&fan=${fan}`, { method: 'PUT' });
     }
     await apiFetch(`/api/${holdZoneId}/hold?activity=${activity}&until=${until}`, { method: 'PUT' });
@@ -1017,6 +1068,9 @@ async function _commitAdj(zoneId) {
     z.currentActivity = 'manual';
     z.htsp = String(htsp);
     z.clsp = String(clsp);
+    // Update local manual activity so profiles/hold modal reflect new values
+    const manualAct = z.activities.find(a => a.id === 'manual');
+    if (manualAct) { manualAct.htsp = [String(htsp)]; manualAct.clsp = [String(clsp)]; }
   } catch (e) {
     toast('Failed: ' + e.message, 'error');
   }
@@ -1078,11 +1132,10 @@ async function cancelHold(zoneId) {
 
 // ── Whole House Hold ──────────────────────────────────────────────────────────
 function openWholeHouseModal() {
-  const wh = state.wholeHouse || {};
-  document.getElementById('whActivity').value = wh.holdActivity || 'home';
-  document.getElementById('whUntil').value = wh.otmr ? 'custom' : 'forever';
-  document.getElementById('whCustomTimeField').style.display = wh.otmr ? 'block' : 'none';
-  document.getElementById('whUntilTime').value = wh.otmr || '';
+  document.getElementById('whActivity').value = 'home';
+  document.getElementById('whUntil').value = '120';
+  document.getElementById('whCustomTimeField').style.display = 'none';
+  document.getElementById('whUntilTime').value = '';
   document.getElementById('whModal').classList.add('open');
 }
 
@@ -1096,9 +1149,17 @@ async function submitWhHold() {
   const activity = document.getElementById('whActivity').value;
   const untilType = document.getElementById('whUntil').value;
   const untilTime = document.getElementById('whUntilTime').value;
-  const otmr = untilType === 'custom' ? `&otmr=${untilTime}` : '';
+
+  let otmrParam = '';
+  if (untilType === 'custom') {
+    if (!untilTime) { toast('Please select a time', 'error'); return; }
+    otmrParam = `&otmr=${untilTime}`;
+  } else if (untilType !== 'forever') {
+    otmrParam = `&otmr=${durationToOtmr(parseInt(untilType))}`;
+  }
+
   try {
-    await apiFetch(`/api/config/wholeHouse?hold=on&holdActivity=${activity}${otmr}&set_changes=true`, { method: 'PUT' });
+    await apiFetch(`/api/config/wholeHouse?hold=on&holdActivity=${activity}${otmrParam}&set_changes=true`, { method: 'PUT' });
     toast('Whole house hold applied', 'success');
     closeWhModal();
     setTimeout(loadAll, 1500);
@@ -1111,7 +1172,6 @@ async function cancelWhHold() {
   try {
     await apiFetch(`/api/config/wholeHouse?hold=off&set_changes=true`, { method: 'PUT' });
     toast('Whole house hold cancelled', 'success');
-    closeWhModal();
     setTimeout(loadAll, 1500);
   } catch(e) {
     toast('Failed: ' + e.message, 'error');
@@ -1521,8 +1581,10 @@ function renderProfiles() {
           <span class="sp-cool sp-val" data-field="clsp" data-value="${clsp}">${clsp}°</span>
           <button class="btn-adj" onclick="adjProfileTemp(this,1,'clsp')">+</button>
         </div>
-        <span class="prof-field-label">Fan</span>
-        <select data-field="fan">${fanOpts}</select>
+        <div style="display:flex;align-items:center;gap:6px">
+          <span class="prof-field-label">Fan</span>
+          <select data-field="fan">${fanOpts}</select>
+        </div>
       </div>`;
     }).join('');
     cards += `<div class="prof-card">

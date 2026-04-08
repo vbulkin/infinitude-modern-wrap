@@ -1,6 +1,6 @@
 name: "Infinitude Direct"
 description: "Open control of Carrier/Bryant Infinity thermostats"
-version: "1.0.40"
+version: "1.0.41"
 slug: "infinitude"
 arch:
   - aarch64
