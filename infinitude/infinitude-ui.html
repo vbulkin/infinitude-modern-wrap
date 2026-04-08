@@ -165,10 +165,7 @@
   .zone-meta { display: flex; gap: 12px; padding: 0 16px 10px; font-size: 11px; color: var(--text3); flex-wrap: wrap; }
   .zone-meta-item { display: flex; align-items: center; gap: 4px; }
   .zone-meta-val { color: var(--text2); font-weight: 500; }
-  .damper-bar { display: inline-flex; align-items: center; gap: 5px; }
-  .damper-track { width: 40px; height: 5px; background: var(--bg4); border-radius: 3px; overflow: hidden; }
-  .damper-fill { height: 100%; border-radius: 3px; background: var(--accent); transition: width 0.3s; }
-  .damper-label { color: var(--text2); font-weight: 500; font-size: 11px; }
+
 
   .zone-hold-strip {
     display: flex; align-items: center; gap: 8px; padding: 8px 16px;
@@ -500,7 +497,7 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.43';
+const APP_VERSION = '1.0.44';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const JS_DAY_MAP = [6,0,1,2,3,4,5]; // JS getDay() (0=Sun) -> DAYS index
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
@@ -865,7 +862,7 @@ function zoneCard(z) {
     <div class="zone-meta">
       <div class="zone-meta-item">RH <span class="zone-meta-val">${z.rh ? z.rh + '%' : '–'}</span></div>
       <div class="zone-meta-item">Fan <span class="zone-meta-val">${z.fan || '–'}</span></div>
-      <div class="zone-meta-item">Damper ${z.damper != null ? `<span class="damper-bar"><span class="damper-track"><span class="damper-fill" style="width:${Math.round(parseFloat(z.damper)/15*100)}%"></span></span><span class="damper-label">${Math.round(parseFloat(z.damper)/15*100)}%</span></span>` : '<span class="zone-meta-val">–</span>'}</div>
+      <div class="zone-meta-item">Damper <span class="zone-meta-val">${z.damper != null ? Math.round(parseFloat(z.damper)/15*100) + '%' : '–'}</span></div>
     </div>
     ${holdStrip}
     ${!hasHold ? `<div class="zone-actions">
