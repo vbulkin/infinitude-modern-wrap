@@ -447,7 +447,7 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.34';
+const APP_VERSION = '1.0.35';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const JS_DAY_MAP = [6,0,1,2,3,4,5]; // JS getDay() (0=Sun) -> DAYS index
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
@@ -652,10 +652,23 @@ function mergeStatus(statusData) {
     if (!z) return;
     z.temp = v(sz.rt);
     z.rh = v(sz.rh);
-    // Don't overwrite setpoints while user is adjusting
-    if (!_adjPending[sz.id]) {
+    // Don't overwrite setpoints while user owns this zone
+    if (_isAdjProtected(sz.id)) {
+      // During grace period, accept server values once they match what we committed
+      const adj = _tempAdj[sz.id];
+      if (adj && adj.committed && adj.htsp == null && adj.clsp == null) {
+        const srvH = Math.round(parseFloat(v(sz.htsp)) || 0);
+        const srvC = Math.round(parseFloat(v(sz.clsp)) || 0);
+        if (srvH === adj.committed.htsp && srvC === adj.committed.clsp) {
+          z.htsp = v(sz.htsp);
+          z.clsp = v(sz.clsp);
+          delete _tempAdj[sz.id];
+        }
+      }
+    } else {
       z.htsp = v(sz.htsp);
       z.clsp = v(sz.clsp);
+      delete _tempAdj[sz.id]; // cleanup any stale entry
     }
     z.conditioning = v(sz.zoneconditioning) || 'idle';
     z.currentActivity = v(sz.currentActivity) || '–';
@@ -728,6 +741,9 @@ function renderStatus() {
 
   document.getElementById('zoneContent').innerHTML =
     `<div class="zone-grid">${state.zones.map(zoneCard).join('')}</div>`;
+
+  // Restore pending indicators destroyed by innerHTML
+  _reapplyPendingUI();
 }
 
 function zoneCard(z) {
@@ -897,78 +913,104 @@ async function submitHold() {
   }
 }
 
-const _adjTimers = {};
-const _adjPending = {};
-const _adjCommitting = {};
-const _adjDirty = {};
+// ── Temperature Adjustment ────────────────────────────────────────────────
+// Single state object per zone replaces the 4 separate dictionaries.
+// "Once the user touches a setpoint, own it until the server confirms."
+const _tempAdj = {};
 
 function adjustTemp(zoneId, field, delta) {
   const z = state.zones.find(z => z.id === zoneId);
   if (!z) return;
 
-  // Always update optimistic state and UI, even during in-flight commit
-  const current = Math.round(parseFloat(field === 'htsp' ? z.htsp : z.clsp) || 70);
-  const next = Math.max(50, Math.min(99, current + delta));
-  if (field === 'htsp') z.htsp = String(next);
-  else z.clsp = String(next);
+  // Get or create per-zone adjustment state
+  const adj = _tempAdj[zoneId] || (_tempAdj[zoneId] = {});
 
+  // Read from pending adj value if active, else from zone state
+  const raw = adj[field] != null ? adj[field] : parseFloat(z[field]);
+  const next = Math.max(50, Math.min(99, Math.round(raw || 70) + delta));
+
+  // Write to both adjustment state and zone state (optimistic)
+  adj[field] = next;
+  z[field] = String(next);
+
+  // Optimistic DOM update
   const el = document.getElementById(`sp-${field}-${zoneId}`);
-  if (el) {
-    el.textContent = next + '°';
-    el.classList.add('sp-pending');
+  if (el) { el.textContent = next + '°'; el.classList.add('sp-pending'); }
+
+  // Schedule commit — only touch timer when no API call is in-flight;
+  // if committing, the finish handler detects the changed values and re-commits.
+  if (!adj.committing) {
+    clearTimeout(adj.timer);
+    adj.timer = setTimeout(() => _commitAdj(zoneId), 800);
   }
-
-  _adjPending[zoneId] = true;
-
-  if (_adjCommitting[zoneId]) {
-    // API call in-flight — mark dirty so we re-commit when it finishes
-    _adjDirty[zoneId] = true;
-    return;
-  }
-
-  // Debounce per zone — _commitTemp sends both setpoints
-  clearTimeout(_adjTimers[zoneId]);
-  _adjTimers[zoneId] = setTimeout(() => _commitTemp(zoneId), 800);
 }
 
-async function _commitTemp(zoneId) {
+async function _commitAdj(zoneId) {
+  const adj = _tempAdj[zoneId];
   const z = state.zones.find(z => z.id === zoneId);
-  if (!z) return;
-  if (_adjCommitting[zoneId]) return;
+  if (!adj || !z || adj.committing) return;
 
-  _adjCommitting[zoneId] = true;
-  delete _adjDirty[zoneId];
+  adj.committing = true;
 
-  const htsp = Math.round(parseFloat(z.htsp) || 68);
-  const clsp = Math.round(parseFloat(z.clsp) || 76);
+  // Snapshot what we're about to send
+  const snapH = adj.htsp, snapC = adj.clsp;
+  const htsp = snapH != null ? snapH : Math.round(parseFloat(z.htsp) || 68);
+  const clsp = snapC != null ? snapC : Math.round(parseFloat(z.clsp) || 76);
   const otmr = durationToOtmr(120);
 
   try {
     await apiFetch(`/api/${zoneId}/activity/manual?htsp=${htsp}&clsp=${clsp}`, { method: 'PUT' });
     await apiFetch(`/api/${zoneId}/hold?activity=manual&until=${otmr}`, { method: 'PUT' });
-    toast(`${z.name}: heat ${htsp}° · cool ${clsp}° (manual, ${otmr})`, 'success');
-  } catch(e) {
+    toast(`${z.name}: heat ${htsp}° · cool ${clsp}° — manual 2 hr hold`, 'success');
+    // Remember what we committed so mergeStatus can verify the server caught up
+    adj.committed = { htsp, clsp };
+    adj.graceUntil = Date.now() + 45000;
+  } catch (e) {
     toast('Failed: ' + e.message, 'error');
   }
 
-  delete _adjCommitting[zoneId];
+  adj.committing = false;
 
-  // If user clicked more while we were committing, re-commit with latest values
-  if (_adjDirty[zoneId]) {
-    delete _adjDirty[zoneId];
-    _adjTimers[zoneId] = setTimeout(() => _commitTemp(zoneId), 400);
+  // Did user adjust while we were committing? Compare to snapshot.
+  if (adj.htsp !== snapH || adj.clsp !== snapC) {
+    adj.timer = setTimeout(() => _commitAdj(zoneId), 400);
     return;
   }
 
-  delete _adjPending[zoneId];
+  // No more pending user changes — clear adj values but keep grace window
+  adj.htsp = null;
+  adj.clsp = null;
+  adj.timer = null;
+  _clearPendingUI(zoneId);
+}
 
-  // Clear pending indicators
-  const htEl = document.getElementById(`sp-htsp-${zoneId}`);
-  const clEl = document.getElementById(`sp-clsp-${zoneId}`);
-  if (htEl) htEl.classList.remove('sp-pending');
-  if (clEl) clEl.classList.remove('sp-pending');
+function _isAdjProtected(zoneId) {
+  const adj = _tempAdj[zoneId];
+  if (!adj) return false;
+  if (adj.htsp != null || adj.clsp != null || adj.committing) return true;
+  if (adj.graceUntil && Date.now() < adj.graceUntil) return true;
+  return false;
+}
 
-  setTimeout(loadAll, 2000);
+function _clearPendingUI(zoneId) {
+  ['htsp', 'clsp'].forEach(f => {
+    const el = document.getElementById(`sp-${f}-${zoneId}`);
+    if (el) el.classList.remove('sp-pending');
+  });
+}
+
+function _reapplyPendingUI() {
+  for (const zoneId in _tempAdj) {
+    const adj = _tempAdj[zoneId];
+    if (adj.htsp != null || adj.clsp != null) {
+      ['htsp', 'clsp'].forEach(f => {
+        if (adj[f] != null) {
+          const el = document.getElementById(`sp-${f}-${zoneId}`);
+          if (el) el.classList.add('sp-pending');
+        }
+      });
+    }
+  }
 }
 
 async function cancelHold(zoneId) {
@@ -1451,11 +1493,13 @@ function setDot(s) {
 // ── Toast ─────────────────────────────────────────────────────────────────────
 function toast(msg, type) {
   const wrap = document.getElementById('toastWrap');
+  // Remove previous toasts of the same type so they don't pile up
+  wrap.querySelectorAll(`.toast.${type || 'info'}`).forEach(el => el.remove());
   const el = document.createElement('div');
-  el.className = `toast ${type || ''}`;
+  el.className = `toast ${type || 'info'}`;
   el.textContent = msg;
   wrap.appendChild(el);
-  setTimeout(() => el.remove(), 3500);
+  setTimeout(() => { if (el.parentNode) el.remove(); }, 3000);
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
