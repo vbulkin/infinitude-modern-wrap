@@ -79,82 +79,99 @@
   .panel { display: none; }
   .panel.active { display: block; }
 
-  /* Summary bar */
-  .summary-bar { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-bottom: 24px; }
-  .stat { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 14px; }
-  .stat-label { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.7px; margin-bottom: 4px; }
-  .stat-val { font-family: 'DM Mono', monospace; font-size: 18px; font-weight: 400; color: var(--text); }
-  .stat-val.heat { color: var(--heat); }
-  .stat-val.cool { color: var(--cool); }
-  .stat-val.auto { color: var(--success); }
-
-  .mode-pills { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
-  .mode-pill {
-    font-family: 'DM Sans', sans-serif; font-size: 11px; font-weight: 500;
-    padding: 3px 10px; border-radius: 14px; border: 1px solid var(--border2);
-    background: var(--bg3); color: var(--text3); cursor: pointer; transition: all 0.15s;
-    user-select: none;
+  /* Summary strip */
+  .summary-strip { margin-bottom: 20px; }
+  .summary-mode-row {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px;
   }
-  .mode-pill:hover { border-color: var(--accent); color: var(--text2); }
-  .mode-pill.active { background: var(--accent); color: #fff; border-color: var(--accent2); cursor: default; }
-  .mode-pill.active.heat { background: var(--heat); border-color: var(--heat); }
-  .mode-pill.active.cool { background: var(--cool); border-color: var(--cool); }
-  .mode-pill.active.auto { background: var(--success); border-color: var(--success); }
+  .mode-label { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.7px; font-weight: 600; }
+  .mode-pills { display: flex; gap: 0; border-radius: 8px; overflow: hidden; border: 1px solid var(--border2); }
+  .mode-pill {
+    font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 600;
+    padding: 7px 16px; border: none; border-right: 1px solid var(--border2);
+    background: var(--bg3); color: var(--text3); cursor: pointer; transition: all 0.15s;
+    user-select: none; line-height: 1;
+  }
+  .mode-pill:last-child { border-right: none; }
+  .mode-pill:hover { background: var(--bg4); color: var(--text2); }
+  .mode-pill.active { background: var(--accent); color: #fff; }
+  .mode-pill.active.heat { background: var(--heat); }
+  .mode-pill.active.cool { background: var(--cool); }
+  .mode-pill.active.auto { background: var(--success); }
+
+  .summary-stats {
+    display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+  }
+  .summary-stat { display: flex; align-items: baseline; gap: 6px; }
+  .summary-stat-label { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; }
+  .summary-stat-val { font-family: 'DM Mono', monospace; font-size: 16px; font-weight: 500; color: var(--text); }
+  .summary-stat-val.heat { color: var(--heat); }
+  .summary-stat-val.cool { color: var(--cool); }
+  .summary-divider { width: 1px; height: 18px; background: var(--border2); }
+  .wh-hold-strip {
+    display: flex; align-items: center; gap: 8px; padding: 8px 14px; margin-top: 10px;
+    background: rgba(251,191,36,0.08); border: 1px solid rgba(251,191,36,0.2); border-radius: var(--radius-sm);
+    font-size: 12px; color: var(--warn); cursor: pointer;
+  }
+  .wh-hold-strip:hover { background: rgba(251,191,36,0.12); }
 
   /* Zone grid */
-  .zone-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+  .zone-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
   .zone-card {
     background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius);
     overflow: hidden; transition: border-color 0.2s;
   }
   .zone-card:hover { border-color: var(--border2); }
-  .zone-card.active-heat { border-top: 2px solid var(--heat); }
-  .zone-card.active-cool { border-top: 2px solid var(--cool); }
-  .zone-card.active-dehum { border-top: 2px solid var(--dehum); }
-  .zone-card.idle { border-top: 2px solid var(--bg4); }
+  .zone-card.active-heat { border-left: 3px solid var(--heat); }
+  .zone-card.active-cool { border-left: 3px solid var(--cool); }
+  .zone-card.active-dehum { border-left: 3px solid var(--dehum); }
+  .zone-card.idle { border-left: 3px solid var(--bg4); }
 
-  .zone-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 8px; }
-  .zone-name { font-size: 13px; font-weight: 600; }
+  .zone-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px 6px; }
+  .zone-header-left { display: flex; align-items: center; gap: 8px; }
+  .zone-name { font-size: 14px; font-weight: 600; }
+  .zone-cond-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .zone-cond-dot.heat { background: var(--heat); }
+  .zone-cond-dot.cool { background: var(--cool); }
+  .zone-cond-dot.dehum { background: var(--dehum); }
+  .zone-cond-dot.idle { background: var(--bg4); }
   .zone-activity { font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 20px; background: var(--bg4); color: var(--text2); }
 
-  .zone-temps { display: flex; align-items: flex-end; gap: 8px; padding: 4px 16px 10px; }
-  .temp-current { font-family: 'DM Mono', monospace; font-size: 44px; font-weight: 300; line-height: 1; }
-  .temp-unit { font-size: 18px; color: var(--text3); margin-bottom: 6px; }
-  .temp-setpoints { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; margin-left: 6px; }
-  .temp-sp { font-family: 'DM Mono', monospace; font-size: 13px; display: flex; align-items: center; gap: 6px; }
-  .temp-sp .ico { font-size: 10px; width: 16px; }
-  .sp-val { min-width: 28px; text-align: right; }
+  .zone-body { display: flex; align-items: center; padding: 6px 16px 12px; gap: 16px; }
+  .zone-temp-hero { display: flex; align-items: baseline; gap: 2px; }
+  .temp-current { font-family: 'DM Mono', monospace; font-size: 48px; font-weight: 300; line-height: 1; }
+  .temp-unit { font-size: 16px; color: var(--text3); }
+
+  .zone-setpoints { display: flex; flex-direction: column; gap: 4px; }
+  .sp-row { display: flex; align-items: center; gap: 4px; font-family: 'DM Mono', monospace; font-size: 13px; }
+  .sp-val { min-width: 30px; text-align: center; }
   .sp-heat { color: var(--heat); }
   .sp-cool { color: var(--cool); }
   .btn-adj {
-    width: 32px; height: 32px; border-radius: 6px; border: 1px solid var(--border2);
-    background: var(--bg3); color: var(--text2); font-size: 16px; font-weight: 600;
+    width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border2);
+    background: var(--bg3); color: var(--text2); font-size: 15px; font-weight: 600;
     cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
-    padding: 0; line-height: 1; transition: all 0.12s; margin-left: 2px;
+    padding: 0; line-height: 1; transition: all 0.12s;
     user-select: none; -webkit-tap-highlight-color: transparent;
   }
   .btn-adj:hover { background: var(--bg4); color: var(--text); border-color: var(--accent); }
   .btn-adj:active { transform: scale(0.92); }
-  .btn-adj:disabled { opacity: 0.3; cursor: default; transform: none; }
 
   .sp-pending { animation: sp-pulse 0.8s ease-in-out infinite; color: var(--warn) !important; }
   .sp-pending::after { content: ' …'; }
   @keyframes sp-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
-  .zone-meta { display: flex; gap: 14px; padding: 8px 16px 12px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text3); }
+  .zone-meta { display: flex; gap: 12px; padding: 0 16px 10px; font-size: 11px; color: var(--text3); flex-wrap: wrap; }
   .zone-meta-item { display: flex; align-items: center; gap: 4px; }
   .zone-meta-val { color: var(--text2); font-weight: 500; }
-  .cond-label { font-weight: 500; }
-  .cond-heat { color: var(--heat); }
-  .cond-cool { color: var(--cool); }
-  .cond-dehum { color: var(--dehum); }
-  .cond-idle { color: var(--idle); }
 
-  .zone-controls { padding: 8px 16px 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .hold-badge {
-    display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--warn);
-    background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.25); border-radius: 20px; padding: 2px 10px;
+  .zone-hold-strip {
+    display: flex; align-items: center; gap: 8px; padding: 8px 16px;
+    background: rgba(251,191,36,0.06); border-top: 1px solid rgba(251,191,36,0.15);
+    font-size: 11px; flex-wrap: wrap;
   }
+  .zone-hold-strip .hold-label { color: var(--warn); font-weight: 500; flex: 1; }
+  .zone-actions { padding: 0 16px 12px; display: flex; gap: 8px; }
 
   /* Refresh row */
   .refresh-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
@@ -333,8 +350,7 @@
 
   <div class="content">
     <div class="panel active" id="panel-status">
-      <div class="summary-bar" id="summaryBar"></div>
-      <div class="section-title" style="margin-bottom:16px">Zones</div>
+      <div class="summary-strip" id="summaryBar"></div>
       <div id="zoneContent">
         <div class="loader"><div class="spinner"></div><div class="loader-text">Connecting…</div></div>
       </div>
@@ -459,7 +475,7 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.36';
+const APP_VERSION = '1.0.37';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const JS_DAY_MAP = [6,0,1,2,3,4,5]; // JS getDay() (0=Sun) -> DAYS index
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
@@ -701,11 +717,6 @@ function updateIndoorRh() {
 function renderStatus() {
   const s = state.summary;
   const modeColors = { heat: 'heat', cool: 'cool', auto: 'auto', heatcool: 'auto' };
-  const modeClass = modeColors[s.mode] || '';
-
-  const wh = state.wholeHouse || {};
-  const whHoldLabel = wh.hold ? `${capitalize(wh.holdActivity || '–')}${wh.otmr ? ' until ' + wh.otmr : ' forever'}` : 'Off';
-  const whHoldColor = wh.hold ? 'var(--warn)' : 'var(--text3)';
 
   // Derive effective status from zone conditioning states
   const activeHeat = state.zones.some(z => z.conditioning === 'active_heat');
@@ -717,9 +728,18 @@ function renderStatus() {
     : capitalize(s.opStatus);
   const statusCls = activeHeat ? 'heat' : activeCool ? 'cool' : '';
 
+  const wh = state.wholeHouse || {};
+  const whHtml = wh.hold
+    ? `<div class="wh-hold-strip" onclick="openWholeHouseModal()">
+        <span>⏱</span>
+        <span>Whole house hold: <strong>${capitalize(wh.holdActivity || '–')}</strong>${wh.otmr ? ' until ' + wh.otmr : ' forever'}</span>
+        <span style="margin-left:auto;font-size:11px;opacity:0.7">Edit ✎</span>
+      </div>`
+    : '';
+
   document.getElementById('summaryBar').innerHTML = `
-    <div class="stat">
-      <div class="stat-label">System mode</div>
+    <div class="summary-mode-row">
+      <span class="mode-label">Mode</span>
       <div class="mode-pills">
         ${['off','heat','cool','auto','fanonly'].map(m => {
           const label = m === 'auto' ? 'Auto' : m === 'fanonly' ? 'Fan' : capitalize(m);
@@ -728,22 +748,28 @@ function renderStatus() {
         }).join('')}
       </div>
     </div>
-    <div class="stat">
-      <div class="stat-label">Status</div>
-      <div class="stat-val ${statusCls}">${effectiveStatus}</div>
+    <div class="summary-stats">
+      <div class="summary-stat">
+        <span class="summary-stat-label">Status</span>
+        <span class="summary-stat-val ${statusCls}">${effectiveStatus}</span>
+      </div>
+      <div class="summary-divider"></div>
+      <div class="summary-stat">
+        <span class="summary-stat-label">Outdoor</span>
+        <span class="summary-stat-val">${s.oat !== '–' ? s.oat + '°' : '–'}</span>
+      </div>
+      <div class="summary-divider"></div>
+      <div class="summary-stat">
+        <span class="summary-stat-label">Humidity</span>
+        <span class="summary-stat-val">${s.indoorRh !== '–' ? s.indoorRh + '%' : '–'}</span>
+      </div>
+      ${!wh.hold ? `<div class="summary-divider"></div>
+      <div class="summary-stat" style="cursor:pointer" onclick="openWholeHouseModal()">
+        <span class="summary-stat-label">WH hold</span>
+        <span class="summary-stat-val" style="font-size:12px;color:var(--text3)">Off ✎</span>
+      </div>` : ''}
     </div>
-    <div class="stat">
-      <div class="stat-label">Outdoor temp</div>
-      <div class="stat-val">${s.oat !== '–' ? s.oat + '°' : '–'}</div>
-    </div>
-    <div class="stat">
-      <div class="stat-label">Indoor humidity</div>
-      <div class="stat-val">${s.indoorRh !== '–' ? s.indoorRh + '%' : '–'}</div>
-    </div>
-    <div class="stat" style="cursor:pointer" onclick="openWholeHouseModal()">
-      <div class="stat-label">Whole house hold</div>
-      <div class="stat-val" style="font-size:14px;color:${whHoldColor}">${whHoldLabel} ✎</div>
-    </div>
+    ${whHtml}
   `;
 
   if (!state.zones.length) {
@@ -760,52 +786,61 @@ function renderStatus() {
 
 function zoneCard(z) {
   const cc = condClass(z.conditioning);
-  const tempDisplay = z.temp ? Math.round(parseFloat(z.temp)) + '°' : '–';
+  const temp = z.temp ? Math.round(parseFloat(z.temp)) : '–';
   const hasHold = z.hold && z.holdActivity;
 
+  const condDotCls = z.conditioning === 'active_heat' ? 'heat'
+                   : z.conditioning === 'active_cool' ? 'cool'
+                   : z.conditioning.includes('dehum') ? 'dehum'
+                   : 'idle';
   const condStr = z.conditioning === 'active_heat' ? 'Heating'
                 : z.conditioning === 'active_cool' ? 'Cooling'
                 : z.conditioning.includes('dehum') ? 'Dehumidifying'
                 : 'Idle';
-  const condCls = z.conditioning === 'active_heat' ? 'cond-heat'
-                : z.conditioning === 'active_cool' ? 'cond-cool'
-                : z.conditioning.includes('dehum') ? 'cond-dehum'
-                : 'cond-idle';
+
+  const holdStrip = hasHold
+    ? `<div class="zone-hold-strip">
+        <span class="hold-label">⏱ ${z.holdActivity}${z.otmr ? ' · ' + otmrToRelative(z.otmr) : ''}</span>
+        <button class="btn btn-sm" style="color:#f87171" onclick="cancelHold('${z.id}')">Cancel</button>
+      </div>` : '';
 
   return `
   <div class="zone-card ${cc}">
     <div class="zone-header">
-      <div class="zone-name">${z.name}</div>
+      <div class="zone-header-left">
+        <div class="zone-cond-dot ${condDotCls}" title="${condStr}"></div>
+        <div class="zone-name">${z.name}</div>
+      </div>
       <div class="zone-activity">${z.currentActivity}</div>
     </div>
-    <div class="zone-temps">
-      <div class="temp-current">${tempDisplay.replace('°','')}</div>
-      <div class="temp-unit">°F</div>
-      <div class="temp-setpoints">
-        <div class="temp-sp">
+    <div class="zone-body">
+      <div class="zone-temp-hero">
+        <div class="temp-current">${temp}</div>
+        <div class="temp-unit">°F</div>
+      </div>
+      <div class="zone-setpoints">
+        <div class="sp-row">
           <button class="btn-adj" onclick="event.stopPropagation();adjustTemp('${z.id}','htsp',-1)">−</button>
-          <span class="ico sp-heat">▲</span><span class="sp-heat sp-val" id="sp-htsp-${z.id}">${z.htsp ? Math.round(parseFloat(z.htsp)) + '°' : '–'}</span>
+          <span class="sp-heat sp-val" id="sp-htsp-${z.id}">${z.htsp ? Math.round(parseFloat(z.htsp)) + '°' : '–'}</span>
           <button class="btn-adj" onclick="event.stopPropagation();adjustTemp('${z.id}','htsp',1)">+</button>
+          <span style="font-size:10px;color:var(--heat);margin-left:2px">▲</span>
         </div>
-        <div class="temp-sp">
+        <div class="sp-row">
           <button class="btn-adj" onclick="event.stopPropagation();adjustTemp('${z.id}','clsp',-1)">−</button>
-          <span class="ico sp-cool">▼</span><span class="sp-cool sp-val" id="sp-clsp-${z.id}">${z.clsp ? Math.round(parseFloat(z.clsp)) + '°' : '–'}</span>
+          <span class="sp-cool sp-val" id="sp-clsp-${z.id}">${z.clsp ? Math.round(parseFloat(z.clsp)) + '°' : '–'}</span>
           <button class="btn-adj" onclick="event.stopPropagation();adjustTemp('${z.id}','clsp',1)">+</button>
+          <span style="font-size:10px;color:var(--cool);margin-left:2px">▼</span>
         </div>
       </div>
     </div>
     <div class="zone-meta">
-      <div class="zone-meta-item">
-        <span class="cond-label ${condCls}">${condStr}</span>
-      </div>
       <div class="zone-meta-item">RH <span class="zone-meta-val">${z.rh ? z.rh + '%' : '–'}</span></div>
       <div class="zone-meta-item">Fan <span class="zone-meta-val">${z.fan || '–'}</span></div>
       <div class="zone-meta-item">Damper <span class="zone-meta-val">${z.damper ? z.damper + '%' : '–'}</span></div>
     </div>
-    <div class="zone-controls">
-      ${hasHold ? `<div class="hold-badge">⏱ ${z.holdActivity}${z.otmr ? ' · ' + otmrToRelative(z.otmr) : ''}</div>` : ''}
+    ${holdStrip}
+    <div class="zone-actions">
       <button class="btn btn-sm" onclick='openHoldModal(${JSON.stringify({id:z.id,name:z.name,htsp:z.htsp,clsp:z.clsp,currentActivity:z.currentActivity,holdActivity:z.holdActivity,otmr:z.otmr})})'>Set hold</button>
-      ${hasHold ? `<button class="btn btn-sm" style="color:#f87171" onclick="cancelHold('${z.id}')">Cancel hold</button>` : ''}
     </div>
   </div>`;
 }
