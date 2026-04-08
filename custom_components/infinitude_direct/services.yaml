@@ -1,0 +1,68 @@
+save_schedule:
+  name: Save schedule
+  description: Save the full weekly schedule for a zone.
+  fields:
+    zone_id:
+      name: Zone ID
+      description: The zone identifier (e.g. "1").
+      required: true
+      selector:
+        text:
+    schedule:
+      name: Schedule data
+      description: JSON array of day objects [{id, period: [{id, activity, time, enabled}]}].
+      required: true
+      selector:
+        text:
+
+set_profile:
+  name: Set activity profile
+  description: Set heat/cool setpoints and fan for a zone activity.
+  fields:
+    zone_id:
+      name: Zone ID
+      description: The zone identifier (e.g. "1").
+      required: true
+      selector:
+        text:
+    activity:
+      name: Activity
+      description: Activity name (home, away, sleep, wake, manual).
+      required: true
+      selector:
+        select:
+          options:
+            - home
+            - away
+            - sleep
+            - wake
+            - manual
+    htsp:
+      name: Heat setpoint
+      description: Heat setpoint temperature.
+      required: true
+      selector:
+        number:
+          min: 50
+          max: 90
+          unit_of_measurement: "°F"
+    clsp:
+      name: Cool setpoint
+      description: Cool setpoint temperature.
+      required: true
+      selector:
+        number:
+          min: 60
+          max: 99
+          unit_of_measurement: "°F"
+    fan:
+      name: Fan mode
+      description: Fan speed setting.
+      required: false
+      selector:
+        select:
+          options:
+            - "off"
+            - low
+            - med
+            - high

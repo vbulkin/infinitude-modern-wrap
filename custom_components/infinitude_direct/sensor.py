@@ -1,9 +1,15 @@
-"""Sensor platform for Infinitude Direct — per-zone damper and fan sensors."""
+"""Sensor platform for Infinitude Direct."""
 
+import json
 import logging
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -22,7 +28,12 @@ async def async_setup_entry(
 ) -> None:
     coordinator: InfinitudeDataCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    entities = [InfinitudeHumidifierSensor(coordinator)]
+    entities: list[SensorEntity] = [
+        InfinitudeHumidifierSensor(coordinator),
+        InfinitudeOATSensor(coordinator),
+        InfinitudeOperationStatusSensor(coordinator),
+        InfinitudeSystemInfoSensor(coordinator),
+    ]
     for zone in coordinator.data.get("zones", []):
         zid = zone["id"]
         entities.append(InfinitudeDamperSensor(coordinator, zid))
@@ -132,3 +143,106 @@ class InfinitudeFanSensor(InfinitudeZoneSensor):
         if z and z.get("fan"):
             return z["fan"]
         return None
+
+
+class InfinitudeOATSensor(CoordinatorEntity, SensorEntity):
+    """Outdoor air temperature sensor."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:thermometer"
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTemperature.FAHRENHEIT
+
+    def __init__(self, coordinator: InfinitudeDataCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = "infinitude_oat"
+        self._attr_name = "Outdoor temperature"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, "system")},
+            name="Infinitude System",
+            manufacturer=MANUFACTURER,
+            model=MODEL,
+        )
+
+    @property
+    def available(self) -> bool:
+        return super().available and not self.coordinator.data.get("stale", False)
+
+    @property
+    def native_value(self) -> float | None:
+        oat = self.coordinator.data.get("oat")
+        if oat is not None:
+            try:
+                return float(oat)
+            except (ValueError, TypeError):
+                return None
+        return None
+
+
+class InfinitudeOperationStatusSensor(CoordinatorEntity, SensorEntity):
+    """Operation status message sensor."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:information-outline"
+
+    def __init__(self, coordinator: InfinitudeDataCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = "infinitude_op_status"
+        self._attr_name = "Operation status"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, "system")},
+            name="Infinitude System",
+            manufacturer=MANUFACTURER,
+            model=MODEL,
+        )
+
+    @property
+    def available(self) -> bool:
+        return super().available and not self.coordinator.data.get("stale", False)
+
+    @property
+    def native_value(self) -> str | None:
+        return self.coordinator.data.get("op_status") or None
+
+
+class InfinitudeSystemInfoSensor(CoordinatorEntity, SensorEntity):
+    """System info sensor with schedule/profile data as attributes."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:home-thermometer"
+
+    def __init__(self, coordinator: InfinitudeDataCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = "infinitude_system_info"
+        self._attr_name = "System info"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, "system")},
+            name="Infinitude System",
+            manufacturer=MANUFACTURER,
+            model=MODEL,
+        )
+
+    @property
+    def available(self) -> bool:
+        return super().available and not self.coordinator.data.get("stale", False)
+
+    @property
+    def native_value(self) -> str:
+        return self.coordinator.data.get("mode", "off")
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        data = self.coordinator.data
+        zones_summary = []
+        for z in data.get("zones", []):
+            zones_summary.append({
+                "id": z["id"],
+                "name": z["name"],
+                "activities": z.get("activities", {}),
+            })
+        return {
+            "host": data.get("host", ""),
+            "schedule": json.dumps(data.get("schedule", {})),
+            "profiles": json.dumps(zones_summary),
+        }

@@ -110,13 +110,39 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
 
         humid = self._v(st.get("humid")) or "off"
         local_time = self._v(st.get("localTime"))
+        op_status = self._v(st.get("oprstsmsg")) or ""
+
+        # Parse schedule (program) data per zone
+        schedule = {}
+        for sz in zones:
+            cz = zone_map.get(sz["id"], {})
+            zone_sched = {}
+            if "program" in cz and cz["program"]:
+                days = self._force_array(cz["program"][0].get("day", []))
+                for day in days:
+                    day_id = day.get("id")
+                    if not day_id:
+                        continue
+                    periods = []
+                    for p in self._force_array(day.get("period", [])):
+                        periods.append({
+                            "id": self._v(p.get("id")) or p.get("id"),
+                            "activity": self._v(p.get("activity")) or "home",
+                            "time": self._v(p.get("time")) or "00:00",
+                            "enabled": self._v(p.get("enabled")) == "on",
+                        })
+                    zone_sched[day_id] = periods
+            schedule[sz["id"]] = zone_sched
 
         return {
             "mode": mode,
             "oat": oat,
+            "op_status": op_status,
             "humid": humid,
             "local_time": local_time,
+            "host": self.host,
             "zones": zones,
+            "schedule": schedule,
             "whole_house_hold": self._parse_whole_house(cfg),
         }
 
@@ -213,4 +239,19 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         await self._session.put(
             f"{self.host}/api/config/wholeHouse",
             params={"hold": "off", "set_changes": "true"},
+        )
+
+    async def async_save_schedule(self, zone_id: str, program: list) -> None:
+        """Save full schedule for a zone. program = list of {id, period[]}."""
+        await self._session.put(
+            f"{self.host}/api/config/zones/zone/{zone_id}/program",
+            json={"day": program},
+        )
+
+    async def async_set_activity_fan(
+        self, zone_id: str, activity: str, fan: str
+    ) -> None:
+        await self._session.put(
+            f"{self.host}/api/{zone_id}/activity/{activity}",
+            params={"fan": fan},
         )
