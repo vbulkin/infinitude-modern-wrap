@@ -55,16 +55,34 @@ class InfinitudeHVACCard extends HTMLElement {
     const selects = {};
     const system = {};
 
+    // If user specified entities in config, use those
+    if (this._config.climate_entities) {
+      for (const eid of this._config.climate_entities) {
+        if (states[eid]) climates.push(eid);
+      }
+    }
+
+    // Auto-discover: climate entities with outdoor_temperature attribute
+    // (unique fingerprint of Infinitude climate entities)
+    if (!climates.length) {
+      for (const eid of Object.keys(states)) {
+        if (eid.startsWith('climate.') && states[eid].attributes?.outdoor_temperature !== undefined) {
+          climates.push(eid);
+        }
+      }
+    }
+
+    // Find related entities by name patterns or explicit config
     for (const eid of Object.keys(states)) {
-      if (!eid.includes('infinitude')) continue;
-      if (eid.startsWith('climate.')) climates.push(eid);
-      else if (eid.includes('_damper')) sensors.damper[eid] = states[eid];
-      else if (eid.includes('_fan') && eid.startsWith('sensor.')) sensors.fan[eid] = states[eid];
-      else if (eid.includes('humidifier')) system.humidifier = eid;
-      else if (eid.includes('oat') || eid.includes('outdoor_temperature')) system.oat = eid;
-      else if (eid.includes('op_status') || eid.includes('operation_status')) system.opStatus = eid;
-      else if (eid.includes('system_info')) system.info = eid;
-      else if (eid.includes('whole_house') && eid.startsWith('select.')) selects.wholeHouse = eid;
+      if (eid.includes('infinitude') || eid.includes('whole_house')) {
+        if (eid.includes('_damper')) sensors.damper[eid] = states[eid];
+        else if (eid.includes('_fan') && eid.startsWith('sensor.')) sensors.fan[eid] = states[eid];
+        else if (eid.includes('humidifier')) system.humidifier = eid;
+        else if (eid.includes('oat') || eid.includes('outdoor_temperature')) system.oat = eid;
+        else if (eid.includes('op_status') || eid.includes('operation_status')) system.opStatus = eid;
+        else if (eid.includes('system_info')) system.info = eid;
+        else if (eid.includes('whole_house') && eid.startsWith('select.')) selects.wholeHouse = eid;
+      }
     }
 
     // Sort climates by entity_id for consistent ordering
@@ -427,9 +445,15 @@ class InfinitudeHVACCard extends HTMLElement {
       (mode === 'heat_cool' || mode === 'auto') ? 'auto' : '';
     const modeLabel = mode === 'heat_cool' ? 'Auto' : mode.charAt(0).toUpperCase() + mode.slice(1);
 
-    // OAT
+    // OAT — from dedicated sensor or from climate attribute
     const oatState = system.oat ? this._getState(system.oat) : null;
-    const oat = oatState?.state && oatState.state !== 'unavailable' ? `${Math.round(Number(oatState.state))}°` : '–';
+    let oat = '–';
+    if (oatState?.state && oatState.state !== 'unavailable') {
+      oat = `${Math.round(Number(oatState.state))}°`;
+    } else if (climates.length > 0) {
+      const oatAttr = this._getAttr(climates[0], 'outdoor_temperature');
+      if (oatAttr != null) oat = `${Math.round(Number(oatAttr))}°`;
+    }
 
     // Operation status
     const opState = system.opStatus ? this._getState(system.opStatus) : null;
