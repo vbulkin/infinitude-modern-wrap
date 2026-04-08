@@ -222,12 +222,13 @@
     background: var(--bg3); border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 600; color: var(--text3);
   }
   .sched-zone-line {
-    display: flex; align-items: center; gap: 8px; padding: 8px 14px;
-    border-bottom: 1px solid var(--border); flex-wrap: wrap;
+    display: grid; grid-template-columns: minmax(100px, auto) auto auto auto 1fr;
+    align-items: center; gap: 8px; padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
   }
   .sched-zone-line:last-child { border-bottom: none; }
 
-  .sched-zone-name { font-size: 12px; font-weight: 600; min-width: 70px; color: var(--text2); }
+  .sched-zone-name { font-size: 12px; font-weight: 600; color: var(--text2); white-space: nowrap; }
   .sched-inline-select {
     background: var(--bg3); border: 1px solid var(--border2); border-radius: 4px; color: var(--text);
     font-size: 11px; padding: 3px 6px; outline: none; cursor: pointer;
@@ -236,7 +237,7 @@
     background-repeat: no-repeat; background-position: right 5px center; padding-right: 18px;
   }
   .sched-inline-select:focus { border-color: var(--accent); }
-  .sched-inline-temps { font-family: 'DM Mono', monospace; font-size: 12px; display: flex; gap: 8px; margin-left: auto; align-items: center; }
+  .sched-inline-temps { font-family: 'DM Mono', monospace; font-size: 12px; display: flex; gap: 8px; justify-self: end; align-items: center; }
   .sched-inline-temps .sp-heat { color: var(--heat); }
   .sched-inline-temps .sp-cool { color: var(--cool); }
   .sched-inline-toggle { cursor: pointer; }
@@ -292,8 +293,8 @@
     background: var(--bg3); border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600;
   }
   .prof-zone-line {
-    display: grid; grid-template-columns: 1fr auto auto auto; align-items: center; gap: 10px; padding: 8px 14px;
-    border-bottom: 1px solid var(--border);
+    display: grid; grid-template-columns: minmax(100px, auto) auto auto auto; align-items: center; gap: 10px; padding: 8px 14px;
+    border-bottom: 1px solid var(--border); justify-content: start;
   }
   .prof-zone-line:last-child { border-bottom: none; }
   .prof-zone-line select {
@@ -497,7 +498,7 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.44';
+const APP_VERSION = '1.0.45';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const JS_DAY_MAP = [6,0,1,2,3,4,5]; // JS getDay() (0=Sun) -> DAYS index
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
