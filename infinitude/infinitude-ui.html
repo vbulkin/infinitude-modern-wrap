@@ -451,7 +451,7 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.26';
+const APP_VERSION = '1.0.27';
 const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
 const SCHEDULE_ACTIVITIES = ['home','away','sleep','wake'];
@@ -1364,6 +1364,7 @@ async function saveAllProfiles() {
   }
 }
 // ── Carrier Cloud Connectivity ─────────────────────────────────────────────────
+let carrierTimer = null;
 async function checkCarrier() {
   const el = document.getElementById('carrierStatus');
   if (!el) return;
@@ -1382,6 +1383,12 @@ async function checkCarrier() {
     state.carrierOk = false;
     el.innerHTML = `<span class="carrier-err">● Unreachable</span>`;
   }
+  scheduleCarrierCheck();
+}
+function scheduleCarrierCheck() {
+  clearTimeout(carrierTimer);
+  const delay = state.carrierOk ? 5 * 60000 : 2 * 60000;
+  carrierTimer = setTimeout(checkCarrier, delay);
 }
 
 function setDot(s) {
