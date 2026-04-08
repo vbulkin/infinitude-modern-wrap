@@ -22,12 +22,40 @@ async def async_setup_entry(
 ) -> None:
     coordinator: InfinitudeDataCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    entities = []
+    entities = [InfinitudeHumidifierSensor(coordinator)]
     for zone in coordinator.data.get("zones", []):
         zid = zone["id"]
         entities.append(InfinitudeDamperSensor(coordinator, zid))
         entities.append(InfinitudeFanSensor(coordinator, zid))
     async_add_entities(entities)
+
+
+class InfinitudeHumidifierSensor(CoordinatorEntity, SensorEntity):
+    """System-level humidifier state sensor."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:air-humidifier"
+
+    def __init__(self, coordinator: InfinitudeDataCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = "infinitude_humidifier"
+        self._attr_name = "Humidifier"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, "system")},
+            name="Infinitude System",
+            manufacturer=MANUFACTURER,
+            model=MODEL,
+        )
+
+    @property
+    def native_value(self) -> str | None:
+        return self.coordinator.data.get("humid", "off")
+
+    @property
+    def icon(self) -> str:
+        if self.native_value == "on":
+            return "mdi:air-humidifier"
+        return "mdi:air-humidifier-off"
 
 
 class InfinitudeZoneSensor(CoordinatorEntity, SensorEntity):
@@ -74,7 +102,7 @@ class InfinitudeDamperSensor(InfinitudeZoneSensor):
     def native_value(self) -> int | None:
         z = self._zone_data
         if z and z.get("damper"):
-            return int(z["damper"])
+            return round(int(z["damper"]) / 15 * 100)
         return None
 
 

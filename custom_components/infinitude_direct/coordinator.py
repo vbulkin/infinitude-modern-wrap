@@ -94,9 +94,12 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
                 }
             )
 
+        humid = self._v(st.get("humid")) or "off"
+
         return {
             "mode": mode,
             "oat": oat,
+            "humid": humid,
             "zones": zones,
             "whole_house_hold": self._parse_whole_house(cfg),
         }
