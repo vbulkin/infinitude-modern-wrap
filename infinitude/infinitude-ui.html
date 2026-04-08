@@ -183,33 +183,52 @@
   .zone-pill { padding: 5px 14px; border-radius: 20px; font-size: 12px; font-weight: 500; cursor: pointer; border: 1px solid var(--border2); background: var(--bg3); color: var(--text2); transition: all 0.15s; }
   .zone-pill.active { background: var(--accent); color: #fff; border-color: var(--accent2); }
 
-  .sched-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  .sched-grid { display: block; min-width: 840px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-  .sched-head { display: grid; grid-template-columns: 40px repeat(7, 1fr); background: var(--bg3); border-bottom: 1px solid var(--border); }
-  .sched-head-cell { padding: 8px 2px; text-align: center; font-size: 12px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; }
-  .sched-row { display: grid; grid-template-columns: 40px repeat(7, 1fr); border-bottom: 1px solid var(--border); }
-  .sched-row:last-child { border-bottom: none; }
-  .sched-row-label { display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--text3); border-right: 1px solid var(--border); font-weight: 500; }
-  .sched-cell { padding: 2px 0; border-right: 1px solid var(--border); transition: background 0.12s; }
-  .sched-cell:last-child { border-right: none; }
-  .sched-cell:hover { background: var(--bg4); }
-  .sched-cell.today { background: rgba(79,142,247,0.06); }
-  .sched-act { font-size: 10px; font-weight: 600; padding: 1px 4px; border-radius: 3px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: inline-block; }
+  /* Schedule — day-centric vertical layout */
+  .sched-day-tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+  .sched-day-tab {
+    padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 600; cursor: pointer;
+    background: var(--bg3); color: var(--text3); border: 1px solid var(--border); transition: all 0.15s;
+    user-select: none;
+  }
+  .sched-day-tab:hover { border-color: var(--accent); color: var(--text2); }
+  .sched-day-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .sched-day-tab.today-ring { box-shadow: 0 0 0 2px var(--accent); }
+
+  .sched-period-card {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius);
+    margin-bottom: 10px; overflow: hidden;
+  }
+  .sched-period-header {
+    display: flex; align-items: center; gap: 10px; padding: 8px 14px;
+    background: var(--bg3); border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 600; color: var(--text3);
+  }
+  .sched-zone-line {
+    display: flex; align-items: center; gap: 8px; padding: 8px 14px;
+    border-bottom: 1px solid var(--border); flex-wrap: wrap;
+  }
+  .sched-zone-line:last-child { border-bottom: none; }
+  .sched-zone-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .sched-zone-name { font-size: 12px; font-weight: 600; min-width: 70px; color: var(--text2); }
+  .sched-inline-select {
+    background: var(--bg3); border: 1px solid var(--border2); border-radius: 4px; color: var(--text);
+    font-size: 11px; padding: 3px 6px; outline: none; cursor: pointer;
+    appearance: none; -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%238b92a8'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 5px center; padding-right: 18px;
+  }
+  .sched-inline-select:focus { border-color: var(--accent); }
+  .sched-inline-temps { font-family: 'DM Mono', monospace; font-size: 11px; display: flex; gap: 6px; margin-left: auto; align-items: center; }
+  .sched-inline-temps .heat { color: var(--heat); }
+  .sched-inline-temps .cool { color: var(--cool); }
+  .sched-inline-toggle { cursor: pointer; }
+  .sched-zone-line.disabled { opacity: 0.35; }
+  .sched-copy-bar { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+
   .act-home { background: rgba(79,142,247,0.15); color: #6fa8f8; }
   .act-away { background: rgba(107,114,128,0.2); color: #9ca3af; }
   .act-sleep { background: rgba(139,92,246,0.15); color: #a78bfa; }
   .act-wake { background: rgba(251,191,36,0.15); color: #fbbf24; }
   .act-manual { background: rgba(52,211,153,0.15); color: #34d399; }
-  .sched-time { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text3); margin-top: 2px; text-align: center; display: block; }
-  .sched-disabled { opacity: 0.3; }
-  .sched-period-off { cursor: pointer; }
-  .sched-zone-row { padding: 3px 4px; border-bottom: 1px solid var(--border); border-left: 3px solid transparent; }
-  .sched-zone-row:last-child { border-bottom: none; }
-  .sched-zone-row-inner { display: flex; align-items: center; gap: 4px; }
-  .sched-zone-label { font-size: 10px; font-weight: 700; color: var(--text3); min-width: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .sched-time-inline { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--text2); }
-  .sched-sp-badge { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--text2); cursor: pointer; margin-left: auto; padding: 1px 3px; border-radius: 3px; border: 1px solid transparent; white-space: nowrap; }
-  .sched-sp-badge:hover { border-color: var(--border2); color: var(--accent); }
 
   /* Cell editor */
   .cell-editor {
@@ -244,32 +263,35 @@
   .toast.error { border-color: rgba(239,68,68,0.4); color: #f87171; }
   @keyframes toastIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
 
-  /* Profiles */
-  .prof-wrap { overflow-x: auto; }
-  .prof-grid { display: block; width: 100%; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-  .prof-head { display: grid; grid-template-columns: 80px 1fr; background: var(--bg3); border-bottom: 1px solid var(--border); }
-  .prof-head-cell { padding: 10px 4px; text-align: center; font-size: 12px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; }
-  .prof-head-sub { display: grid; grid-template-columns: repeat(3, 1fr); }
-  .prof-row { display: grid; grid-template-columns: 80px 1fr; border-bottom: 1px solid var(--border); }
-  .prof-row:last-child { border-bottom: none; }
-  .prof-act-label { display: flex; align-items: center; justify-content: center; border-right: 1px solid var(--border); padding: 8px 4px; }
-  .prof-zones { display: flex; flex-direction: column; }
-  .prof-zone-row { padding: 8px 10px; border-bottom: 1px solid var(--border); border-left: 3px solid transparent; display: flex; align-items: center; gap: 10px; }
-  .prof-zone-row:last-child { border-bottom: none; }
-  .prof-zone-label { font-size: 12px; font-weight: 600; min-width: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .prof-zone-row input[type=number] {
-    width: 56px; background: var(--bg3); border: 1px solid var(--border2);
-    border-radius: var(--radius-sm); color: var(--text); font-family: 'DM Mono', monospace;
-    font-size: 13px; padding: 4px 6px; outline: none; text-align: center;
+  /* Profiles — card layout matching schedule */
+  .prof-card {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius);
+    margin-bottom: 10px; overflow: hidden;
   }
-  .prof-zone-row input[type=number]:focus { border-color: var(--accent); }
-  .prof-zone-row select {
-    background: var(--bg3); border: 1px solid var(--border2); border-radius: var(--radius-sm);
-    color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 13px;
-    padding: 4px 6px; outline: none; appearance: none; width: 64px;
+  .prof-card-header {
+    display: flex; align-items: center; gap: 10px; padding: 8px 14px;
+    background: var(--bg3); border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600;
   }
-  .prof-zone-row select:focus { border-color: var(--accent); }
-  .prof-field-label { font-size: 10px; color: var(--text3); margin-right: 2px; }
+  .prof-zone-line {
+    display: flex; align-items: center; gap: 10px; padding: 8px 14px;
+    border-bottom: 1px solid var(--border); flex-wrap: wrap;
+  }
+  .prof-zone-line:last-child { border-bottom: none; }
+  .prof-zone-line input[type=number] {
+    width: 52px; background: var(--bg3); border: 1px solid var(--border2);
+    border-radius: 4px; color: var(--text); font-family: 'DM Mono', monospace;
+    font-size: 12px; padding: 4px 6px; outline: none; text-align: center;
+  }
+  .prof-zone-line input[type=number]:focus { border-color: var(--accent); }
+  .prof-zone-line select {
+    background: var(--bg3); border: 1px solid var(--border2); border-radius: 4px;
+    color: var(--text); font-size: 11px; padding: 3px 6px; outline: none;
+    appearance: none; -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%238b92a8'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 5px center; padding-right: 18px;
+  }
+  .prof-zone-line select:focus { border-color: var(--accent); }
+  .prof-field-label { font-size: 10px; color: var(--text3); }
 
   .sched-action-bar {
     display: none; position: sticky; bottom: 0; left: 0; right: 0;
@@ -431,23 +453,13 @@
   </div>
 </div>
 
-<!-- Cell Editor -->
-<div class="cell-editor" id="cellEditor">
-  <div class="ce-title" id="ceTitle">Period</div>
-  <div id="ceActs"></div>
-  <div id="ceSpHint" style="display:none"></div>
-  <div class="ce-footer">
-    <button class="btn btn-sm" onclick="closeCellEditor()">Cancel</button>
-    <button class="btn btn-sm" onclick="saveCellEdit(); copyCellToAllDays()" title="Apply this period to all days of the week">Apply to all days</button>
-    <button class="btn btn-primary btn-sm" onclick="saveCellEdit()">Apply</button>
-  </div>
-</div>
+<!-- Cell Editor (no longer used for schedule — kept for profile temp flyout) -->
 
 <div class="toast-wrap" id="toastWrap"></div>
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.35';
+const APP_VERSION = '1.0.36';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const JS_DAY_MAP = [6,0,1,2,3,4,5]; // JS getDay() (0=Sun) -> DAYS index
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
@@ -460,7 +472,7 @@ let state = { zones: [], summary: {}, scheduleZoneIdx: 0 };
 let scheduleDirty = false;
 let profilesDirty = false;
 let holdZoneId = null;
-let cellEditCtx = null;
+
 let pollingTimer = null;
 
 // ── Value unwrapper ───────────────────────────────────────────────────────────
@@ -1065,7 +1077,10 @@ async function cancelWhHold() {
   }
 }
 
-// ── Schedule ──────────────────────────────────────────────────────────────────
+// ── Schedule (day-centric view) ────────────────────────────────────────────────
+let _schedDay = null; // currently viewed day name
+let _schedEdits = {}; // { day: { zoneIdx: { periodIdx: { act, time, enabled } } } }
+
 function renderSchedule() {
   if (!state.zones.length) {
     document.getElementById('scheduleContent').innerHTML = `<div class="notice"><strong>No data</strong>Load status first.</div>`;
@@ -1073,72 +1088,44 @@ function renderSchedule() {
   }
 
   const todayName = DAYS[JS_DAY_MAP[new Date().getDay()]];
+  if (!_schedDay) _schedDay = todayName;
 
-  // Build dayMap per zone
-  const zoneMaps = state.zones.map(z => {
-    const m = {};
-    forceArray(z.program).forEach(day => { m[day.id] = forceArray(day.period); });
-    return m;
-  });
-
-  const headCells = DAYS.map(d =>
-    `<div class="sched-head-cell" style="${d === todayName ? 'color:var(--accent)' : ''}">${d.slice(0,3)}</div>`
-  ).join('');
-
-  const maxPeriods = 5;
   setScheduleDirty(false);
+  _schedEdits = {};
 
-  function zoneRow(z, zIdx, period, day, pi) {
-    if (!period) return `<div class="sched-zone-row sched-disabled"><span class="sched-act act-home" style="opacity:0.2">–</span></div>`;
-    const enabled = v(period.enabled) === 'on';
-    const act = v(period.activity) || 'home';
-    const time = v(period.time) || '–';
-    const sp = getActivitySetpoints(z.id, act);
-    const tempBadge = `<span class="sched-sp-badge" onclick="event.stopPropagation();openProfileTempFlyout(this,'${z.id}','${act}')">${sp.htsp}/${sp.clsp}</span>`;
-    const opacity = enabled ? '1' : '0.35';
-    const zColor = ZONE_COLORS[zIdx % ZONE_COLORS.length];
-    const zLabel = z.name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 3);
-    return `<div class="sched-zone-row" style="opacity:${opacity};border-left-color:${zColor}" data-zone-idx="${zIdx}" data-enabled="${enabled ? 'on' : 'off'}" data-act="${act}" data-time="${time}" data-pid="${v(period.id) || (pi+1)}" onclick="event.stopPropagation();openZoneEditor(this, '${day}', ${pi}, ${zIdx})">
-      <div class="sched-zone-row-inner">
-        <span class="sched-zone-label" style="color:${zColor}">${zLabel}</span>
-        <span class="sched-act ${ACT_CLASS[act] || 'act-home'}">${act}</span>
-        <span class="sched-time-inline">${enabled ? time : 'off'}</span>
-        ${tempBadge}
-      </div>
-    </div>`;
-  }
+  document.getElementById('scheduleContent').innerHTML = _schedShell(todayName);
+  _renderDayPeriods();
+}
 
-  let rows = '';
-  for (let pi = 0; pi < maxPeriods; pi++) {
-    const cells = DAYS.map((day) => {
-      const isToday = day === todayName;
-      const zonesHtml = state.zones.map((z, zIdx) => {
-        const period = (zoneMaps[zIdx][day] || [])[pi];
-        return zoneRow(z, zIdx, period, day, pi);
-      }).join('');
-      return `<div class="sched-cell${isToday ? ' today' : ''}">${zonesHtml}</div>`;
-    }).join('');
-    rows += `<div class="sched-row"><div class="sched-row-label">P${pi + 1}</div>${cells}</div>`;
-  }
+function _schedShell(todayName) {
+  const tabs = DAYS.map(d => {
+    const isActive = d === _schedDay;
+    const isToday = d === todayName;
+    const cls = ['sched-day-tab'];
+    if (isActive) cls.push('active');
+    if (isToday && !isActive) cls.push('today-ring');
+    return `<div class="${cls.join(' ')}" onclick="switchSchedDay('${d}')">${d.slice(0,3)}</div>`;
+  }).join('');
 
-  // Zone legend
   const legend = state.zones.map((z, i) => {
     const c = ZONE_COLORS[i % ZONE_COLORS.length];
     return `<span style="font-size:12px;color:${c};font-weight:500">● ${z.name}</span>`;
-  }).join('<span style="margin:0 8px;color:var(--text3)">·</span>');
+  }).join('<span style="margin:0 6px;color:var(--text3)">·</span>');
 
-  document.getElementById('scheduleContent').innerHTML = `
-    <div class="refresh-row">
-      <div class="section-title">Weekly schedule</div>
+  return `
+    <div class="refresh-row"><div class="section-title">Schedule</div></div>
+    <div class="sched-day-tabs">${tabs}</div>
+    <div style="margin-bottom:12px">${legend}</div>
+    <div id="schedDayBody"></div>
+    <div class="sched-copy-bar">
+      <span style="font-size:12px;color:var(--text3)">Copy ${_schedDay.slice(0,3)} →</span>
+      <select id="schedCopyTarget" class="sched-inline-select" style="width:auto">
+        <option value="">select day…</option>
+        ${DAYS.filter(d => d !== _schedDay).map(d => `<option value="${d}">${d.slice(0,3)}</option>`).join('')}
+        <option value="__all__">All other days</option>
+      </select>
+      <button class="btn btn-sm" onclick="copySchedDay()">Copy</button>
     </div>
-    <div style="display:flex;gap:12px;margin-bottom:14px;align-items:center">${legend}</div>
-    <div class="sched-wrap">
-      <div class="sched-grid">
-        <div class="sched-head"><div class="sched-head-cell"></div>${headCells}</div>
-        ${rows}
-      </div>
-    </div>
-    <div style="margin-top:10px;font-size:11px;color:var(--text3)">Today (${todayName}) highlighted. Click a zone row to edit · Click temp to edit profile.</div>
     <div class="sched-action-bar" id="schedActionBar">
       <span class="sched-action-bar-label">● Unsaved changes</span>
       <button class="btn btn-sm" onclick="cancelScheduleChanges()">Discard</button>
@@ -1147,153 +1134,243 @@ function renderSchedule() {
   `;
 }
 
-// ── Zone Editor (per-zone flyout) ──────────────────────────────────────────────
-function openZoneEditor(rowEl, dayName, periodIdx, zIdx) {
-  const z = state.zones[zIdx];
-  if (!z) return;
-  const cell = rowEl.closest('.sched-cell');
-  cellEditCtx = { dayName, periodIdx, zIdx, rowEl, cell };
+function _renderDayPeriods() {
+  const day = _schedDay;
+  const maxPeriods = 5;
 
+  // Build zone day-maps
+  const zoneMaps = state.zones.map(z => {
+    const m = {};
+    forceArray(z.program).forEach(d => { m[d.id] = forceArray(d.period); });
+    return m;
+  });
+
+  let html = '';
+  for (let pi = 0; pi < maxPeriods; pi++) {
+    const zoneLines = state.zones.map((z, zIdx) => {
+      const period = (zoneMaps[zIdx][day] || [])[pi];
+      return _zoneLine(z, zIdx, period, pi, day);
+    }).join('');
+    html += `<div class="sched-period-card">
+      <div class="sched-period-header">Period ${pi + 1}</div>
+      ${zoneLines}
+    </div>`;
+  }
+  document.getElementById('schedDayBody').innerHTML = html;
+}
+
+function _zoneLine(z, zIdx, period, pi, day) {
+  if (!period) {
+    return `<div class="sched-zone-line disabled" style="opacity:0.2;padding:6px 14px">
+      <div class="sched-zone-dot" style="background:${ZONE_COLORS[zIdx % ZONE_COLORS.length]}"></div>
+      <span class="sched-zone-name">${z.name}</span>
+      <span style="font-size:11px;color:var(--text3)">—</span>
+    </div>`;
+  }
+
+  // Check for pending edits
+  const edit = (_schedEdits[day] && _schedEdits[day][zIdx] && _schedEdits[day][zIdx][pi]) || null;
+  const enabled = edit ? edit.enabled : v(period.enabled) === 'on';
+  const act = edit ? edit.act : (v(period.activity) || 'home');
+  const time = edit ? edit.time : (v(period.time) || '06:00');
+  const pid = v(period.id) || (pi + 1);
   const zColor = ZONE_COLORS[zIdx % ZONE_COLORS.length];
-  document.getElementById('ceTitle').innerHTML = `<span style="color:${zColor}">●</span> ${z.name} · ${dayName} · P${periodIdx + 1}`;
+  const sp = getActivitySetpoints(z.id, act);
+  const disabledCls = enabled ? '' : ' disabled';
 
-  const act = rowEl.dataset.act || 'home';
-  const time = (rowEl.dataset.time && rowEl.dataset.time !== '–') ? rowEl.dataset.time : '06:00';
-  const enabled = rowEl.dataset.enabled !== 'off';
-  const pid = rowEl.dataset.pid || String(periodIdx + 1);
-
-  const actPills = SCHEDULE_ACTIVITIES.map(a =>
-    `<div class="ce-act ${ACT_CLASS[a]}${a === act ? ' selected' : ''}" data-act="${a}" data-zidx="${zIdx}" onclick="selectCeActZone(this)">${a}</div>`
+  const actOpts = SCHEDULE_ACTIVITIES.map(a =>
+    `<option value="${a}"${a === act ? ' selected' : ''}>${a}</option>`
   ).join('');
 
-  const sp = getActivitySetpoints(z.id, act);
-
-  document.getElementById('ceActs').innerHTML = `<div class="ce-zone-row" data-zidx="${zIdx}" data-pid="${pid}">
-    <div class="ce-acts">${actPills}</div>
-    <div class="ce-sp-hint" id="ceSpHint${zIdx}">${sp.htsp}/${sp.clsp}</div>
-    <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
-      <div>
-        <div style="font-size:10px;color:var(--text3);margin-bottom:3px">Time</div>
-        <select class="ce-time" id="ceTime${zIdx}">${timeOptions(time)}</select>
-      </div>
-      <div style="display:flex;align-items:center;gap:5px;margin-top:14px">
-        <input type="checkbox" id="ceEnabled${zIdx}" ${enabled ? 'checked' : ''} style="cursor:pointer">
-        <label for="ceEnabled${zIdx}" style="font-size:11px;color:var(--text3)">on</label>
-      </div>
+  return `<div class="sched-zone-line${disabledCls}" data-zidx="${zIdx}" data-pi="${pi}" data-pid="${pid}" data-day="${day}">
+    <div class="sched-zone-dot" style="background:${zColor}"></div>
+    <span class="sched-zone-name">${z.name}</span>
+    <select class="sched-inline-select" onchange="onSchedLineChange(this)" data-field="act">${actOpts}</select>
+    <select class="sched-inline-select" onchange="onSchedLineChange(this)" data-field="time">${timeOptions(time)}</select>
+    <label class="sched-inline-toggle" style="display:flex;align-items:center;gap:3px">
+      <input type="checkbox" ${enabled ? 'checked' : ''} onchange="onSchedLineChange(this)" data-field="enabled" style="cursor:pointer">
+      <span style="font-size:10px;color:var(--text3)">on</span>
+    </label>
+    <div class="sched-inline-temps">
+      <span class="heat" style="cursor:pointer" onclick="openProfileTempFlyout(this,'${z.id}','${act}')">▲${sp.htsp}°</span>
+      <span class="cool" style="cursor:pointer" onclick="openProfileTempFlyout(this,'${z.id}','${act}')">▼${sp.clsp}°</span>
     </div>
   </div>`;
-  document.getElementById('ceSpHint').textContent = '';
-
-  const rect = rowEl.getBoundingClientRect();
-  const editor = document.getElementById('cellEditor');
-  editor.style.top = (rect.bottom + window.scrollY + 6) + 'px';
-  editor.style.left = Math.min(rect.left, window.innerWidth - 230) + 'px';
-  editor.classList.add('open');
 }
 
-function selectCeActZone(el) {
-  const zIdx = el.dataset.zidx;
-  el.closest('.ce-zone-row').querySelectorAll('.ce-act').forEach(a => a.classList.remove('selected'));
-  el.classList.add('selected');
-  // Update setpoint hint for this zone
-  const z = state.zones[parseInt(zIdx)];
+function switchSchedDay(day) {
+  _schedDay = day;
+  // Preserve edits — just rebuild shell and body
+  const todayName = DAYS[JS_DAY_MAP[new Date().getDay()]];
+  document.getElementById('scheduleContent').innerHTML = _schedShell(todayName);
+  _renderDayPeriods();
+  if (Object.keys(_schedEdits).length) setScheduleDirty(true);
+}
+
+function onSchedLineChange(inputEl) {
+  const line = inputEl.closest('.sched-zone-line');
+  const day = line.dataset.day;
+  const zIdx = parseInt(line.dataset.zidx);
+  const pi = parseInt(line.dataset.pi);
+
+  // Read current values from this line's inputs
+  const actSelect = line.querySelector('[data-field="act"]');
+  const timeSelect = line.querySelector('[data-field="time"]');
+  const enabledCb = line.querySelector('[data-field="enabled"]');
+
+  if (!_schedEdits[day]) _schedEdits[day] = {};
+  if (!_schedEdits[day][zIdx]) _schedEdits[day][zIdx] = {};
+  _schedEdits[day][zIdx][pi] = {
+    act: actSelect.value,
+    time: timeSelect.value,
+    enabled: enabledCb.checked,
+  };
+
+  // Update inline temps display
+  const z = state.zones[zIdx];
   if (z) {
-    const sp = getActivitySetpoints(z.id, el.dataset.act);
-    const hint = document.getElementById(`ceSpHint${zIdx}`);
-    if (hint) hint.textContent = `${sp.htsp}/${sp.clsp}`;
+    const sp = getActivitySetpoints(z.id, actSelect.value);
+    const tempsEl = line.querySelector('.sched-inline-temps');
+    if (tempsEl) {
+      tempsEl.innerHTML = `<span class="heat" style="cursor:pointer" onclick="openProfileTempFlyout(this,'${z.id}','${actSelect.value}')">▲${sp.htsp}°</span>
+        <span class="cool" style="cursor:pointer" onclick="openProfileTempFlyout(this,'${z.id}','${actSelect.value}')">▼${sp.clsp}°</span>`;
+    }
   }
-}
 
-// Keep legacy selectCeAct as no-op to avoid errors
-function selectCeAct(el) { selectCeActZone(el); }
+  // Toggle opacity for enabled state
+  line.classList.toggle('disabled', !enabledCb.checked);
 
-function closeCellEditor() { document.getElementById('cellEditor').classList.remove('open'); }
-
-document.addEventListener('click', e => {
-  const editor = document.getElementById('cellEditor');
-  if (!editor.contains(e.target) && !e.target.closest('.sched-zone-row')) closeCellEditor();
-});
-
-function saveCellEdit() {
-  const { zIdx, rowEl } = cellEditCtx;
-
-  const ceRow = document.querySelector(`.ce-zone-row[data-zidx="${zIdx}"]`);
-  if (!ceRow) return;
-
-  const actEl = ceRow.querySelector('.ce-act.selected');
-  if (!actEl) return;
-
-  const act = actEl.dataset.act;
-  const time = document.getElementById(`ceTime${zIdx}`).value;
-  const enabled = document.getElementById(`ceEnabled${zIdx}`).checked;
-
-  applyToZoneRow(rowEl, zIdx, act, time, enabled);
-
-  closeCellEditor();
   setScheduleDirty(true);
-  toast('Applied — click Save schedule to send to thermostat', 'success');
 }
 
-function applyToZoneRow(rowEl, zIdx, act, time, enabled) {
-  rowEl.dataset.act = act;
-  rowEl.dataset.time = time;
-  rowEl.dataset.enabled = enabled ? 'on' : 'off';
+function copySchedDay() {
+  const target = document.getElementById('schedCopyTarget').value;
+  if (!target) { toast('Select a target day', 'error'); return; }
 
-  const sp = getActivitySetpoints(state.zones[zIdx].id, act);
-  rowEl.style.opacity = enabled ? '1' : '0.35';
-  rowEl.querySelector('.sched-act').className = `sched-act ${ACT_CLASS[act] || 'act-home'}`;
-  rowEl.querySelector('.sched-act').textContent = act;
-  rowEl.querySelector('.sched-time-inline').textContent = enabled ? time : 'off';
-  rowEl.querySelector('.sched-sp-badge').textContent = `${sp.htsp}/${sp.clsp}`;
-}
+  const sourceDay = _schedDay;
 
-function copyCellToAllDays() {
-  const { periodIdx, zIdx, rowEl } = cellEditCtx;
-  const schedRow = document.querySelectorAll('.sched-row')[periodIdx];
-  if (!schedRow) return;
+  // Read current state of source day from DOM
+  const sourceData = _readDayFromDOM(sourceDay);
 
-  const act = rowEl.dataset.act;
-  const time = rowEl.dataset.time;
-  const enabled = rowEl.dataset.enabled !== 'off';
+  const targets = target === '__all__' ? DAYS.filter(d => d !== sourceDay) : [target];
 
-  schedRow.querySelectorAll('.sched-cell').forEach(cell => {
-    const tgtRow = cell.querySelector(`[data-zone-idx="${zIdx}"]`);
-    if (!tgtRow || tgtRow === rowEl || tgtRow.classList.contains('sched-disabled')) return;
-    applyToZoneRow(tgtRow, zIdx, act, time, enabled);
+  targets.forEach(tgtDay => {
+    // Write source data as edits for target day
+    if (!_schedEdits[tgtDay]) _schedEdits[tgtDay] = {};
+    for (const zIdx in sourceData) {
+      _schedEdits[tgtDay][zIdx] = {};
+      for (const pi in sourceData[zIdx]) {
+        _schedEdits[tgtDay][zIdx][pi] = { ...sourceData[zIdx][pi] };
+      }
+    }
   });
-  toast('Copied to all days', 'success');
+
+  setScheduleDirty(true);
+  const label = target === '__all__' ? 'all other days' : target.slice(0,3);
+  toast(`Copied ${sourceDay.slice(0,3)} → ${label}`, 'success');
+}
+
+function _readDayFromDOM(day) {
+  // If we're viewing this day, read from DOM; otherwise use edits + state
+  const data = {};
+  const zoneMaps = state.zones.map(z => {
+    const m = {};
+    forceArray(z.program).forEach(d => { m[d.id] = forceArray(d.period); });
+    return m;
+  });
+
+  state.zones.forEach((z, zIdx) => {
+    data[zIdx] = {};
+    const periods = zoneMaps[zIdx][day] || [];
+    for (let pi = 0; pi < 5; pi++) {
+      const period = periods[pi];
+      if (!period) continue;
+
+      // Check edits first
+      const edit = (_schedEdits[day] && _schedEdits[day][zIdx] && _schedEdits[day][zIdx][pi]) || null;
+
+      if (day === _schedDay) {
+        // Read from visible DOM
+        const line = document.querySelector(`.sched-zone-line[data-zidx="${zIdx}"][data-pi="${pi}"][data-day="${day}"]`);
+        if (line) {
+          data[zIdx][pi] = {
+            act: line.querySelector('[data-field="act"]').value,
+            time: line.querySelector('[data-field="time"]').value,
+            enabled: line.querySelector('[data-field="enabled"]').checked,
+          };
+          continue;
+        }
+      }
+
+      data[zIdx][pi] = edit || {
+        act: v(period.activity) || 'home',
+        time: v(period.time) || '06:00',
+        enabled: v(period.enabled) === 'on',
+      };
+    }
+  });
+  return data;
 }
 
 async function saveSchedule() {
   try {
+    // Collect from all days: mix original state data with DOM edits
+    const zoneMaps = state.zones.map(z => {
+      const m = {};
+      forceArray(z.program).forEach(d => { m[d.id] = forceArray(d.period); });
+      return m;
+    });
+
     for (let zIdx = 0; zIdx < state.zones.length; zIdx++) {
       const z = state.zones[zIdx];
-      const dayData = {};
-      DAYS.forEach(d => { dayData[d] = []; });
+      const dayPayload = DAYS.map(day => {
+        const periods = zoneMaps[zIdx][day] || [];
+        const dayPeriods = [];
 
-      document.querySelectorAll('.sched-row').forEach((row, pi) => {
-        const cells = row.querySelectorAll('.sched-cell');
-        cells.forEach((cell, di) => {
-          const day = DAYS[di];
-          const zoneRow = cell.querySelector(`[data-zone-idx="${zIdx}"]`);
-          if (!zoneRow || zoneRow.classList.contains('sched-disabled')) return;
-          const act = zoneRow.dataset.act;
-          const time = zoneRow.dataset.time || '00:00';
-          const enabled = zoneRow.dataset.enabled !== 'off' ? 'on' : 'off';
-          const pid = zoneRow.dataset.pid || String(pi + 1);
-          if (act) dayData[day].push({ id: pid, activity: act, time, enabled });
-        });
+        for (let pi = 0; pi < 5; pi++) {
+          const period = periods[pi];
+          if (!period) continue;
+          const pid = v(period.id) || String(pi + 1);
+
+          // Check DOM (if viewing this day) or edits
+          let act, time, enabled;
+          if (day === _schedDay) {
+            const line = document.querySelector(`.sched-zone-line[data-zidx="${zIdx}"][data-pi="${pi}"][data-day="${day}"]`);
+            if (line) {
+              act = line.querySelector('[data-field="act"]').value;
+              time = line.querySelector('[data-field="time"]').value;
+              enabled = line.querySelector('[data-field="enabled"]').checked ? 'on' : 'off';
+            }
+          }
+          if (!act) {
+            const edit = (_schedEdits[day] && _schedEdits[day][zIdx] && _schedEdits[day][zIdx][pi]) || null;
+            if (edit) {
+              act = edit.act;
+              time = edit.time;
+              enabled = edit.enabled ? 'on' : 'off';
+            } else {
+              act = v(period.activity) || 'home';
+              time = v(period.time) || '00:00';
+              enabled = v(period.enabled) || 'on';
+            }
+          }
+
+          dayPeriods.push({ id: pid, activity: act, time, enabled });
+        }
+
+        return { id: day, period: dayPeriods };
       });
 
-      const program = { day: DAYS.map(d => ({ id: d, period: dayData[d] })) };
       await apiFetch(`/api/config/zones/zone/${z.id}/program`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(program),
+        body: JSON.stringify({ day: dayPayload }),
       });
     }
     toast('Schedule saved', 'success');
+    _schedEdits = {};
     setScheduleDirty(false);
+    setTimeout(loadAll, 1500);
   } catch(e) {
     toast('Save failed: ' + e.message, 'error');
   }
@@ -1307,6 +1384,7 @@ function setScheduleDirty(dirty) {
 }
 
 function cancelScheduleChanges() {
+  _schedEdits = {};
   setScheduleDirty(false);
   renderSchedule();
   toast('Changes discarded', 'success');
@@ -1340,7 +1418,7 @@ function closeProfileTempModal() { closeProfileTempFlyout(); }
 
 document.addEventListener('click', e => {
   const flyout = document.getElementById('profileTempFlyout');
-  if (flyout && !flyout.contains(e.target) && !e.target.closest('.sched-sp-badge')) closeProfileTempFlyout();
+  if (flyout && !flyout.contains(e.target) && !e.target.closest('.sched-inline-temps')) closeProfileTempFlyout();
 });
 
 async function saveProfileTemp() {
@@ -1364,55 +1442,50 @@ function renderProfiles() {
 
   const FAN_OPTIONS = ['off','low','med','high'];
 
-  // Zone legend (same style as schedule)
   const legend = state.zones.map((z, i) => {
     const c = ZONE_COLORS[i % ZONE_COLORS.length];
     return `<span style="font-size:12px;color:${c};font-weight:500">● ${z.name}</span>`;
-  }).join('<span style="margin:0 8px;color:var(--text3)">·</span>');
+  }).join('<span style="margin:0 6px;color:var(--text3)">·</span>');
 
-  // Build activity rows with zone sub-rows
-  let actRows = '';
+  let cards = '';
   SCHEDULE_ACTIVITIES.forEach(actId => {
-    const zoneRows = state.zones.map((z, zIdx) => {
+    const zoneLines = state.zones.map((z, zIdx) => {
       const zColor = ZONE_COLORS[zIdx % ZONE_COLORS.length];
-      const zLabel = z.name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 3);
       const act = z.activities.find(a => a.id === actId) || {};
       const htsp = Math.round(parseFloat(v(act.htsp) || 68));
       const clsp = Math.round(parseFloat(v(act.clsp) || 76));
       const fan = v(act.fan) || 'low';
       const fanOpts = FAN_OPTIONS.map(f => `<option value="${f}"${f === fan ? ' selected' : ''}>${f}</option>`).join('');
-      return `<div class="prof-zone-row" style="border-left-color:${zColor}">
-        <span class="prof-zone-label" style="color:${zColor}">${zLabel}</span>
-        <span class="prof-field-label">H</span><input type="number" min="50" max="90" step="1" value="${htsp}" data-zone="${z.id}" data-act="${actId}" data-field="htsp">
-        <span class="prof-field-label">C</span><input type="number" min="60" max="99" step="1" value="${clsp}" data-zone="${z.id}" data-act="${actId}" data-field="clsp">
-        <span class="prof-field-label">Fan</span><select data-zone="${z.id}" data-act="${actId}" data-field="fan">${fanOpts}</select>
+      return `<div class="prof-zone-line" data-zone="${z.id}" data-act="${actId}">
+        <div class="sched-zone-dot" style="background:${zColor}"></div>
+        <span class="sched-zone-name">${z.name}</span>
+        <span class="prof-field-label" style="color:var(--heat)">▲</span>
+        <input type="number" min="50" max="90" step="1" value="${htsp}" data-field="htsp">
+        <span class="prof-field-label" style="color:var(--cool)">▼</span>
+        <input type="number" min="60" max="99" step="1" value="${clsp}" data-field="clsp">
+        <span class="prof-field-label">Fan</span>
+        <select data-field="fan">${fanOpts}</select>
       </div>`;
     }).join('');
-    actRows += `<div class="prof-row">
-      <div class="prof-act-label"><span class="sched-act ${ACT_CLASS[actId] || 'act-home'}" style="font-size:13px;font-weight:500">${actId}</span></div>
-      <div class="prof-zones">${zoneRows}</div>
+    cards += `<div class="prof-card">
+      <div class="prof-card-header"><span class="sched-act ${ACT_CLASS[actId] || 'act-home'}" style="font-size:12px">${actId}</span></div>
+      ${zoneLines}
     </div>`;
   });
 
   document.getElementById('profilesContent').innerHTML = `
-    <div class="refresh-row">
-      <div class="section-title">Comfort profiles</div>
-    </div>
-    <div style="display:flex;gap:12px;margin-bottom:14px;align-items:center">${legend}</div>
-    <div class="prof-wrap">
-      <div class="prof-grid">
-        ${actRows}
-      </div>
-      <div class="sched-action-bar" id="profActionBar">
-        <span class="sched-action-bar-label">● Unsaved changes</span>
-        <button class="btn btn-sm" onclick="cancelProfileChanges()">Discard</button>
-        <button class="btn btn-primary btn-sm" onclick="saveAllProfiles()">Save profiles</button>
-      </div>
+    <div class="refresh-row"><div class="section-title">Comfort profiles</div></div>
+    <div style="margin-bottom:12px">${legend}</div>
+    ${cards}
+    <div class="sched-action-bar" id="profActionBar">
+      <span class="sched-action-bar-label">● Unsaved changes</span>
+      <button class="btn btn-sm" onclick="cancelProfileChanges()">Discard</button>
+      <button class="btn btn-primary btn-sm" onclick="saveAllProfiles()">Save profiles</button>
     </div>
   `;
 
   // Attach change listeners
-  document.querySelectorAll('#panel-profiles [data-zone]').forEach(el => {
+  document.querySelectorAll('#panel-profiles .prof-zone-line input, #panel-profiles .prof-zone-line select').forEach(el => {
     el.addEventListener('change', () => setProfilesDirty(true));
     el.addEventListener('input', () => setProfilesDirty(true));
   });
@@ -1435,12 +1508,14 @@ function cancelProfileChanges() {
 async function saveAllProfiles() {
   try {
     for (const z of state.zones) {
-      const inputs = document.querySelectorAll(`#panel-profiles [data-zone="${z.id}"]`);
+      const lines = document.querySelectorAll(`#panel-profiles .prof-zone-line[data-zone="${z.id}"]`);
       const byAct = {};
-      inputs.forEach(el => {
-        const act = el.dataset.act;
-        if (!byAct[act]) byAct[act] = {};
-        byAct[act][el.dataset.field] = el.value;
+      lines.forEach(line => {
+        const actId = line.dataset.act;
+        if (!byAct[actId]) byAct[actId] = {};
+        line.querySelectorAll('[data-field]').forEach(el => {
+          byAct[actId][el.dataset.field] = el.value;
+        });
       });
       for (const [actId, fields] of Object.entries(byAct)) {
         await apiFetch(`/api/${z.id}/activity/${actId}?htsp=${fields.htsp}&clsp=${fields.clsp}&fan=${fields.fan}`, { method: 'PUT' });
