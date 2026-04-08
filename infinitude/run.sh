@@ -14,7 +14,15 @@ PASS_REQS=${PASS_REQS:-300}
 
 echo "[INFO] Starting Infinitude (pass_reqs=${PASS_REQS}, serial_tty=${SERIAL_TTY:-none})"
 
+# Persist state across container restarts: symlink /infinitude/state -> /data/infinitude/state
 mkdir -p /data/infinitude/state
+rm -rf /infinitude/state
+ln -sf /data/infinitude/state /infinitude/state
+
+# Write infinitude.json config (matches upstream entrypoint.sh)
+cat > /infinitude/infinitude.json <<EOF
+{"app_secret":"${APP_SECRET:-infinitude}","pass_reqs":${PASS_REQS},"serial_tty":"${SERIAL_TTY}","serial_socket":""}
+EOF
 
 # Test SSL/HTTPS connectivity at startup — results readable via /api/state/ssl-test.txt
 SSL_TEST="/data/infinitude/state/ssl-test.txt"
@@ -34,6 +42,6 @@ export MODE="Production"
 cd /infinitude
 
 exec ./infinitude daemon \
+    -m "$MODE" \
     -l "http://*:3000" \
-    --state /data/infinitude/state \
     ${SERIAL_TTY:+--serial_tty "$SERIAL_TTY"}
