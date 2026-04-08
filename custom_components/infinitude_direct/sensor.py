@@ -48,6 +48,10 @@ class InfinitudeHumidifierSensor(CoordinatorEntity, SensorEntity):
         )
 
     @property
+    def available(self) -> bool:
+        return super().available and not self.coordinator.data.get("stale", False)
+
+    @property
     def native_value(self) -> str | None:
         return self.coordinator.data.get("humid", "off")
 
@@ -83,6 +87,10 @@ class InfinitudeZoneSensor(CoordinatorEntity, SensorEntity):
             if z["id"] == self._zone_id:
                 return z
         return None
+
+    @property
+    def available(self) -> bool:
+        return super().available and not self.coordinator.data.get("stale", False)
 
 
 class InfinitudeDamperSensor(InfinitudeZoneSensor):

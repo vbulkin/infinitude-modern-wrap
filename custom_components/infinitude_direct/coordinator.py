@@ -26,6 +26,8 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         self.host = host.rstrip("/")
         self._session = async_get_clientsession(hass)
         self.api_lock = asyncio.Lock()
+        self._last_local_time: str | None = None
+        self._stale_count: int = 0
 
     async def _async_update_data(self) -> dict:
         try:
@@ -40,7 +42,19 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         except Exception as err:
             raise UpdateFailed(f"Error communicating with Infinitude: {err}") from err
 
-        return self._parse(systems, status)
+        parsed = self._parse(systems, status)
+        self._update_staleness(parsed.get("local_time"))
+        parsed["stale"] = self._stale_count >= 2
+        return parsed
+
+    def _update_staleness(self, local_time: str | None) -> None:
+        if not local_time:
+            return
+        if self._last_local_time and local_time == self._last_local_time:
+            self._stale_count += 1
+        else:
+            self._stale_count = 0
+        self._last_local_time = local_time
 
     def _parse(self, systems: dict, status: dict) -> dict:
         cfg = systems["system"][0]["config"][0]
@@ -95,11 +109,13 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
             )
 
         humid = self._v(st.get("humid")) or "off"
+        local_time = self._v(st.get("localTime"))
 
         return {
             "mode": mode,
             "oat": oat,
             "humid": humid,
+            "local_time": local_time,
             "zones": zones,
             "whole_house_hold": self._parse_whole_house(cfg),
         }

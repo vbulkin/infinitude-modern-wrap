@@ -83,6 +83,10 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
         return None
 
     @property
+    def available(self) -> bool:
+        return super().available and not self.coordinator.data.get("stale", False)
+
+    @property
     def supported_features(self) -> ClimateEntityFeature:
         features = ClimateEntityFeature.PRESET_MODE
         mode = self.coordinator.data.get("mode", "off")
