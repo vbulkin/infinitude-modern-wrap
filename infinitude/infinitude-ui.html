@@ -219,7 +219,7 @@
   .ce-acts { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
   .ce-act { padding: 2px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; border: 1px solid var(--border); transition: all 0.12s; }
   .ce-act:hover, .ce-act.selected { border-color: var(--accent); background: rgba(79,142,247,0.15); }
-  .ce-time { width: 80px; background: var(--bg3); border: 1px solid var(--border2); border-radius: 4px; color: var(--text); font-family: 'DM Mono', monospace; font-size: 12px; padding: 3px 6px; outline: none; }
+  .ce-time { width: 100px; background: var(--bg3); border: 1px solid var(--border2); border-radius: 4px; color: var(--text); font-family: 'DM Mono', monospace; font-size: 12px; padding: 3px 6px; outline: none; }
   .ce-time:focus { border-color: var(--accent); }
   .ce-footer { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
   .ce-zone-row { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
@@ -443,6 +443,7 @@
   <div id="ceSpHint" style="display:none"></div>
   <div class="ce-footer">
     <button class="btn btn-sm" onclick="closeCellEditor()">Cancel</button>
+    <button class="btn btn-sm" onclick="saveCellEdit(); copyCellToAllDays()" title="Apply this period to all days of the week">Apply to all days</button>
     <button class="btn btn-primary btn-sm" onclick="saveCellEdit()">Apply</button>
   </div>
 </div>
@@ -451,8 +452,9 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.27';
-const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+const APP_VERSION = '1.0.28';
+const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+const JS_DAY_MAP = [6,0,1,2,3,4,5]; // JS getDay() (0=Sun) -> DAYS index
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
 const SCHEDULE_ACTIVITIES = ['home','away','sleep','wake'];
 const ACT_CLASS = { home:'act-home', away:'act-away', sleep:'act-sleep', wake:'act-wake', manual:'act-manual' };
@@ -994,7 +996,7 @@ function renderSchedule() {
     return;
   }
 
-  const todayName = DAYS[new Date().getDay()];
+  const todayName = DAYS[JS_DAY_MAP[new Date().getDay()]];
 
   // Build dayMap per zone
   const zoneMaps = state.zones.map(z => {
@@ -1095,7 +1097,7 @@ function openCellEditor(el, dayName, periodIdx) {
       <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
         <div>
           <div style="font-size:10px;color:var(--text3);margin-bottom:3px">Time</div>
-          <input class="ce-time" type="text" id="ceTime${zIdx}" value="${time}" placeholder="06:00" maxlength="5">
+          <input class="ce-time" type="time" id="ceTime${zIdx}" value="${time}" step="900">
         </div>
         <div style="display:flex;align-items:center;gap:5px;margin-top:14px">
           <input type="checkbox" id="ceEnabled${zIdx}" ${enabled ? 'checked' : ''} style="cursor:pointer">
@@ -1172,6 +1174,41 @@ function saveCellEdit() {
   closeCellEditor();
   setScheduleDirty(true);
   toast('Applied — click Save schedule to send to thermostat', 'success');
+}
+
+function copyCellToAllDays() {
+  const { periodIdx } = cellEditCtx;
+  const sourceRow = document.querySelectorAll('.sched-row')[periodIdx];
+  if (!sourceRow) return;
+  const sourceCells = sourceRow.querySelectorAll('.sched-cell');
+  const sourceCell = cellEditCtx.el;
+  const sourceIdx = Array.from(sourceCells).indexOf(sourceCell);
+  if (sourceIdx < 0) return;
+
+  sourceCells.forEach((cell, di) => {
+    if (di === sourceIdx) return; // already applied by saveCellEdit
+    state.zones.forEach((z, zIdx) => {
+      const srcRow = sourceCell.querySelector(`[data-zone-idx="${zIdx}"]`);
+      const tgtRow = cell.querySelector(`[data-zone-idx="${zIdx}"]`);
+      if (!srcRow || !tgtRow || tgtRow.classList.contains('sched-disabled')) return;
+
+      const act = srcRow.dataset.act;
+      const time = srcRow.dataset.time;
+      const enabled = srcRow.dataset.enabled;
+
+      tgtRow.dataset.act = act;
+      tgtRow.dataset.time = time;
+      tgtRow.dataset.enabled = enabled;
+
+      const sp = getActivitySetpoints(z.id, act);
+      tgtRow.style.opacity = enabled !== 'off' ? '1' : '0.35';
+      tgtRow.querySelector('.sched-act').className = `sched-act ${ACT_CLASS[act] || 'act-home'}`;
+      tgtRow.querySelector('.sched-act').textContent = act;
+      tgtRow.querySelector('.sched-time-inline').textContent = enabled !== 'off' ? time : 'off';
+      tgtRow.querySelector('.sched-sp-badge').textContent = `${sp.htsp}/${sp.clsp}`;
+    });
+  });
+  toast('Copied to all days', 'success');
 }
 
 async function saveSchedule() {
