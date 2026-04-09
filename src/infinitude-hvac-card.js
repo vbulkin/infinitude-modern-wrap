@@ -4,7 +4,7 @@
  */
 import { LitElement, html, css, nothing } from 'lit';
 
-const CARD_VERSION = '1.0.74';
+const CARD_VERSION = '1.0.75';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const JS_DAY_MAP = [6,0,1,2,3,4,5];
 const ACTIVITIES = ['home','away','sleep','wake'];
@@ -52,6 +52,9 @@ class InfinitudeHVACCard extends LitElement {
     _holdActivity:  { state: true },
     _holdDuration:  { state: true },
     _holdCustom:    { state: true },
+    _holdHtsp:      { state: true },
+    _holdClsp:      { state: true },
+    _holdFan:       { state: true },
   };
 
   constructor() {
@@ -73,6 +76,9 @@ class InfinitudeHVACCard extends LitElement {
     this._holdActivity = 'home';
     this._holdDuration = '120';
     this._holdCustom = '';
+    this._holdHtsp = 68;
+    this._holdClsp = 76;
+    this._holdFan = 'auto';
   }
 
   static getConfigElement() { return document.createElement('div'); }
@@ -253,12 +259,30 @@ class InfinitudeHVACCard extends LitElement {
     if (!zoneId) return;
     const until = this._resolveUntil(this._holdDuration, this._holdCustom);
     if (until === null) return;
+    // If manual, apply user-adjusted temps and fan to the manual activity first
+    if (this._holdActivity === 'manual') {
+      this._svc('infinitude_direct', 'set_profile', {
+        zone_id: zoneId,
+        activity: 'manual',
+        htsp: this._holdHtsp,
+        clsp: this._holdClsp,
+        fan: this._holdFan,
+      });
+    }
     this._svc('infinitude_direct', 'set_hold', {
       zone_id: zoneId,
       activity: this._holdActivity,
       ...(until !== undefined && { until }),
     });
     this._holdOpen = null;
+  }
+
+  _initHoldManual(eid) {
+    const zid = this._zoneId(eid);
+    const act = (this._getProfilesData().find(z => z.id === zid)?.activities?.manual) || {};
+    this._holdHtsp = act.htsp ? Math.round(Number(act.htsp) || 68) : 68;
+    this._holdClsp = act.clsp ? Math.round(Number(act.clsp) || 76) : 76;
+    this._holdFan  = act.fan || 'auto';
   }
 
   _setWholeHouseHold() {
@@ -293,15 +317,9 @@ class InfinitudeHVACCard extends LitElement {
   _otmrRelative(otmr) {
     if (!otmr) return '';
     const [h, m] = otmr.split(':').map(Number);
-    const now = new Date();
-    const target = new Date();
-    target.setHours(h, m, 0, 0);
-    if (target <= now) target.setDate(target.getDate() + 1);
-    const diffMin = Math.round((target - now) / 60000);
-    if (diffMin < 60) return `${diffMin}m left`;
-    const hrs = Math.floor(diffMin / 60);
-    const mins = diffMin % 60;
-    return mins > 0 ? `${hrs}h ${mins}m left` : `${hrs}h left`;
+    const d = new Date();
+    d.setHours(h, m, 0, 0);
+    return 'until ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   }
 
   _zoneId(eid) {
@@ -717,9 +735,31 @@ class InfinitudeHVACCard extends LitElement {
               <div class="wh-pills">
                 ${HOLD_ACTIVITIES.map(act => html`
                   <div class="wh-pill ${this._holdActivity === act ? 'active' : ''}"
-                       @click=${() => { this._holdActivity = act; }}>${act}</div>`)}
+                       @click=${() => { this._holdActivity = act; if (act === 'manual') this._initHoldManual(eid); }}>${act}</div>`)}
               </div>
             </div>
+            ${this._holdActivity === 'manual' ? html`
+              <div class="hold-picker-row" style="gap:10px;flex-wrap:wrap">
+                <div class="sp-row">
+                  <button class="btn-adj" @click=${() => { this._holdHtsp = Math.max(50, this._holdHtsp - 1); }}>−</button>
+                  <span class="sp-val sp-heat">${this._holdHtsp}°</span>
+                  <button class="btn-adj" @click=${() => { this._holdHtsp = Math.min(90, this._holdHtsp + 1); }}>+</button>
+                </div>
+                <div class="sp-row">
+                  <button class="btn-adj" @click=${() => { this._holdClsp = Math.max(60, this._holdClsp - 1); }}>−</button>
+                  <span class="sp-val sp-cool">${this._holdClsp}°</span>
+                  <button class="btn-adj" @click=${() => { this._holdClsp = Math.min(99, this._holdClsp + 1); }}>+</button>
+                </div>
+                <div style="display:flex;align-items:center;gap:4px">
+                  <span style="font-size:10px;color:var(--secondary-text-color)">Fan</span>
+                  <select class="hold-dur-select" style="width:auto" .value=${this._holdFan} @change=${(e) => { this._holdFan = e.target.value; }}>
+                    <option value="auto">Auto</option>
+                    <option value="low">Low</option>
+                    <option value="med">Med</option>
+                    <option value="high">High</option>
+                  </select>
+                </div>
+              </div>` : nothing}
             <div class="hold-picker-row">
               <select class="hold-dur-select" @change=${(e) => { this._holdDuration = e.target.value; }}>
                 ${DURATION_OPTIONS.map(d => html`<option value=${d.v} ?selected=${d.v === this._holdDuration}>${d.l}</option>`)}
@@ -732,9 +772,9 @@ class InfinitudeHVACCard extends LitElement {
               <button class="btn btn-primary" style="font-size:11px;padding:4px 12px" @click=${() => this._setZoneHold(eid)}>Apply</button>
               <button class="btn" style="font-size:11px;padding:4px 10px" @click=${() => { this._holdOpen = null; }}>Cancel</button>
             </div>
-          </div>` : html`
+          </div>` : hasHold ? nothing : html`
           <div class="zone-actions">
-            <button class="btn" style="font-size:11px;padding:4px 12px" @click=${() => { this._holdActivity = preset !== '–' ? preset : 'home'; this._holdDuration = '120'; this._holdCustom = ''; this._holdOpen = eid; }}>Set hold</button>
+            <button class="btn" style="font-size:11px;padding:4px 12px" @click=${() => { this._holdActivity = preset !== '–' ? preset : 'home'; this._holdDuration = '120'; this._holdCustom = ''; if (this._holdActivity === 'manual') this._initHoldManual(eid); this._holdOpen = eid; }}>Set hold</button>
           </div>`}
       </div>`;
   }
