@@ -30,6 +30,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    # Also install card here in case async_setup was skipped
+    await _install_card(hass)
     coordinator = InfinitudeDataCoordinator(hass, entry.data[CONF_HOST])
     await coordinator.async_config_entry_first_refresh()
 
