@@ -4,11 +4,20 @@
  */
 import { LitElement, html, css, nothing } from 'lit';
 
-const CARD_VERSION = '1.0.71';
+const CARD_VERSION = '1.0.72';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const JS_DAY_MAP = [6,0,1,2,3,4,5];
 const ACTIVITIES = ['home','away','sleep','wake'];
+const HOLD_ACTIVITIES = ['home','away','sleep','wake','manual'];
 const FAN_OPTIONS = ['off','low','med','high'];
+const DURATION_OPTIONS = [
+  { v: '60', l: '1 hour' },
+  { v: '120', l: '2 hours' },
+  { v: '240', l: '4 hours' },
+  { v: 'forever', l: 'Indefinite' },
+  { v: 'custom', l: 'Custom time…' },
+];
+const CIRCLED = ['①','②','③','④','⑤','⑥','⑦','⑧'];
 const TIME_OPTIONS = (() => {
   const opts = [];
   for (let h = 0; h < 24; h++) {
@@ -37,6 +46,12 @@ class InfinitudeHVACCard extends LitElement {
     _pendingTemps:  { state: true },
     _whHoldOpen:    { state: true },
     _whHoldActivity:{ state: true },
+    _whHoldDuration:{ state: true },
+    _whHoldCustom:  { state: true },
+    _holdOpen:      { state: true },
+    _holdActivity:  { state: true },
+    _holdDuration:  { state: true },
+    _holdCustom:    { state: true },
   };
 
   constructor() {
@@ -52,6 +67,12 @@ class InfinitudeHVACCard extends LitElement {
     this._pendingTemps = {};  // reactive: { [eid]: { heat, cool } } for optimistic display
     this._whHoldOpen = false;
     this._whHoldActivity = 'home';
+    this._whHoldDuration = '120';
+    this._whHoldCustom = '';
+    this._holdOpen = null;    // entity_id of zone with hold picker open, or null
+    this._holdActivity = 'home';
+    this._holdDuration = '120';
+    this._holdCustom = '';
   }
 
   static getConfigElement() { return document.createElement('div'); }
@@ -80,7 +101,9 @@ class InfinitudeHVACCard extends LitElement {
       const all = await this.hass.connection.sendMessagePromise({
         type: 'config/entity_registry/list',
       });
-      this._registryEntities = all.filter(e => e.platform === 'infinitude_direct');
+      this._registryEntities = Array.isArray(all)
+        ? all.filter(e => e.platform === 'infinitude_direct')
+        : [];
     } catch (e) {
       console.warn('Failed to load entity registry', e);
       this._registryEntities = [];
@@ -127,13 +150,13 @@ class InfinitudeHVACCard extends LitElement {
   _getScheduleData() {
     const { system } = this._findEntities();
     if (!system.info) return {};
-    try { return JSON.parse(this._at(system.info, 'schedule') || '{}'); } catch { return {}; }
+    try { return JSON.parse(this._at(system.info, 'schedule') || '{}'); } catch (e) { console.warn('Failed to parse schedule data', e); return {}; }
   }
 
   _getProfilesData() {
     const { system } = this._findEntities();
     if (!system.info) return [];
-    try { return JSON.parse(this._at(system.info, 'profiles') || '[]'); } catch { return []; }
+    try { return JSON.parse(this._at(system.info, 'profiles') || '[]'); } catch (e) { console.warn('Failed to parse profiles data', e); return []; }
   }
 
   // ── Service calls ──────────────────────────────────────────────────────
@@ -148,7 +171,7 @@ class InfinitudeHVACCard extends LitElement {
   // ── Optimistic temperature adjustment with debounce ────────────────────
   _adjustTemp(eid, delta, sp) {
     const s = this._st(eid); if (!s) return;
-    const a = s.attributes;
+    const a = s.attributes || {};
     const adj = this._tempAdj[eid] || (this._tempAdj[eid] = {});
 
     // Read from pending value if active, else from entity state
@@ -216,7 +239,6 @@ class InfinitudeHVACCard extends LitElement {
 
   // ── Hold controls ──────────────────────────────────────────────────────
   _cancelHold(eid) {
-    // Extract zone_id from entity's unique_id ("infinitude_{zone_id}")
     const reg = (this._registryEntities || []).find(e => e.entity_id === eid);
     if (!reg) return;
     const zoneId = (reg.unique_id || '').replace(/^infinitude_/, '');
@@ -224,9 +246,67 @@ class InfinitudeHVACCard extends LitElement {
     this._svc('infinitude_direct', 'cancel_hold', { zone_id: zoneId });
   }
 
-  _setWholeHouseHold(opt) {
-    const { selects } = this._findEntities();
-    if (selects.wholeHouse) this._svc('select', 'select_option', { entity_id: selects.wholeHouse, option: opt });
+  _setZoneHold(eid) {
+    const reg = (this._registryEntities || []).find(e => e.entity_id === eid);
+    if (!reg) return;
+    const zoneId = (reg.unique_id || '').replace(/^infinitude_/, '');
+    if (!zoneId) return;
+    const until = this._resolveUntil(this._holdDuration, this._holdCustom);
+    if (until === null) return;
+    this._svc('infinitude_direct', 'set_hold', {
+      zone_id: zoneId,
+      activity: this._holdActivity,
+      ...(until !== undefined && { until }),
+    });
+    this._holdOpen = null;
+  }
+
+  _setWholeHouseHold() {
+    const until = this._resolveUntil(this._whHoldDuration, this._whHoldCustom);
+    if (until === null) return;
+    this._svc('infinitude_direct', 'set_whole_house_hold', {
+      activity: this._whHoldActivity,
+      ...(until !== undefined && { until }),
+    });
+    this._whHoldOpen = false;
+  }
+
+  _cancelWholeHouseHold() {
+    this._svc('infinitude_direct', 'cancel_whole_house_hold', {});
+  }
+
+  _resolveUntil(duration, custom) {
+    if (duration === 'forever') return 'forever';
+    if (duration === 'custom') {
+      if (!custom) return null; // don't submit without a time
+      return custom;
+    }
+    // duration is minutes — compute HH:MM
+    const now = new Date();
+    now.setMinutes(now.getMinutes() + parseInt(duration));
+    const m = Math.round(now.getMinutes() / 15) * 15;
+    now.setMinutes(m, 0, 0);
+    if (m === 60) { now.setMinutes(0); now.setHours(now.getHours() + 1); }
+    return `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+  }
+
+  _otmrRelative(otmr) {
+    if (!otmr) return '';
+    const [h, m] = otmr.split(':').map(Number);
+    const now = new Date();
+    const target = new Date();
+    target.setHours(h, m, 0, 0);
+    if (target <= now) target.setDate(target.getDate() + 1);
+    const diffMin = Math.round((target - now) / 60000);
+    if (diffMin < 60) return `${diffMin}m left`;
+    const hrs = Math.floor(diffMin / 60);
+    const mins = diffMin % 60;
+    return mins > 0 ? `${hrs}h ${mins}m left` : `${hrs}h left`;
+  }
+
+  _zoneId(eid) {
+    const reg = (this._registryEntities || []).find(e => e.entity_id === eid);
+    return reg ? (reg.unique_id || '').replace(/^infinitude_/, '') : '';
   }
 
   // ── Styles ─────────────────────────────────────────────────────────────
@@ -327,6 +407,21 @@ class InfinitudeHVACCard extends LitElement {
       background: rgba(251,191,36,0.06); border-top: 1px solid rgba(251,191,36,0.15); font-size: 11px;
     }
     .hold-label { color: var(--warning-color, #fbbf24); font-weight: 500; flex: 1; }
+    .zone-hold-picker {
+      padding: 8px 14px; border-top: 1px solid var(--divider-color);
+      display: flex; flex-direction: column; gap: 8px; font-size: 11px;
+    }
+    .hold-picker-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .hold-dur-select {
+      background: var(--card-background-color); border: 1px solid var(--divider-color);
+      border-radius: 4px; color: var(--primary-text-color); font-size: 11px; padding: 4px 6px; outline: none;
+    }
+    .hold-dur-select:focus { border-color: var(--primary-color); }
+    .hold-time-input {
+      background: var(--card-background-color); border: 1px solid var(--divider-color);
+      border-radius: 4px; color: var(--primary-text-color); font-size: 11px; padding: 4px 6px; outline: none;
+    }
+    .hold-time-input:focus { border-color: var(--primary-color); }
     .sp-pending { animation: sp-pulse 0.8s ease-in-out infinite; color: var(--warning-color, #fbbf24) !important; }
     @keyframes sp-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
     .zone-actions { padding: 0 14px 10px; display: flex; gap: 8px; }
@@ -422,6 +517,11 @@ class InfinitudeHVACCard extends LitElement {
     .prof-fan-label { font-size: 10px; color: var(--secondary-text-color); }
     .copy-bar { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; color: var(--secondary-text-color); }
     .section-title { font-size: 11px; font-weight: 600; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; }
+    .zone-legend { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; font-size: 12px; color: var(--secondary-text-color); }
+    .legend-item { display: flex; align-items: center; gap: 4px; }
+    .legend-num { font-weight: 700; color: var(--primary-text-color); font-size: 14px; }
+    .sched-name-compact { width: 28px; min-width: 28px; font-size: 14px; text-align: center; }
+    .prof-name-compact { width: 28px; min-width: 28px; font-size: 14px; text-align: center; }
   `;
 
   // ── Render ─────────────────────────────────────────────────────────────
@@ -471,6 +571,7 @@ class InfinitudeHVACCard extends LitElement {
     const humid = this._st(system.humidifier)?.state === 'on';
     const whS = this._st(selects.wholeHouse);
     const whHold = whS && whS.state !== 'off';
+    const whOtmr = climates.length ? this._at(climates[0], 'whole_house_hold_until') : null;
     const rh = climates.length ? this._at(climates[0], 'current_humidity') : null;
 
     return html`
@@ -486,9 +587,9 @@ class InfinitudeHVACCard extends LitElement {
         ${opStatus ? html`<span>${opStatus}</span>` : nothing}
       </div>
       ${whHold ? html`
-        <div class="wh-hold" @click=${() => this._setWholeHouseHold('off')}>
+        <div class="wh-hold" @click=${() => this._cancelWholeHouseHold()}>
           <ha-icon icon="mdi:home-lock" style="--mdc-icon-size:16px"></ha-icon>
-          <span>Whole house: <strong>${whS.state}</strong></span>
+          <span>Whole house: <strong>${whS.state}</strong>${whOtmr ? html` · <span style="opacity:0.85">${this._otmrRelative(whOtmr)}</span>` : nothing}</span>
           <span style="margin-left:auto;opacity:0.7">Tap to cancel</span>
         </div>` : html`
         ${this._whHoldOpen ? html`
@@ -499,7 +600,13 @@ class InfinitudeHVACCard extends LitElement {
                 <div class="wh-pill ${this._whHoldActivity === a ? 'active' : ''}"
                      @click=${() => { this._whHoldActivity = a; }}>${a}</div>`)}
             </div>
-            <button class="btn btn-primary" style="font-size:11px;padding:4px 12px" @click=${() => { this._setWholeHouseHold(this._whHoldActivity); this._whHoldOpen = false; }}>Apply</button>
+            <select class="hold-dur-select" @change=${(e) => { this._whHoldDuration = e.target.value; }}>
+              ${DURATION_OPTIONS.map(d => html`<option value=${d.v} ?selected=${d.v === this._whHoldDuration}>${d.l}</option>`)}
+            </select>
+            ${this._whHoldDuration === 'custom' ? html`
+              <input type="time" class="hold-time-input" step="900" .value=${this._whHoldCustom}
+                     @change=${(e) => { this._whHoldCustom = e.target.value; }}>` : nothing}
+            <button class="btn btn-primary" style="font-size:11px;padding:4px 12px" @click=${() => this._setWholeHouseHold()}>Apply</button>
             <button class="btn" style="font-size:11px;padding:4px 10px" @click=${() => { this._whHoldOpen = false; }}>Cancel</button>
           </div>` : html`
           <div style="width:100%;margin-top:4px">
@@ -554,6 +661,8 @@ class InfinitudeHVACCard extends LitElement {
     const isRange = mode === 'heat_cool';
     const hasHold = !!a.hold_active;
     const holdActivity = a.hold_activity || preset;
+    const holdUntil = a.hold_until;
+    const holdIsOpen = this._holdOpen === eid;
 
     // Optimistic temps: use pending values if the user is adjusting
     const pending = this._pendingTemps[eid];
@@ -599,11 +708,33 @@ class InfinitudeHVACCard extends LitElement {
         </div>
         ${hasHold ? html`
           <div class="zone-hold">
-            <span class="hold-label">Hold: ${holdActivity}</span>
+            <span class="hold-label">Hold: ${holdActivity}${holdUntil ? ` · ${this._otmrRelative(holdUntil)}` : ''}</span>
             <button class="btn" style="font-size:11px;padding:3px 10px;color:var(--error-color,#f87171)" @click=${() => this._cancelHold(eid)}>Cancel</button>
+          </div>` : nothing}
+        ${holdIsOpen ? html`
+          <div class="zone-hold-picker">
+            <div class="hold-picker-row">
+              <div class="wh-pills">
+                ${HOLD_ACTIVITIES.map(act => html`
+                  <div class="wh-pill ${this._holdActivity === act ? 'active' : ''}"
+                       @click=${() => { this._holdActivity = act; }}>${act}</div>`)}
+              </div>
+            </div>
+            <div class="hold-picker-row">
+              <select class="hold-dur-select" @change=${(e) => { this._holdDuration = e.target.value; }}>
+                ${DURATION_OPTIONS.map(d => html`<option value=${d.v} ?selected=${d.v === this._holdDuration}>${d.l}</option>`)}
+              </select>
+              ${this._holdDuration === 'custom' ? html`
+                <input type="time" class="hold-time-input" step="900" .value=${this._holdCustom}
+                       @change=${(e) => { this._holdCustom = e.target.value; }}>` : nothing}
+            </div>
+            <div class="hold-picker-row">
+              <button class="btn btn-primary" style="font-size:11px;padding:4px 12px" @click=${() => this._setZoneHold(eid)}>Apply</button>
+              <button class="btn" style="font-size:11px;padding:4px 10px" @click=${() => { this._holdOpen = null; }}>Cancel</button>
+            </div>
           </div>` : html`
           <div class="zone-actions">
-            <button class="btn" style="font-size:11px;padding:4px 12px" @click=${() => this._setPreset(eid, preset !== '–' ? preset : 'home')}>Set hold</button>
+            <button class="btn" style="font-size:11px;padding:4px 12px" @click=${() => { this._holdActivity = preset !== '–' ? preset : 'home'; this._holdDuration = '120'; this._holdCustom = ''; this._holdOpen = eid; }}>Set hold</button>
           </div>`}
       </div>`;
   }
@@ -620,7 +751,7 @@ class InfinitudeHVACCard extends LitElement {
       </div>`;
 
     const today = DAYS[JS_DAY_MAP[new Date().getDay()]];
-    const zn = {}; for (const z of profiles) zn[z.id] = z.name;
+    const zn = {}; const zi = {}; for (let i = 0; i < profiles.length; i++) { zn[profiles[i].id] = profiles[i].name; zi[profiles[i].id] = i; }
     let maxP = 0;
     for (const zid of zids) maxP = Math.max(maxP, (schedule[zid]?.[this._schedDay] || []).length);
     if (!maxP) maxP = 5;
@@ -628,12 +759,13 @@ class InfinitudeHVACCard extends LitElement {
 
     return html`
       <div class="section-title">Schedule</div>
+      ${zids.length > 1 ? html`<div class="zone-legend">${zids.map((zid, i) => html`<span class="legend-item"><span class="legend-num">${CIRCLED[i] || i+1}</span> ${zn[zid] || `Zone ${zid}`}</span>`)}</div>` : nothing}
       <div class="sched-day-tabs">
         ${DAYS.map(d => html`
           <div class="day-tab ${d === this._schedDay ? 'active' : ''} ${d === today && d !== this._schedDay ? 'today' : ''}"
                @click=${() => { this._schedDay = d; }}>${d.slice(0,3)}</div>`)}
       </div>
-      ${Array.from({length: maxP}, (_, pi) => this._periodCard(pi, zids, schedule, profiles, zn))}
+      ${Array.from({length: maxP}, (_, pi) => this._periodCard(pi, zids, schedule, profiles, zn, zi))}
       <div class="copy-bar">
         <span>Copy ${this._schedDay.slice(0,3)} →</span>
         <select class="sched-select" @change=${(e) => this._copySched(e)}>
@@ -650,7 +782,8 @@ class InfinitudeHVACCard extends LitElement {
         </div>` : nothing}`;
   }
 
-  _periodCard(pi, zids, schedule, profiles, zn) {
+  _periodCard(pi, zids, schedule, profiles, zn, zi) {
+    const multiZone = zids.length > 1;
     return html`
       <div class="period-card">
         <div class="period-header">Period ${pi + 1}</div>
@@ -664,12 +797,13 @@ class InfinitudeHVACCard extends LitElement {
           const enabled = ed?.enabled ?? period.enabled;
           const zp = profiles.find(z => z.id === zid);
           const ap = zp?.activities?.[act];
-          const htsp = ap?.htsp ? Math.round(parseFloat(ap.htsp)) : '–';
-          const clsp = ap?.clsp ? Math.round(parseFloat(ap.clsp)) : '–';
+          const htsp = ap?.htsp ? Math.round(Number(ap.htsp) || 0) : '–';
+          const clsp = ap?.clsp ? Math.round(Number(ap.clsp) || 0) : '–';
+          const label = multiZone ? (CIRCLED[zi[zid]] ?? zid) : (zn[zid] || `Zone ${zid}`);
 
           return html`
             <div class="sched-line ${enabled ? '' : 'disabled'}">
-              <span class="sched-name">${zn[zid] || `Zone ${zid}`}</span>
+              <span class="sched-name ${multiZone ? 'sched-name-compact' : ''}">${label}</span>
               <select class="sched-select" @change=${(e) => this._schedEdit(zid, pi, 'act', e.target.value)}>
                 ${ACTIVITIES.map(a => html`<option value=${a} ?selected=${a === act}>${a}</option>`)}
               </select>
@@ -750,22 +884,25 @@ class InfinitudeHVACCard extends LitElement {
         No profile data available. Waiting for thermostat data…
       </div>`;
 
+    const multiZone = profiles.length > 1;
     const hasEdits = Object.keys(this._profileEdits).length > 0;
     return html`
       <div class="section-title">Comfort Profiles</div>
+      ${multiZone ? html`<div class="zone-legend">${profiles.map((z, i) => html`<span class="legend-item"><span class="legend-num">${CIRCLED[i] || i+1}</span> ${z.name}</span>`)}</div>` : nothing}
       ${ACTIVITIES.map(actId => html`
         <div class="prof-card">
           <div class="prof-header">${actId}</div>
-          ${profiles.map(zone => {
+          ${profiles.map((zone, idx) => {
             const act = zone.activities?.[actId] || {};
             const ek = `${zone.id}_${actId}`;
             const ed = this._profileEdits[ek];
-            const htsp = ed?.htsp ?? (act.htsp ? Math.round(parseFloat(act.htsp)) : 68);
-            const clsp = ed?.clsp ?? (act.clsp ? Math.round(parseFloat(act.clsp)) : 76);
+            const htsp = ed?.htsp ?? (act.htsp ? Math.round(Number(act.htsp) || 68) : 68);
+            const clsp = ed?.clsp ?? (act.clsp ? Math.round(Number(act.clsp) || 76) : 76);
             const fan  = ed?.fan  ?? act.fan ?? 'low';
+            const label = multiZone ? (CIRCLED[idx] || idx+1) : zone.name;
             return html`
               <div class="prof-line">
-                <span class="prof-name">${zone.name}</span>
+                <span class="prof-name ${multiZone ? 'prof-name-compact' : ''}">${label}</span>
                 <div class="sp-row">
                   <button class="btn-adj" @click=${() => this._profAdj(zone.id, actId, 'htsp', -1)}>−</button>
                   <span class="sp-val sp-heat">${htsp}°</span>
@@ -797,8 +934,8 @@ class InfinitudeHVACCard extends LitElement {
     const ek = `${zid}_${actId}`;
     const act = (this._getProfilesData().find(z => z.id === zid)?.activities?.[actId]) || {};
     const prev = this._profileEdits[ek] || {};
-    const curH = prev.htsp ?? (act.htsp ? Math.round(parseFloat(act.htsp)) : 68);
-    const curC = prev.clsp ?? (act.clsp ? Math.round(parseFloat(act.clsp)) : 76);
+    const curH = prev.htsp ?? (act.htsp ? Math.round(Number(act.htsp) || 68) : 68);
+    const curC = prev.clsp ?? (act.clsp ? Math.round(Number(act.clsp) || 76) : 76);
     const min = field === 'htsp' ? 50 : 60, max = field === 'htsp' ? 90 : 99;
     const cur = field === 'htsp' ? curH : curC;
     this._profileEdits = { ...this._profileEdits, [ek]: {
@@ -815,8 +952,8 @@ class InfinitudeHVACCard extends LitElement {
     const prev = this._profileEdits[ek] || {};
     this._profileEdits = { ...this._profileEdits, [ek]: {
       zone_id: zid, activity: actId,
-      htsp: prev.htsp ?? (act.htsp ? Math.round(parseFloat(act.htsp)) : 68),
-      clsp: prev.clsp ?? (act.clsp ? Math.round(parseFloat(act.clsp)) : 76),
+      htsp: prev.htsp ?? (act.htsp ? Math.round(Number(act.htsp) || 68) : 68),
+      clsp: prev.clsp ?? (act.clsp ? Math.round(Number(act.clsp) || 76) : 76),
       fan,
     }};
   }

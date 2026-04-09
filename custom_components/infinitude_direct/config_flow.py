@@ -33,7 +33,7 @@ class InfinitudeDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if "status" not in data:
                     errors["base"] = "invalid_response"
                 else:
-                    await self.async_set_unique_id(DOMAIN)
+                    await self.async_set_unique_id(f"{DOMAIN}_{host}")
                     self._abort_if_unique_id_configured()
                     return self.async_create_entry(
                         title="Infinitude",

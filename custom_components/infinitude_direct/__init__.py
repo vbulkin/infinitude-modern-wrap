@@ -53,6 +53,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
+        if not hass.data[DOMAIN]:
+            _unregister_services(hass)
     return unload_ok
 
 
@@ -101,8 +103,8 @@ async def _ensure_lovelace_resource(hass: HomeAssistant) -> None:
         if not lovelace:
             return
 
-        resources = lovelace.resources
-        if not hasattr(resources, "store") or resources.store is None:
+        resources = getattr(lovelace, 'resources', None)
+        if resources is None or not hasattr(resources, "store") or resources.store is None:
             return  # YAML mode
 
         if not resources.loaded:
@@ -113,17 +115,17 @@ async def _ensure_lovelace_resource(hass: HomeAssistant) -> None:
         manifest = Path(__file__).parent / "manifest.json"
         version = "0"
         if manifest.is_file():
-            import json as _json
-            version = _json.loads(manifest.read_text()).get("version", "0")
+            version = json.loads(manifest.read_text()).get("version", "0")
         card_url = f"{CARD_URL_BASE}?v={version}"
 
         # Check if already registered
         for item in resources.async_items():
             if CARD_URL_BASE in item.get("url", ""):
                 # Update URL if version changed
-                if item.get("url") != card_url:
+                item_id = item.get("id")
+                if item.get("url") != card_url and item_id:
                     await resources.async_update_item(
-                        item["id"], {"url": card_url}
+                        item_id, {"url": card_url}
                     )
                     _LOGGER.info("Updated Lovelace resource to: %s", card_url)
                 return
@@ -183,8 +185,8 @@ async def _remove_lovelace_resource(hass: HomeAssistant) -> None:
         if not lovelace:
             return
 
-        resources = lovelace.resources
-        if not hasattr(resources, "store") or resources.store is None:
+        resources = getattr(lovelace, 'resources', None)
+        if resources is None or not hasattr(resources, "store") or resources.store is None:
             return
 
         if not resources.loaded:
@@ -193,8 +195,10 @@ async def _remove_lovelace_resource(hass: HomeAssistant) -> None:
 
         for item in resources.async_items():
             if "infinitude_direct" in item.get("url", ""):
-                await resources.async_delete_item(item["id"])
-                _LOGGER.info("Removed Lovelace resource: %s", item["url"])
+                item_id = item.get("id")
+                if item_id:
+                    await resources.async_delete_item(item_id)
+                    _LOGGER.info("Removed Lovelace resource: %s", item.get("url"))
                 return
     except Exception:
         _LOGGER.exception("Failed to remove Lovelace resource")
@@ -210,8 +214,10 @@ async def _remove_dashboard(hass: HomeAssistant) -> None:
         dashboards = lovelace.dashboards_collection
         for db in dashboards.async_items():
             if db.get("url_path") == DASHBOARD_URL_PATH:
-                await dashboards.async_delete_item(db["id"])
-                _LOGGER.info("Removed HVAC dashboard")
+                db_id = db.get("id")
+                if db_id:
+                    await dashboards.async_delete_item(db_id)
+                    _LOGGER.info("Removed HVAC dashboard")
                 return
     except Exception:
         _LOGGER.exception("Failed to remove HVAC dashboard")
@@ -254,12 +260,17 @@ def _register_services(hass: HomeAssistant) -> None:
         zone_id = call.data["zone_id"]
         schedule_data = call.data["schedule"]
         if isinstance(schedule_data, str):
-            schedule_data = json.loads(schedule_data)
+            try:
+                schedule_data = json.loads(schedule_data)
+            except json.JSONDecodeError:
+                _LOGGER.error("Invalid JSON in schedule data")
+                return
         for entry_id, coordinator in hass.data[DOMAIN].items():
             if isinstance(coordinator, InfinitudeDataCoordinator):
                 await coordinator.async_save_schedule(zone_id, schedule_data)
                 await coordinator.async_request_refresh()
                 return
+        _LOGGER.warning("save_schedule: no active coordinator found")
 
     async def handle_set_profile(call: ServiceCall) -> None:
         zone_id = call.data["zone_id"]
@@ -278,6 +289,7 @@ def _register_services(hass: HomeAssistant) -> None:
                     )
                 await coordinator.async_request_refresh()
                 return
+        _LOGGER.warning("set_profile: no active coordinator found")
 
     hass.services.async_register(
         DOMAIN,
@@ -309,6 +321,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 await coordinator.async_cancel_hold(zone_id)
                 await coordinator.async_request_refresh()
                 return
+        _LOGGER.warning("cancel_hold: no active coordinator found")
 
     hass.services.async_register(
         DOMAIN,
@@ -319,18 +332,69 @@ def _register_services(hass: HomeAssistant) -> None:
         }),
     )
 
+    async def handle_set_hold(call: ServiceCall) -> None:
+        zone_id = call.data["zone_id"]
+        activity = call.data["activity"]
+        until = call.data.get("until")
+        for entry_id, coordinator in hass.data[DOMAIN].items():
+            if isinstance(coordinator, InfinitudeDataCoordinator):
+                await coordinator.async_set_hold(zone_id, activity, until)
+                await coordinator.async_request_refresh()
+                return
+        _LOGGER.warning("set_hold: no active coordinator found")
+
+    hass.services.async_register(
+        DOMAIN,
+        "set_hold",
+        handle_set_hold,
+        schema=vol.Schema({
+            vol.Required("zone_id"): cv.string,
+            vol.Required("activity"): cv.string,
+            vol.Optional("until"): cv.string,
+        }),
+    )
+
+    async def handle_set_whole_house_hold(call: ServiceCall) -> None:
+        activity = call.data["activity"]
+        until = call.data.get("until")
+        for entry_id, coordinator in hass.data[DOMAIN].items():
+            if isinstance(coordinator, InfinitudeDataCoordinator):
+                await coordinator.async_set_whole_house_hold(activity, until)
+                await coordinator.async_request_refresh()
+                return
+        _LOGGER.warning("set_whole_house_hold: no active coordinator found")
+
+    hass.services.async_register(
+        DOMAIN,
+        "set_whole_house_hold",
+        handle_set_whole_house_hold,
+        schema=vol.Schema({
+            vol.Required("activity"): cv.string,
+            vol.Optional("until"): cv.string,
+        }),
+    )
+
+    async def handle_cancel_whole_house_hold(call: ServiceCall) -> None:
+        for entry_id, coordinator in hass.data[DOMAIN].items():
+            if isinstance(coordinator, InfinitudeDataCoordinator):
+                await coordinator.async_cancel_whole_house_hold()
+                await coordinator.async_request_refresh()
+                return
+        _LOGGER.warning("cancel_whole_house_hold: no active coordinator found")
+
+    hass.services.async_register(
+        DOMAIN,
+        "cancel_whole_house_hold",
+        handle_cancel_whole_house_hold,
+        schema=vol.Schema({}),
+    )
+
 
 def _unregister_services(hass: HomeAssistant) -> None:
     """Remove all custom services."""
-    for svc in ("save_schedule", "set_profile", "cancel_hold"):
-        hass.services.async_remove(DOMAIN, svc)
-
-
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
-        # Unregister services if no more entries
-        if not hass.data[DOMAIN]:
-            _unregister_services(hass)
-    return unload_ok
+    for svc in (
+        "save_schedule", "set_profile", "cancel_hold",
+        "set_hold", "set_whole_house_hold", "cancel_whole_house_hold",
+    ):
+        if hass.services.has_service(DOMAIN, svc):
+            hass.services.async_remove(DOMAIN, svc)

@@ -57,14 +57,24 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         self._last_local_time = local_time
 
     def _parse(self, systems: dict, status: dict) -> dict:
-        cfg = systems["system"][0]["config"][0]
-        st = status["status"][0]
+        try:
+            cfg = systems["system"][0]["config"][0]
+        except (KeyError, IndexError, TypeError) as err:
+            raise UpdateFailed(f"Invalid systems.json structure: {err}") from err
+        try:
+            st = status["status"][0]
+        except (KeyError, IndexError, TypeError) as err:
+            raise UpdateFailed(f"Invalid status.json structure: {err}") from err
 
         mode = self._v(cfg.get("mode")) or "off"
         oat = self._v(st.get("oat"))
 
-        cfg_zones = self._force_array(cfg["zones"][0]["zone"])
-        status_zones = self._force_array(st["zones"][0]["zone"])
+        cfg_zones = self._force_array(
+            cfg.get("zones", [{}])[0].get("zone") if cfg.get("zones") else []
+        )
+        status_zones = self._force_array(
+            st.get("zones", [{}])[0].get("zone") if st.get("zones") else []
+        )
 
         zone_map = {}
         for cz in cfg_zones:
@@ -78,9 +88,10 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
             cz = zone_map.get(sz["id"], {})
 
             activities = {}
-            if "activities" in cz and cz["activities"]:
+            cz_activities = cz.get("activities")
+            if cz_activities:
                 for act in self._force_array(
-                    cz["activities"][0].get("activity", [])
+                    cz_activities[0].get("activity", []) if cz_activities else []
                 ):
                     act_id = act.get("id")
                     if act_id:
@@ -102,6 +113,7 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
                     "currentActivity": self._v(sz.get("currentActivity")) or "home",
                     "hold": self._v(cz.get("hold")) == "on",
                     "holdActivity": self._v(cz.get("holdActivity")),
+                    "otmr": self._v(cz.get("otmr")),
                     "fan": self._v(sz.get("fan")),
                     "damper": self._v(sz.get("damperposition")),
                     "activities": activities,
@@ -150,7 +162,7 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         wh = cfg.get("wholeHouse")
         if not wh:
             return {"hold": False, "holdActivity": None, "otmr": None}
-        wh = wh[0] if isinstance(wh, list) else wh
+        wh = (wh[0] if wh else {}) if isinstance(wh, list) else wh
         return {
             "hold": self._v(wh.get("hold")) == "on",
             "holdActivity": self._v(wh.get("holdActivity")),
@@ -191,34 +203,38 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         return target.strftime("%H:%M")
 
     async def async_set_mode(self, mode: str) -> None:
-        await self._session.put(
+        resp = await self._session.put(
             f"{self.host}/api/config",
             params={"mode": mode, "set_changes": "true"},
         )
+        resp.raise_for_status()
 
     async def async_set_hold(
         self, zone_id: str, activity: str, until: str | None = None
     ) -> None:
         if until is None:
             until = self.otmr_from_now(2)
-        await self._session.put(
+        resp = await self._session.put(
             f"{self.host}/api/{zone_id}/hold",
             params={"activity": activity, "until": until},
         )
+        resp.raise_for_status()
 
     async def async_cancel_hold(self, zone_id: str) -> None:
-        await self._session.put(
+        resp = await self._session.put(
             f"{self.host}/api/{zone_id}/hold",
             params={"hold": "off"},
         )
+        resp.raise_for_status()
 
     async def async_set_activity_temps(
         self, zone_id: str, activity: str, htsp: int, clsp: int
     ) -> None:
-        await self._session.put(
+        resp = await self._session.put(
             f"{self.host}/api/{zone_id}/activity/{activity}",
             params={"htsp": str(htsp), "clsp": str(clsp)},
         )
+        resp.raise_for_status()
 
     async def async_set_whole_house_hold(
         self, activity: str, otmr: str | None = None
@@ -230,28 +246,32 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         }
         if otmr:
             params["otmr"] = otmr
-        await self._session.put(
+        resp = await self._session.put(
             f"{self.host}/api/config/wholeHouse",
             params=params,
         )
+        resp.raise_for_status()
 
     async def async_cancel_whole_house_hold(self) -> None:
-        await self._session.put(
+        resp = await self._session.put(
             f"{self.host}/api/config/wholeHouse",
             params={"hold": "off", "set_changes": "true"},
         )
+        resp.raise_for_status()
 
     async def async_save_schedule(self, zone_id: str, program: list) -> None:
         """Save full schedule for a zone. program = list of {id, period[]}."""
-        await self._session.put(
+        resp = await self._session.put(
             f"{self.host}/api/config/zones/zone/{zone_id}/program",
             json={"day": program},
         )
+        resp.raise_for_status()
 
     async def async_set_activity_fan(
         self, zone_id: str, activity: str, fan: str
     ) -> None:
-        await self._session.put(
+        resp = await self._session.put(
             f"{self.host}/api/{zone_id}/activity/{activity}",
             params={"fan": fan},
         )
+        resp.raise_for_status()

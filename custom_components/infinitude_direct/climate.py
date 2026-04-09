@@ -182,6 +182,8 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
             attrs["hold_active"] = z.get("hold", False)
             if z.get("holdActivity"):
                 attrs["hold_activity"] = z["holdActivity"]
+            if z.get("otmr"):
+                attrs["hold_until"] = z["otmr"]
         oat = self.coordinator.data.get("oat")
         if oat:
             attrs["outdoor_temperature"] = float(oat)
@@ -189,6 +191,8 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
         attrs["whole_house_hold_active"] = wh.get("hold", False)
         if wh.get("holdActivity"):
             attrs["whole_house_hold_activity"] = wh["holdActivity"]
+        if wh.get("otmr"):
+            attrs["whole_house_hold_until"] = wh["otmr"]
         return attrs
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
@@ -200,6 +204,7 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
     async def async_set_temperature(self, **kwargs) -> None:
         z = self._zone_data
         if not z:
+            _LOGGER.warning("set_temperature: zone %s data not available", self._zone_id)
             return
 
         current_htsp = int(float(z.get("htsp") or 68))
@@ -208,18 +213,18 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
         mode = self.coordinator.data.get("mode", "off")
 
         if "target_temp_low" in kwargs and "target_temp_high" in kwargs:
-            new_htsp = int(kwargs["target_temp_low"])
-            new_clsp = int(kwargs["target_temp_high"])
+            new_htsp = max(50, min(90, int(kwargs["target_temp_low"])))
+            new_clsp = max(60, min(99, int(kwargs["target_temp_high"])))
         elif "temperature" in kwargs:
             temp = int(kwargs["temperature"])
             if mode == "heat":
-                new_htsp = temp
+                new_htsp = max(50, min(90, temp))
                 new_clsp = current_clsp
             elif mode == "cool":
                 new_htsp = current_htsp
-                new_clsp = temp
+                new_clsp = max(60, min(99, temp))
             else:
-                new_htsp = temp
+                new_htsp = max(50, min(90, temp))
                 new_clsp = current_clsp
         else:
             return
@@ -240,3 +245,5 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
                     self._zone_id, preset_mode, "forever"
                 )
             await self.coordinator.async_request_refresh()
+        else:
+            _LOGGER.warning("set_preset_mode: unknown preset '%s'", preset_mode)

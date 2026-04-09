@@ -66,3 +66,69 @@ set_profile:
             - low
             - med
             - high
+
+cancel_hold:
+  name: Cancel hold
+  description: Cancel an active hold for a zone, returning it to the scheduled program.
+  fields:
+    zone_id:
+      name: Zone ID
+      description: The zone identifier (e.g. "1").
+      required: true
+      selector:
+        text:
+
+set_hold:
+  name: Set hold
+  description: Set a hold for a zone with a specific activity and optional duration.
+  fields:
+    zone_id:
+      name: Zone ID
+      description: The zone identifier (e.g. "1").
+      required: true
+      selector:
+        text:
+    activity:
+      name: Activity
+      description: Activity to hold (home, away, sleep, wake, manual).
+      required: true
+      selector:
+        select:
+          options:
+            - home
+            - away
+            - sleep
+            - wake
+            - manual
+    until:
+      name: Hold until
+      description: "Hold expiration: HH:MM time or 'forever'. Defaults to 2 hours from now."
+      required: false
+      selector:
+        text:
+
+set_whole_house_hold:
+  name: Set whole house hold
+  description: Set a whole-house hold with a specific activity and optional duration.
+  fields:
+    activity:
+      name: Activity
+      description: Activity to hold (home, away, sleep, wake).
+      required: true
+      selector:
+        select:
+          options:
+            - home
+            - away
+            - sleep
+            - wake
+    until:
+      name: Hold until
+      description: "Hold expiration: HH:MM time or 'forever'. Omit for indefinite hold."
+      required: false
+      selector:
+        text:
+
+cancel_whole_house_hold:
+  name: Cancel whole house hold
+  description: Cancel the active whole-house hold.

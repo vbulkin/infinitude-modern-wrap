@@ -121,7 +121,11 @@ class InfinitudeDamperSensor(InfinitudeZoneSensor):
     def native_value(self) -> int | None:
         z = self._zone_data
         if z and z.get("damper"):
-            return round(int(z["damper"]) / 15 * 100)
+            try:
+                return round(int(z["damper"]) / 15 * 100)
+            except (ValueError, TypeError):
+                _LOGGER.warning("Invalid damper value '%s' for zone %s", z["damper"], self._zone_id)
+                return None
         return None
 
 
@@ -176,6 +180,7 @@ class InfinitudeOATSensor(CoordinatorEntity, SensorEntity):
             try:
                 return float(oat)
             except (ValueError, TypeError):
+                _LOGGER.warning("Invalid outdoor temperature value: '%s'", oat)
                 return None
         return None
 
