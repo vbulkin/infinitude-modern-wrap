@@ -1,167 +1,6 @@
-/**
- * Infinitude HVAC Card — LitElement Lovelace card for Carrier/Bryant Infinity thermostats.
- * Zones, schedule editing, and comfort profile management.
- */
-import { LitElement, html, css, nothing } from 'https://cdn.jsdelivr.net/npm/lit@3/+esm';
-
-const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
-const JS_DAY_MAP = [6,0,1,2,3,4,5];
-const ACTIVITIES = ['home','away','sleep','wake'];
-const FAN_OPTIONS = ['off','low','med','high'];
-const TIME_OPTIONS = (() => {
-  const opts = [];
-  for (let h = 0; h < 24; h++) {
-    for (let m = 0; m < 60; m += 15) {
-      const v = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
-      const l = h === 0 ? `12:${String(m).padStart(2,'0')} AM`
-        : h < 12 ? `${h}:${String(m).padStart(2,'0')} AM`
-        : h === 12 ? `12:${String(m).padStart(2,'0')} PM`
-        : `${h-12}:${String(m).padStart(2,'0')} PM`;
-      opts.push({ v, l });
-    }
-  }
-  return opts;
-})();
-
-class InfinitudeHVACCard extends LitElement {
-
-  static properties = {
-    hass:           { attribute: false },
-    _config:        { state: true },
-    _tab:           { state: true },
-    _schedDay:      { state: true },
-    _schedEdits:    { state: true },
-    _profileEdits:  { state: true },
-    _registryLoaded:{ state: true },
-  };
-
-  constructor() {
-    super();
-    this._config = {};
-    this._tab = 'zones';
-    this._schedDay = DAYS[JS_DAY_MAP[new Date().getDay()]];
-    this._schedEdits = {};
-    this._profileEdits = {};
-    this._registryEntities = null;
-    this._registryLoaded = false;
-  }
-
-  static getConfigElement() { return document.createElement('div'); }
-  static getStubConfig() { return {}; }
-  setConfig(c) { this._config = c; }
-  getCardSize() { return 8; }
-
-  /* Only re-render when OUR entities change, not every HA state update. */
-  shouldUpdate(changed) {
-    if (!changed.has('hass')) return true;
-    if (!this._registryLoaded) return true;
-    const prev = changed.get('hass');
-    if (!prev) return true;
-    const reg = this._registryEntities || [];
-    return reg.some(e => this.hass.states[e.entity_id] !== prev.states[e.entity_id]);
-  }
-
-  updated(changed) {
-    if (changed.has('hass') && this.hass && !this._registryLoaded) {
-      this._loadRegistry();
-    }
-  }
-
-  async _loadRegistry() {
-    try {
-      const all = await this.hass.connection.sendMessagePromise({
-        type: 'config/entity_registry/list',
-      });
-      this._registryEntities = all.filter(e => e.platform === 'infinitude_direct');
-    } catch (e) {
-      console.warn('Failed to load entity registry', e);
-      this._registryEntities = [];
-    }
-    this._registryLoaded = true;
-  }
-
-  // ── Entity discovery (registry-based) ──────────────────────────────────
-  _findEntities() {
-    if (!this.hass) return { climates: [], sensors: {}, selects: {}, system: {} };
-    const reg = this._registryEntities || [];
-    const st = this.hass.states;
-    const climates = [];
-    const sensors = { damper: {}, fan: {} };
-    const selects = {};
-    const system = {};
-
-    if (this._config.climate_entities) {
-      for (const eid of this._config.climate_entities) if (st[eid]) climates.push(eid);
-    }
-    for (const entry of reg) {
-      const eid = entry.entity_id;
-      if (!st[eid]) continue;
-      const dom = eid.split('.')[0];
-      const uid = entry.unique_id || '';
-      if (dom === 'climate') { if (!this._config.climate_entities) climates.push(eid); }
-      else if (dom === 'select') { selects.wholeHouse = eid; }
-      else if (dom === 'sensor') {
-        if (uid.includes('damper'))       sensors.damper[eid] = st[eid];
-        else if (uid.includes('fan'))     sensors.fan[eid] = st[eid];
-        else if (uid.includes('humidifier'))  system.humidifier = eid;
-        else if (uid.includes('oat'))         system.oat = eid;
-        else if (uid.includes('op_status'))   system.opStatus = eid;
-        else if (uid.includes('system_info')) system.info = eid;
-      }
-    }
-    climates.sort();
-    return { climates, sensors, selects, system };
-  }
-
-  _st(eid) { return eid ? this.hass?.states[eid] ?? null : null; }
-  _at(eid, a) { return this._st(eid)?.attributes?.[a]; }
-
-  _getScheduleData() {
-    const { system } = this._findEntities();
-    if (!system.info) return {};
-    try { return JSON.parse(this._at(system.info, 'schedule') || '{}'); } catch { return {}; }
-  }
-
-  _getProfilesData() {
-    const { system } = this._findEntities();
-    if (!system.info) return [];
-    try { return JSON.parse(this._at(system.info, 'profiles') || '[]'); } catch { return []; }
-  }
-
-  // ── Service calls ──────────────────────────────────────────────────────
-  async _svc(domain, service, data) {
-    try { await this.hass.callService(domain, service, data); }
-    catch (e) { console.error(`${domain}.${service} failed`, e); }
-  }
-
-  _setHvacMode(eid, mode) { this._svc('climate', 'set_hvac_mode', { entity_id: eid, hvac_mode: mode }); }
-  _setPreset(eid, preset) { this._svc('climate', 'set_preset_mode', { entity_id: eid, preset_mode: preset }); }
-
-  _setTemp(eid, temp, mode) {
-    const d = { entity_id: eid };
-    if (mode === 'heat_cool') { d.target_temp_low = temp.low; d.target_temp_high = temp.high; }
-    else { d.temperature = temp; }
-    this._svc('climate', 'set_temperature', d);
-  }
-
-  _adjustTemp(eid, delta, sp) {
-    const s = this._st(eid); if (!s) return;
-    const a = s.attributes;
-    if (s.state === 'heat_cool') {
-      const lo = a.target_temp_low || 68, hi = a.target_temp_high || 76;
-      this._setTemp(eid, sp === 'heat' ? { low: lo + delta, high: hi } : { low: lo, high: hi + delta }, 'heat_cool');
-    } else {
-      this._setTemp(eid, (a.temperature || 72) + delta, s.state);
-    }
-  }
-
-  _setWholeHouseHold(opt) {
-    const { selects } = this._findEntities();
-    if (selects.wholeHouse) this._svc('select', 'select_option', { entity_id: selects.wholeHouse, option: opt });
-  }
-
-  // ── Styles ─────────────────────────────────────────────────────────────
-  static styles = css`
+var N=globalThis,j=N.ShadowRoot&&(N.ShadyCSS===void 0||N.ShadyCSS.nativeShadow)&&"adoptedStyleSheets"in Document.prototype&&"replace"in CSSStyleSheet.prototype,F=Symbol(),ot=new WeakMap,z=class{constructor(t,e,s){if(this._$cssResult$=!0,s!==F)throw Error("CSSResult is not constructable. Use `unsafeCSS` or `css` instead.");this.cssText=t,this.t=e}get styleSheet(){let t=this.o,e=this.t;if(j&&t===void 0){let s=e!==void 0&&e.length===1;s&&(t=ot.get(e)),t===void 0&&((this.o=t=new CSSStyleSheet).replaceSync(this.cssText),s&&ot.set(e,t))}return t}toString(){return this.cssText}},it=n=>new z(typeof n=="string"?n:n+"",void 0,F),B=(n,...t)=>{let e=n.length===1?n[0]:t.reduce((s,o,r)=>s+(i=>{if(i._$cssResult$===!0)return i.cssText;if(typeof i=="number")return i;throw Error("Value passed to 'css' function must be a 'css' function result: "+i+". Use 'unsafeCSS' to pass non-literal values, but take care to ensure page security.")})(o)+n[r+1],n[0]);return new z(e,n,F)},rt=(n,t)=>{if(j)n.adoptedStyleSheets=t.map(e=>e instanceof CSSStyleSheet?e:e.styleSheet);else for(let e of t){let s=document.createElement("style"),o=N.litNonce;o!==void 0&&s.setAttribute("nonce",o),s.textContent=e.cssText,n.appendChild(s)}},W=j?n=>n:n=>n instanceof CSSStyleSheet?(t=>{let e="";for(let s of t.cssRules)e+=s.cssText;return it(e)})(n):n;var{is:xt,defineProperty:At,getOwnPropertyDescriptor:wt,getOwnPropertyNames:Et,getOwnPropertySymbols:St,getPrototypeOf:kt}=Object,R=globalThis,at=R.trustedTypes,Ct=at?at.emptyScript:"",zt=R.reactiveElementPolyfillSupport,P=(n,t)=>n,I={toAttribute(n,t){switch(t){case Boolean:n=n?Ct:null;break;case Object:case Array:n=n==null?n:JSON.stringify(n)}return n},fromAttribute(n,t){let e=n;switch(t){case Boolean:e=n!==null;break;case Number:e=n===null?null:Number(n);break;case Object:case Array:try{e=JSON.parse(n)}catch{e=null}}return e}},ct=(n,t)=>!xt(n,t),nt={attribute:!0,type:String,converter:I,reflect:!1,useDefault:!1,hasChanged:ct};Symbol.metadata??=Symbol("metadata"),R.litPropertyMetadata??=new WeakMap;var v=class extends HTMLElement{static addInitializer(t){this._$Ei(),(this.l??=[]).push(t)}static get observedAttributes(){return this.finalize(),this._$Eh&&[...this._$Eh.keys()]}static createProperty(t,e=nt){if(e.state&&(e.attribute=!1),this._$Ei(),this.prototype.hasOwnProperty(t)&&((e=Object.create(e)).wrapped=!0),this.elementProperties.set(t,e),!e.noAccessor){let s=Symbol(),o=this.getPropertyDescriptor(t,s,e);o!==void 0&&At(this.prototype,t,o)}}static getPropertyDescriptor(t,e,s){let{get:o,set:r}=wt(this.prototype,t)??{get(){return this[e]},set(i){this[e]=i}};return{get:o,set(i){let c=o?.call(this);r?.call(this,i),this.requestUpdate(t,c,s)},configurable:!0,enumerable:!0}}static getPropertyOptions(t){return this.elementProperties.get(t)??nt}static _$Ei(){if(this.hasOwnProperty(P("elementProperties")))return;let t=kt(this);t.finalize(),t.l!==void 0&&(this.l=[...t.l]),this.elementProperties=new Map(t.elementProperties)}static finalize(){if(this.hasOwnProperty(P("finalized")))return;if(this.finalized=!0,this._$Ei(),this.hasOwnProperty(P("properties"))){let e=this.properties,s=[...Et(e),...St(e)];for(let o of s)this.createProperty(o,e[o])}let t=this[Symbol.metadata];if(t!==null){let e=litPropertyMetadata.get(t);if(e!==void 0)for(let[s,o]of e)this.elementProperties.set(s,o)}this._$Eh=new Map;for(let[e,s]of this.elementProperties){let o=this._$Eu(e,s);o!==void 0&&this._$Eh.set(o,e)}this.elementStyles=this.finalizeStyles(this.styles)}static finalizeStyles(t){let e=[];if(Array.isArray(t)){let s=new Set(t.flat(1/0).reverse());for(let o of s)e.unshift(W(o))}else t!==void 0&&e.push(W(t));return e}static _$Eu(t,e){let s=e.attribute;return s===!1?void 0:typeof s=="string"?s:typeof t=="string"?t.toLowerCase():void 0}constructor(){super(),this._$Ep=void 0,this.isUpdatePending=!1,this.hasUpdated=!1,this._$Em=null,this._$Ev()}_$Ev(){this._$ES=new Promise(t=>this.enableUpdating=t),this._$AL=new Map,this._$E_(),this.requestUpdate(),this.constructor.l?.forEach(t=>t(this))}addController(t){(this._$EO??=new Set).add(t),this.renderRoot!==void 0&&this.isConnected&&t.hostConnected?.()}removeController(t){this._$EO?.delete(t)}_$E_(){let t=new Map,e=this.constructor.elementProperties;for(let s of e.keys())this.hasOwnProperty(s)&&(t.set(s,this[s]),delete this[s]);t.size>0&&(this._$Ep=t)}createRenderRoot(){let t=this.shadowRoot??this.attachShadow(this.constructor.shadowRootOptions);return rt(t,this.constructor.elementStyles),t}connectedCallback(){this.renderRoot??=this.createRenderRoot(),this.enableUpdating(!0),this._$EO?.forEach(t=>t.hostConnected?.())}enableUpdating(t){}disconnectedCallback(){this._$EO?.forEach(t=>t.hostDisconnected?.())}attributeChangedCallback(t,e,s){this._$AK(t,s)}_$ET(t,e){let s=this.constructor.elementProperties.get(t),o=this.constructor._$Eu(t,s);if(o!==void 0&&s.reflect===!0){let r=(s.converter?.toAttribute!==void 0?s.converter:I).toAttribute(e,s.type);this._$Em=t,r==null?this.removeAttribute(o):this.setAttribute(o,r),this._$Em=null}}_$AK(t,e){let s=this.constructor,o=s._$Eh.get(t);if(o!==void 0&&this._$Em!==o){let r=s.getPropertyOptions(o),i=typeof r.converter=="function"?{fromAttribute:r.converter}:r.converter?.fromAttribute!==void 0?r.converter:I;this._$Em=o;let c=i.fromAttribute(e,r.type);this[o]=c??this._$Ej?.get(o)??c,this._$Em=null}}requestUpdate(t,e,s,o=!1,r){if(t!==void 0){let i=this.constructor;if(o===!1&&(r=this[t]),s??=i.getPropertyOptions(t),!((s.hasChanged??ct)(r,e)||s.useDefault&&s.reflect&&r===this._$Ej?.get(t)&&!this.hasAttribute(i._$Eu(t,s))))return;this.C(t,e,s)}this.isUpdatePending===!1&&(this._$ES=this._$EP())}C(t,e,{useDefault:s,reflect:o,wrapped:r},i){s&&!(this._$Ej??=new Map).has(t)&&(this._$Ej.set(t,i??e??this[t]),r!==!0||i!==void 0)||(this._$AL.has(t)||(this.hasUpdated||s||(e=void 0),this._$AL.set(t,e)),o===!0&&this._$Em!==t&&(this._$Eq??=new Set).add(t))}async _$EP(){this.isUpdatePending=!0;try{await this._$ES}catch(e){Promise.reject(e)}let t=this.scheduleUpdate();return t!=null&&await t,!this.isUpdatePending}scheduleUpdate(){return this.performUpdate()}performUpdate(){if(!this.isUpdatePending)return;if(!this.hasUpdated){if(this.renderRoot??=this.createRenderRoot(),this._$Ep){for(let[o,r]of this._$Ep)this[o]=r;this._$Ep=void 0}let s=this.constructor.elementProperties;if(s.size>0)for(let[o,r]of s){let{wrapped:i}=r,c=this[o];i!==!0||this._$AL.has(o)||c===void 0||this.C(o,void 0,r,c)}}let t=!1,e=this._$AL;try{t=this.shouldUpdate(e),t?(this.willUpdate(e),this._$EO?.forEach(s=>s.hostUpdate?.()),this.update(e)):this._$EM()}catch(s){throw t=!1,this._$EM(),s}t&&this._$AE(e)}willUpdate(t){}_$AE(t){this._$EO?.forEach(e=>e.hostUpdated?.()),this.hasUpdated||(this.hasUpdated=!0,this.firstUpdated(t)),this.updated(t)}_$EM(){this._$AL=new Map,this.isUpdatePending=!1}get updateComplete(){return this.getUpdateComplete()}getUpdateComplete(){return this._$ES}shouldUpdate(t){return!0}update(t){this._$Eq&&=this._$Eq.forEach(e=>this._$ET(e,this[e])),this._$EM()}updated(t){}firstUpdated(t){}};v.elementStyles=[],v.shadowRootOptions={mode:"open"},v[P("elementProperties")]=new Map,v[P("finalized")]=new Map,zt?.({ReactiveElement:v}),(R.reactiveElementVersions??=[]).push("2.1.2");var G=globalThis,lt=n=>n,L=G.trustedTypes,dt=L?L.createPolicy("lit-html",{createHTML:n=>n}):void 0,mt="$lit$",y=`lit$${Math.random().toFixed(9).slice(2)}$`,_t="?"+y,Pt=`<${_t}>`,w=document,H=()=>w.createComment(""),O=n=>n===null||typeof n!="object"&&typeof n!="function",Q=Array.isArray,Mt=n=>Q(n)||typeof n?.[Symbol.iterator]=="function",V=`[ 	
+\f\r]`,M=/<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g,pt=/-->/g,ht=/>/g,x=RegExp(`>|${V}(?:([^\\s"'>=/]+)(${V}*=${V}*(?:[^ 	
+\f\r"'\`<>=]|("|')|))|$)`,"g"),ut=/'/g,ft=/"/g,vt=/^(?:script|style|textarea|title)$/i,X=n=>(t,...e)=>({_$litType$:n,strings:t,values:e}),u=X(1),Ft=X(2),Bt=X(3),E=Symbol.for("lit-noChange"),h=Symbol.for("lit-nothing"),gt=new WeakMap,A=w.createTreeWalker(w,129);function bt(n,t){if(!Q(n)||!n.hasOwnProperty("raw"))throw Error("invalid template strings array");return dt!==void 0?dt.createHTML(t):t}var Ht=(n,t)=>{let e=n.length-1,s=[],o,r=t===2?"<svg>":t===3?"<math>":"",i=M;for(let c=0;c<e;c++){let a=n[c],l,p,d=-1,f=0;for(;f<a.length&&(i.lastIndex=f,p=i.exec(a),p!==null);)f=i.lastIndex,i===M?p[1]==="!--"?i=pt:p[1]!==void 0?i=ht:p[2]!==void 0?(vt.test(p[2])&&(o=RegExp("</"+p[2],"g")),i=x):p[3]!==void 0&&(i=x):i===x?p[0]===">"?(i=o??M,d=-1):p[1]===void 0?d=-2:(d=i.lastIndex-p[2].length,l=p[1],i=p[3]===void 0?x:p[3]==='"'?ft:ut):i===ft||i===ut?i=x:i===pt||i===ht?i=M:(i=x,o=void 0);let g=i===x&&n[c+1].startsWith("/>")?" ":"";r+=i===M?a+Pt:d>=0?(s.push(l),a.slice(0,d)+mt+a.slice(d)+y+g):a+y+(d===-2?c:g)}return[bt(n,r+(n[e]||"<?>")+(t===2?"</svg>":t===3?"</math>":"")),s]},D=class n{constructor({strings:t,_$litType$:e},s){let o;this.parts=[];let r=0,i=0,c=t.length-1,a=this.parts,[l,p]=Ht(t,e);if(this.el=n.createElement(l,s),A.currentNode=this.el.content,e===2||e===3){let d=this.el.content.firstChild;d.replaceWith(...d.childNodes)}for(;(o=A.nextNode())!==null&&a.length<c;){if(o.nodeType===1){if(o.hasAttributes())for(let d of o.getAttributeNames())if(d.endsWith(mt)){let f=p[i++],g=o.getAttribute(d).split(y),_=/([.?@])?(.*)/.exec(f);a.push({type:1,index:r,name:_[2],strings:g,ctor:_[1]==="."?J:_[1]==="?"?K:_[1]==="@"?Y:k}),o.removeAttribute(d)}else d.startsWith(y)&&(a.push({type:6,index:r}),o.removeAttribute(d));if(vt.test(o.tagName)){let d=o.textContent.split(y),f=d.length-1;if(f>0){o.textContent=L?L.emptyScript:"";for(let g=0;g<f;g++)o.append(d[g],H()),A.nextNode(),a.push({type:2,index:++r});o.append(d[f],H())}}}else if(o.nodeType===8)if(o.data===_t)a.push({type:2,index:r});else{let d=-1;for(;(d=o.data.indexOf(y,d+1))!==-1;)a.push({type:7,index:r}),d+=y.length-1}r++}}static createElement(t,e){let s=w.createElement("template");return s.innerHTML=t,s}};function S(n,t,e=n,s){if(t===E)return t;let o=s!==void 0?e._$Co?.[s]:e._$Cl,r=O(t)?void 0:t._$litDirective$;return o?.constructor!==r&&(o?._$AO?.(!1),r===void 0?o=void 0:(o=new r(n),o._$AT(n,e,s)),s!==void 0?(e._$Co??=[])[s]=o:e._$Cl=o),o!==void 0&&(t=S(n,o._$AS(n,t.values),o,s)),t}var q=class{constructor(t,e){this._$AV=[],this._$AN=void 0,this._$AD=t,this._$AM=e}get parentNode(){return this._$AM.parentNode}get _$AU(){return this._$AM._$AU}u(t){let{el:{content:e},parts:s}=this._$AD,o=(t?.creationScope??w).importNode(e,!0);A.currentNode=o;let r=A.nextNode(),i=0,c=0,a=s[0];for(;a!==void 0;){if(i===a.index){let l;a.type===2?l=new T(r,r.nextSibling,this,t):a.type===1?l=new a.ctor(r,a.name,a.strings,this,t):a.type===6&&(l=new Z(r,this,t)),this._$AV.push(l),a=s[++c]}i!==a?.index&&(r=A.nextNode(),i++)}return A.currentNode=w,o}p(t){let e=0;for(let s of this._$AV)s!==void 0&&(s.strings!==void 0?(s._$AI(t,s,e),e+=s.strings.length-2):s._$AI(t[e])),e++}},T=class n{get _$AU(){return this._$AM?._$AU??this._$Cv}constructor(t,e,s,o){this.type=2,this._$AH=h,this._$AN=void 0,this._$AA=t,this._$AB=e,this._$AM=s,this.options=o,this._$Cv=o?.isConnected??!0}get parentNode(){let t=this._$AA.parentNode,e=this._$AM;return e!==void 0&&t?.nodeType===11&&(t=e.parentNode),t}get startNode(){return this._$AA}get endNode(){return this._$AB}_$AI(t,e=this){t=S(this,t,e),O(t)?t===h||t==null||t===""?(this._$AH!==h&&this._$AR(),this._$AH=h):t!==this._$AH&&t!==E&&this._(t):t._$litType$!==void 0?this.$(t):t.nodeType!==void 0?this.T(t):Mt(t)?this.k(t):this._(t)}O(t){return this._$AA.parentNode.insertBefore(t,this._$AB)}T(t){this._$AH!==t&&(this._$AR(),this._$AH=this.O(t))}_(t){this._$AH!==h&&O(this._$AH)?this._$AA.nextSibling.data=t:this.T(w.createTextNode(t)),this._$AH=t}$(t){let{values:e,_$litType$:s}=t,o=typeof s=="number"?this._$AC(t):(s.el===void 0&&(s.el=D.createElement(bt(s.h,s.h[0]),this.options)),s);if(this._$AH?._$AD===o)this._$AH.p(e);else{let r=new q(o,this),i=r.u(this.options);r.p(e),this.T(i),this._$AH=r}}_$AC(t){let e=gt.get(t.strings);return e===void 0&&gt.set(t.strings,e=new D(t)),e}k(t){Q(this._$AH)||(this._$AH=[],this._$AR());let e=this._$AH,s,o=0;for(let r of t)o===e.length?e.push(s=new n(this.O(H()),this.O(H()),this,this.options)):s=e[o],s._$AI(r),o++;o<e.length&&(this._$AR(s&&s._$AB.nextSibling,o),e.length=o)}_$AR(t=this._$AA.nextSibling,e){for(this._$AP?.(!1,!0,e);t!==this._$AB;){let s=lt(t).nextSibling;lt(t).remove(),t=s}}setConnected(t){this._$AM===void 0&&(this._$Cv=t,this._$AP?.(t))}},k=class{get tagName(){return this.element.tagName}get _$AU(){return this._$AM._$AU}constructor(t,e,s,o,r){this.type=1,this._$AH=h,this._$AN=void 0,this.element=t,this.name=e,this._$AM=o,this.options=r,s.length>2||s[0]!==""||s[1]!==""?(this._$AH=Array(s.length-1).fill(new String),this.strings=s):this._$AH=h}_$AI(t,e=this,s,o){let r=this.strings,i=!1;if(r===void 0)t=S(this,t,e,0),i=!O(t)||t!==this._$AH&&t!==E,i&&(this._$AH=t);else{let c=t,a,l;for(t=r[0],a=0;a<r.length-1;a++)l=S(this,c[s+a],e,a),l===E&&(l=this._$AH[a]),i||=!O(l)||l!==this._$AH[a],l===h?t=h:t!==h&&(t+=(l??"")+r[a+1]),this._$AH[a]=l}i&&!o&&this.j(t)}j(t){t===h?this.element.removeAttribute(this.name):this.element.setAttribute(this.name,t??"")}},J=class extends k{constructor(){super(...arguments),this.type=3}j(t){this.element[this.name]=t===h?void 0:t}},K=class extends k{constructor(){super(...arguments),this.type=4}j(t){this.element.toggleAttribute(this.name,!!t&&t!==h)}},Y=class extends k{constructor(t,e,s,o,r){super(t,e,s,o,r),this.type=5}_$AI(t,e=this){if((t=S(this,t,e,0)??h)===E)return;let s=this._$AH,o=t===h&&s!==h||t.capture!==s.capture||t.once!==s.once||t.passive!==s.passive,r=t!==h&&(s===h||o);o&&this.element.removeEventListener(this.name,this,s),r&&this.element.addEventListener(this.name,this,t),this._$AH=t}handleEvent(t){typeof this._$AH=="function"?this._$AH.call(this.options?.host??this.element,t):this._$AH.handleEvent(t)}},Z=class{constructor(t,e,s){this.element=t,this.type=6,this._$AN=void 0,this._$AM=e,this.options=s}get _$AU(){return this._$AM._$AU}_$AI(t){S(this,t)}};var Ot=G.litHtmlPolyfillSupport;Ot?.(D,T),(G.litHtmlVersions??=[]).push("3.3.2");var yt=(n,t,e)=>{let s=e?.renderBefore??t,o=s._$litPart$;if(o===void 0){let r=e?.renderBefore??null;s._$litPart$=o=new T(t.insertBefore(H(),r),r,void 0,e??{})}return o._$AI(n),o};var tt=globalThis,$=class extends v{constructor(){super(...arguments),this.renderOptions={host:this},this._$Do=void 0}createRenderRoot(){let t=super.createRenderRoot();return this.renderOptions.renderBefore??=t.firstChild,t}update(t){let e=this.render();this.hasUpdated||(this.renderOptions.isConnected=this.isConnected),super.update(t),this._$Do=yt(e,this.renderRoot,this.renderOptions)}connectedCallback(){super.connectedCallback(),this._$Do?.setConnected(!0)}disconnectedCallback(){super.disconnectedCallback(),this._$Do?.setConnected(!1)}render(){return E}};$._$litElement$=!0,$.finalized=!0,tt.litElementHydrateSupport?.({LitElement:$});var Dt=tt.litElementPolyfillSupport;Dt?.({LitElement:$});(tt.litElementVersions??=[]).push("4.2.2");var C=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"],$t=[6,0,1,2,3,4,5],et=["home","away","sleep","wake"],Tt=["off","low","med","high"],Ut=(()=>{let n=[];for(let t=0;t<24;t++)for(let e=0;e<60;e+=15){let s=`${String(t).padStart(2,"0")}:${String(e).padStart(2,"0")}`,o=t===0?`12:${String(e).padStart(2,"0")} AM`:t<12?`${t}:${String(e).padStart(2,"0")} AM`:t===12?`12:${String(e).padStart(2,"0")} PM`:`${t-12}:${String(e).padStart(2,"0")} PM`;n.push({v:s,l:o})}return n})(),st=class extends ${static properties={hass:{attribute:!1},_config:{state:!0},_tab:{state:!0},_schedDay:{state:!0},_schedEdits:{state:!0},_profileEdits:{state:!0},_registryLoaded:{state:!0}};constructor(){super(),this._config={},this._tab="zones",this._schedDay=C[$t[new Date().getDay()]],this._schedEdits={},this._profileEdits={},this._registryEntities=null,this._registryLoaded=!1}static getConfigElement(){return document.createElement("div")}static getStubConfig(){return{}}setConfig(t){this._config=t}getCardSize(){return 8}shouldUpdate(t){if(!t.has("hass")||!this._registryLoaded)return!0;let e=t.get("hass");return e?(this._registryEntities||[]).some(o=>this.hass.states[o.entity_id]!==e.states[o.entity_id]):!0}updated(t){t.has("hass")&&this.hass&&!this._registryLoaded&&this._loadRegistry()}async _loadRegistry(){try{let t=await this.hass.connection.sendMessagePromise({type:"config/entity_registry/list"});this._registryEntities=t.filter(e=>e.platform==="infinitude_direct")}catch(t){console.warn("Failed to load entity registry",t),this._registryEntities=[]}this._registryLoaded=!0}_findEntities(){if(!this.hass)return{climates:[],sensors:{},selects:{},system:{}};let t=this._registryEntities||[],e=this.hass.states,s=[],o={damper:{},fan:{}},r={},i={};if(this._config.climate_entities)for(let c of this._config.climate_entities)e[c]&&s.push(c);for(let c of t){let a=c.entity_id;if(!e[a])continue;let l=a.split(".")[0],p=c.unique_id||"";l==="climate"?this._config.climate_entities||s.push(a):l==="select"?r.wholeHouse=a:l==="sensor"&&(p.includes("damper")?o.damper[a]=e[a]:p.includes("fan")?o.fan[a]=e[a]:p.includes("humidifier")?i.humidifier=a:p.includes("oat")?i.oat=a:p.includes("op_status")?i.opStatus=a:p.includes("system_info")&&(i.info=a))}return s.sort(),{climates:s,sensors:o,selects:r,system:i}}_st(t){return t?this.hass?.states[t]??null:null}_at(t,e){return this._st(t)?.attributes?.[e]}_getScheduleData(){let{system:t}=this._findEntities();if(!t.info)return{};try{return JSON.parse(this._at(t.info,"schedule")||"{}")}catch{return{}}}_getProfilesData(){let{system:t}=this._findEntities();if(!t.info)return[];try{return JSON.parse(this._at(t.info,"profiles")||"[]")}catch{return[]}}async _svc(t,e,s){try{await this.hass.callService(t,e,s)}catch(o){console.error(`${t}.${e} failed`,o)}}_setHvacMode(t,e){this._svc("climate","set_hvac_mode",{entity_id:t,hvac_mode:e})}_setPreset(t,e){this._svc("climate","set_preset_mode",{entity_id:t,preset_mode:e})}_setTemp(t,e,s){let o={entity_id:t};s==="heat_cool"?(o.target_temp_low=e.low,o.target_temp_high=e.high):o.temperature=e,this._svc("climate","set_temperature",o)}_adjustTemp(t,e,s){let o=this._st(t);if(!o)return;let r=o.attributes;if(o.state==="heat_cool"){let i=r.target_temp_low||68,c=r.target_temp_high||76;this._setTemp(t,s==="heat"?{low:i+e,high:c}:{low:i,high:c+e},"heat_cool")}else this._setTemp(t,(r.temperature||72)+e,o.state)}_setWholeHouseHold(t){let{selects:e}=this._findEntities();e.wholeHouse&&this._svc("select","select_option",{entity_id:e.wholeHouse,option:t})}static styles=B`
     :host { display: block; }
     ha-card { overflow: hidden; }
     .card-header {
@@ -334,393 +173,191 @@ class InfinitudeHVACCard extends LitElement {
     .prof-fan-label { font-size: 10px; color: var(--secondary-text-color); }
     .copy-bar { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; color: var(--secondary-text-color); }
     .section-title { font-size: 11px; font-weight: 600; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; }
-  `;
-
-  // ── Render ─────────────────────────────────────────────────────────────
-  render() {
-    if (!this.hass) return nothing;
-    if (!this._registryLoaded) {
-      return html`<ha-card>
+  `;render(){if(!this.hass)return h;if(!this._registryLoaded)return u`<ha-card>
         <div style="padding:24px;text-align:center;color:var(--secondary-text-color)">Loading…</div>
-      </ha-card>`;
-    }
-    const ent = this._findEntities();
-    if (!ent.climates.length && !this._config.show_empty) {
-      return html`<ha-card>
+      </ha-card>`;let t=this._findEntities();return!t.climates.length&&!this._config.show_empty?u`<ha-card>
         <div style="padding:24px;text-align:center;color:var(--secondary-text-color)">
           <ha-icon icon="mdi:thermostat" style="--mdc-icon-size:48px;opacity:0.3;margin-bottom:12px;display:block"></ha-icon>
           <div style="font-size:14px;font-weight:500">No Infinitude entities found</div>
           <div style="font-size:12px;margin-top:4px">Waiting for thermostat connection…</div>
         </div>
-      </ha-card>`;
-    }
-    return html`
+      </ha-card>`:u`
       <ha-card>
-        <div class="card-header">${this._hdr(ent)}</div>
+        <div class="card-header">${this._hdr(t)}</div>
         <div class="card-tabs">${this._tabs()}</div>
         <div class="card-content">
-          ${this._tab === 'zones'    ? this._zones(ent) : nothing}
-          ${this._tab === 'schedule' ? this._sched(ent) : nothing}
-          ${this._tab === 'profiles' ? this._profs()     : nothing}
+          ${this._tab==="zones"?this._zones(t):h}
+          ${this._tab==="schedule"?this._sched(t):h}
+          ${this._tab==="profiles"?this._profs():h}
         </div>
-      </ha-card>`;
-  }
-
-  // ── Header ─────────────────────────────────────────────────────────────
-  _hdr(ent) {
-    const { system, selects, climates } = ent;
-    const mode = climates.length ? (this._st(climates[0])?.state || 'off') : 'off';
-    const mc = mode === 'heat' ? 'heat' : mode === 'cool' ? 'cool' : (mode === 'heat_cool' || mode === 'auto') ? 'auto' : '';
-    const ml = mode === 'heat_cool' ? 'Auto' : mode.charAt(0).toUpperCase() + mode.slice(1);
-
-    const os = this._st(system.oat);
-    let oat = '–';
-    if (os?.state && os.state !== 'unavailable') oat = `${Math.round(Number(os.state))}°`;
-    else if (climates.length) { const v = this._at(climates[0], 'outdoor_temperature'); if (v != null) oat = `${Math.round(Number(v))}°`; }
-
-    const opS = this._st(system.opStatus);
-    const opStatus = opS?.state && opS.state !== 'unavailable' ? opS.state : '';
-    const humid = this._st(system.humidifier)?.state === 'on';
-    const whS = this._st(selects.wholeHouse);
-    const whHold = whS && whS.state !== 'off';
-    const rh = climates.length ? this._at(climates[0], 'current_humidity') : null;
-
-    return html`
+      </ha-card>`}_hdr(t){let{system:e,selects:s,climates:o}=t,r=o.length&&this._st(o[0])?.state||"off",i=r==="heat"?"heat":r==="cool"?"cool":r==="heat_cool"||r==="auto"?"auto":"",c=r==="heat_cool"?"Auto":r.charAt(0).toUpperCase()+r.slice(1),a=this._st(e.oat),l="\u2013";if(a?.state&&a.state!=="unavailable")l=`${Math.round(Number(a.state))}\xB0`;else if(o.length){let U=this._at(o[0],"outdoor_temperature");U!=null&&(l=`${Math.round(Number(U))}\xB0`)}let p=this._st(e.opStatus),d=p?.state&&p.state!=="unavailable"?p.state:"",f=this._st(e.humidifier)?.state==="on",g=this._st(s.wholeHouse),_=g&&g.state!=="off",b=o.length?this._at(o[0],"current_humidity"):null;return u`
       <div class="header-left">
         <span class="header-title">HVAC</span>
-        <span class="header-mode ${mc}">${ml}</span>
+        <span class="header-mode ${i}">${c}</span>
       </div>
       <div class="header-stats">
-        <span>Outside <span class="stat-val">${oat}</span></span>
-        ${rh != null ? html`<span>Indoor RH <span class="stat-val">${rh}%</span></span>` : nothing}
-        ${humid ? html`<span style="color:var(--label-badge-blue,#38bdf8)">💧 Humidifier On</span>` : nothing}
-        ${opStatus ? html`<span>${opStatus}</span>` : nothing}
+        <span>Outside <span class="stat-val">${l}</span></span>
+        ${b!=null?u`<span>Indoor RH <span class="stat-val">${b}%</span></span>`:h}
+        ${f?u`<span style="color:var(--label-badge-blue,#38bdf8)">💧 Humidifier On</span>`:h}
+        ${d?u`<span>${d}</span>`:h}
       </div>
-      ${whHold ? html`
-        <div class="wh-hold" @click=${() => this._setWholeHouseHold('off')}>
+      ${_?u`
+        <div class="wh-hold" @click=${()=>this._setWholeHouseHold("off")}>
           <ha-icon icon="mdi:home-lock" style="--mdc-icon-size:16px"></ha-icon>
-          <span>Whole house: <strong>${whS.state}</strong></span>
+          <span>Whole house: <strong>${g.state}</strong></span>
           <span style="margin-left:auto;opacity:0.7">Tap to cancel</span>
-        </div>` : nothing}`;
-  }
-
-  // ── Tabs ───────────────────────────────────────────────────────────────
-  _tabs() {
-    return html`${['zones','schedule','profiles'].map(t => html`
-      <div class="tab ${this._tab === t ? 'active' : ''}"
-           @click=${() => { this._tab = t; }}>${t.charAt(0).toUpperCase() + t.slice(1)}</div>`)}`;
-  }
-
-  // ── Zones ──────────────────────────────────────────────────────────────
-  _zones(ent) {
-    const { climates } = ent;
-    if (!climates.length) return html`<div style="padding:20px;text-align:center;color:var(--secondary-text-color)">No zone entities found</div>`;
-    const mode = this._st(climates[0])?.state || 'off';
-    const modes = ['off','heat','cool','heat_cool'];
-    const lbl = { off:'Off', heat:'Heat', cool:'Cool', heat_cool:'Auto' };
-
-    return html`
+        </div>`:h}`}_tabs(){return u`${["zones","schedule","profiles"].map(t=>u`
+      <div class="tab ${this._tab===t?"active":""}"
+           @click=${()=>{this._tab=t}}>${t.charAt(0).toUpperCase()+t.slice(1)}</div>`)}`}_zones(t){let{climates:e}=t;if(!e.length)return u`<div style="padding:20px;text-align:center;color:var(--secondary-text-color)">No zone entities found</div>`;let s=this._st(e[0])?.state||"off",o=["off","heat","cool","heat_cool"],r={off:"Off",heat:"Heat",cool:"Cool",heat_cool:"Auto"};return u`
       <div class="mode-row">
         <span class="mode-label">Mode</span>
         <div class="mode-pills">
-          ${modes.map(m => {
-            const mc = m === 'heat' ? 'heat' : m === 'cool' ? 'cool' : m === 'heat_cool' ? 'auto' : '';
-            return html`<div class="mode-pill ${m === mode ? 'active' : ''} ${mc}"
-              @click=${() => this._setHvacMode(climates[0], m)}>${lbl[m]}</div>`;
-          })}
+          ${o.map(i=>u`<div class="mode-pill ${i===s?"active":""} ${i==="heat"?"heat":i==="cool"?"cool":i==="heat_cool"?"auto":""}"
+              @click=${()=>this._setHvacMode(e[0],i)}>${r[i]}</div>`)}
         </div>
       </div>
-      <div class="zone-grid">${climates.map(eid => this._zoneCard(eid))}</div>`;
-  }
-
-  _zoneCard(eid) {
-    const s = this._st(eid);
-    if (!s) return nothing;
-    const a = s.attributes || {};
-    const name = (a.friendly_name || eid).replace(/^Infinitude\s+/i, '').replace(/^infinitude_direct\s+/i, '');
-    const temp = a.current_temperature != null ? Math.round(a.current_temperature) : '–';
-    const rh = a.current_humidity;
-    const mode = s.state || 'off';
-    const action = a.hvac_action || 'idle';
-    const preset = a.preset_mode || '–';
-    const htsp = a.target_temp_low ?? a.temperature ?? null;
-    const clsp = a.target_temp_high ?? (mode === 'cool' ? a.temperature : null) ?? null;
-    const ac = action === 'heating' ? 'heating' : action === 'cooling' ? 'cooling' : action === 'drying' ? 'drying' : '';
-    const al = action === 'idle' ? 'Idle' : action.charAt(0).toUpperCase() + action.slice(1);
-    const isRange = mode === 'heat_cool';
-
-    return html`
-      <div class="zone-card ${ac}">
+      <div class="zone-grid">${e.map(i=>this._zoneCard(i))}</div>`}_zoneCard(t){let e=this._st(t);if(!e)return h;let s=e.attributes||{},o=(s.friendly_name||t).replace(/^Infinitude\s+/i,"").replace(/^infinitude_direct\s+/i,""),r=s.current_temperature!=null?Math.round(s.current_temperature):"\u2013",i=s.current_humidity,c=e.state||"off",a=s.hvac_action||"idle",l=s.preset_mode||"\u2013",p=s.target_temp_low??s.temperature??null,d=s.target_temp_high??(c==="cool"?s.temperature:null)??null,f=a==="heating"?"heating":a==="cooling"?"cooling":a==="drying"?"drying":"",g=a==="idle"?"Idle":a.charAt(0).toUpperCase()+a.slice(1),_=c==="heat_cool";return u`
+      <div class="zone-card ${f}">
         <div class="zone-top">
-          <span class="zone-name">${name}</span>
-          <span class="zone-badge ${ac}">${al}</span>
+          <span class="zone-name">${o}</span>
+          <span class="zone-badge ${f}">${g}</span>
         </div>
         <div class="zone-body">
           <div>
-            <span class="temp-hero">${temp}</span><span class="temp-unit">°F</span>
-            ${rh != null ? html`<div style="font-size:11px;color:var(--secondary-text-color);margin-top:2px">${rh}% RH</div>` : nothing}
+            <span class="temp-hero">${r}</span><span class="temp-unit">°F</span>
+            ${i!=null?u`<div style="font-size:11px;color:var(--secondary-text-color);margin-top:2px">${i}% RH</div>`:h}
           </div>
           <div class="zone-sp">
-            ${htsp != null ? html`
+            ${p!=null?u`
               <div class="sp-row">
-                <button class="btn-adj" @click=${() => this._adjustTemp(eid, -1, 'heat')}>−</button>
-                <span class="sp-val sp-heat">${Math.round(htsp)}°</span>
-                <button class="btn-adj" @click=${() => this._adjustTemp(eid, 1, 'heat')}>+</button>
-              </div>` : nothing}
-            ${isRange && clsp != null ? html`
+                <button class="btn-adj" @click=${()=>this._adjustTemp(t,-1,"heat")}>−</button>
+                <span class="sp-val sp-heat">${Math.round(p)}°</span>
+                <button class="btn-adj" @click=${()=>this._adjustTemp(t,1,"heat")}>+</button>
+              </div>`:h}
+            ${_&&d!=null?u`
               <div class="sp-row">
-                <button class="btn-adj" @click=${() => this._adjustTemp(eid, -1, 'cool')}>−</button>
-                <span class="sp-val sp-cool">${Math.round(clsp)}°</span>
-                <button class="btn-adj" @click=${() => this._adjustTemp(eid, 1, 'cool')}>+</button>
-              </div>` : nothing}
+                <button class="btn-adj" @click=${()=>this._adjustTemp(t,-1,"cool")}>−</button>
+                <span class="sp-val sp-cool">${Math.round(d)}°</span>
+                <button class="btn-adj" @click=${()=>this._adjustTemp(t,1,"cool")}>+</button>
+              </div>`:h}
           </div>
         </div>
         <div class="zone-meta">
-          <span class="meta-item">Activity <span class="meta-val">${preset}</span></span>
-          ${a.fan_mode ? html`<span class="meta-item">Fan <span class="meta-val">${a.fan_mode}</span></span>` : nothing}
-          ${a.damper_position != null ? html`<span class="meta-item">Damper <span class="meta-val">${a.damper_position}%</span></span>` : nothing}
+          <span class="meta-item">Activity <span class="meta-val">${l}</span></span>
+          ${s.fan_mode?u`<span class="meta-item">Fan <span class="meta-val">${s.fan_mode}</span></span>`:h}
+          ${s.damper_position!=null?u`<span class="meta-item">Damper <span class="meta-val">${s.damper_position}%</span></span>`:h}
         </div>
         <div class="zone-preset-row">
-          ${ACTIVITIES.map(act => html`
-            <div class="preset-btn ${preset === act ? 'active' : ''}"
-                 @click=${() => this._setPreset(eid, act)}>${act}</div>`)}
+          ${et.map(b=>u`
+            <div class="preset-btn ${l===b?"active":""}"
+                 @click=${()=>this._setPreset(t,b)}>${b}</div>`)}
         </div>
-        ${a.hold_active ? html`<div class="zone-hold"><span class="hold-label">Hold: ${preset}</span></div>` : nothing}
-      </div>`;
-  }
-
-  // ── Schedule ───────────────────────────────────────────────────────────
-  _sched() {
-    const schedule = this._getScheduleData();
-    const profiles = this._getProfilesData();
-    const zids = Object.keys(schedule);
-    if (!zids.length) return html`
+        ${s.hold_active?u`<div class="zone-hold"><span class="hold-label">Hold: ${l}</span></div>`:h}
+      </div>`}_sched(){let t=this._getScheduleData(),e=this._getProfilesData(),s=Object.keys(t);if(!s.length)return u`
       <div style="padding:20px;text-align:center;color:var(--secondary-text-color)">
         <ha-icon icon="mdi:calendar-clock" style="--mdc-icon-size:48px;opacity:0.3;margin-bottom:12px;display:block"></ha-icon>
         No schedule data available. Waiting for thermostat data…
-      </div>`;
-
-    const today = DAYS[JS_DAY_MAP[new Date().getDay()]];
-    const zn = {}; for (const z of profiles) zn[z.id] = z.name;
-    let maxP = 0;
-    for (const zid of zids) maxP = Math.max(maxP, (schedule[zid]?.[this._schedDay] || []).length);
-    if (!maxP) maxP = 5;
-    const hasEdits = Object.keys(this._schedEdits).length > 0;
-
-    return html`
+      </div>`;let o=C[$t[new Date().getDay()]],r={};for(let a of e)r[a.id]=a.name;let i=0;for(let a of s)i=Math.max(i,(t[a]?.[this._schedDay]||[]).length);i||(i=5);let c=Object.keys(this._schedEdits).length>0;return u`
       <div class="section-title">Schedule</div>
       <div class="sched-day-tabs">
-        ${DAYS.map(d => html`
-          <div class="day-tab ${d === this._schedDay ? 'active' : ''} ${d === today && d !== this._schedDay ? 'today' : ''}"
-               @click=${() => { this._schedDay = d; }}>${d.slice(0,3)}</div>`)}
+        ${C.map(a=>u`
+          <div class="day-tab ${a===this._schedDay?"active":""} ${a===o&&a!==this._schedDay?"today":""}"
+               @click=${()=>{this._schedDay=a}}>${a.slice(0,3)}</div>`)}
       </div>
-      ${Array.from({length: maxP}, (_, pi) => this._periodCard(pi, zids, schedule, profiles, zn))}
+      ${Array.from({length:i},(a,l)=>this._periodCard(l,s,t,e,r))}
       <div class="copy-bar">
         <span>Copy ${this._schedDay.slice(0,3)} →</span>
-        <select class="sched-select" @change=${(e) => this._copySched(e)}>
+        <select class="sched-select" @change=${a=>this._copySched(a)}>
           <option value="">select day…</option>
-          ${DAYS.filter(d => d !== this._schedDay).map(d => html`<option value=${d}>${d.slice(0,3)}</option>`)}
+          ${C.filter(a=>a!==this._schedDay).map(a=>u`<option value=${a}>${a.slice(0,3)}</option>`)}
           <option value="__all__">All other days</option>
         </select>
       </div>
-      ${hasEdits ? html`
+      ${c?u`
         <div class="action-bar">
           <span class="action-bar-label">● Unsaved changes</span>
-          <button class="btn" @click=${() => { this._schedEdits = {}; }}>Discard</button>
-          <button class="btn btn-primary" @click=${() => this._saveSched()}>Save schedule</button>
-        </div>` : nothing}`;
-  }
-
-  _periodCard(pi, zids, schedule, profiles, zn) {
-    return html`
+          <button class="btn" @click=${()=>{this._schedEdits={}}}>Discard</button>
+          <button class="btn btn-primary" @click=${()=>this._saveSched()}>Save schedule</button>
+        </div>`:h}`}_periodCard(t,e,s,o,r){return u`
       <div class="period-card">
-        <div class="period-header">Period ${pi + 1}</div>
-        ${zids.map(zid => {
-          const period = (schedule[zid]?.[this._schedDay] || [])[pi];
-          if (!period) return nothing;
-          const ek = `${zid}_${this._schedDay}_${pi}`;
-          const ed = this._schedEdits[ek];
-          const act = ed?.act ?? period.activity;
-          const time = ed?.time ?? period.time;
-          const enabled = ed?.enabled ?? period.enabled;
-          const zp = profiles.find(z => z.id === zid);
-          const ap = zp?.activities?.[act];
-          const htsp = ap?.htsp ? Math.round(parseFloat(ap.htsp)) : '–';
-          const clsp = ap?.clsp ? Math.round(parseFloat(ap.clsp)) : '–';
-
-          return html`
-            <div class="sched-line ${enabled ? '' : 'disabled'}">
-              <span class="sched-name">${zn[zid] || `Zone ${zid}`}</span>
-              <select class="sched-select" @change=${(e) => this._schedEdit(zid, pi, 'act', e.target.value)}>
-                ${ACTIVITIES.map(a => html`<option value=${a} ?selected=${a === act}>${a}</option>`)}
+        <div class="period-header">Period ${t+1}</div>
+        ${e.map(i=>{let c=(s[i]?.[this._schedDay]||[])[t];if(!c)return h;let a=`${i}_${this._schedDay}_${t}`,l=this._schedEdits[a],p=l?.act??c.activity,d=l?.time??c.time,f=l?.enabled??c.enabled,_=o.find(m=>m.id===i)?.activities?.[p],b=_?.htsp?Math.round(parseFloat(_.htsp)):"\u2013",U=_?.clsp?Math.round(parseFloat(_.clsp)):"\u2013";return u`
+            <div class="sched-line ${f?"":"disabled"}">
+              <span class="sched-name">${r[i]||`Zone ${i}`}</span>
+              <select class="sched-select" @change=${m=>this._schedEdit(i,t,"act",m.target.value)}>
+                ${et.map(m=>u`<option value=${m} ?selected=${m===p}>${m}</option>`)}
               </select>
-              <select class="sched-select" @change=${(e) => this._schedEdit(zid, pi, 'time', e.target.value)}>
-                ${TIME_OPTIONS.map(o => html`<option value=${o.v} ?selected=${o.v === time}>${o.l}</option>`)}
+              <select class="sched-select" @change=${m=>this._schedEdit(i,t,"time",m.target.value)}>
+                ${Ut.map(m=>u`<option value=${m.v} ?selected=${m.v===d}>${m.l}</option>`)}
               </select>
               <label class="sched-toggle">
-                <input type="checkbox" ?checked=${enabled}
-                       @change=${(e) => this._schedEdit(zid, pi, 'enabled', e.target.checked)}>
+                <input type="checkbox" ?checked=${f}
+                       @change=${m=>this._schedEdit(i,t,"enabled",m.target.checked)}>
                 <span>on</span>
               </label>
               <div class="sched-temps">
-                <span class="sp-heat">${htsp}°</span>
-                <span class="sp-cool">${clsp}°</span>
+                <span class="sp-heat">${b}°</span>
+                <span class="sp-cool">${U}°</span>
               </div>
-            </div>`;
-        })}
-      </div>`;
-  }
-
-  _schedEdit(zid, pi, field, val) {
-    const ek = `${zid}_${this._schedDay}_${pi}`;
-    const prev = this._schedEdits[ek] || {};
-    const p = (this._getScheduleData()[zid]?.[this._schedDay] || [])[pi] || {};
-    this._schedEdits = { ...this._schedEdits, [ek]: {
-      act:     field === 'act'     ? val : (prev.act     ?? p.activity),
-      time:    field === 'time'    ? val : (prev.time    ?? p.time),
-      enabled: field === 'enabled' ? val : (prev.enabled ?? p.enabled),
-    }};
-  }
-
-  _copySched(e) {
-    const tgt = e.target.value; if (!tgt) return;
-    e.target.value = '';
-    const sch = this._getScheduleData();
-    const targets = tgt === '__all__' ? DAYS.filter(d => d !== this._schedDay) : [tgt];
-    const edits = { ...this._schedEdits };
-    for (const zid of Object.keys(sch)) {
-      const periods = sch[zid]?.[this._schedDay] || [];
-      for (const day of targets) {
-        periods.forEach((p, pi) => {
-          const se = this._schedEdits[`${zid}_${this._schedDay}_${pi}`];
-          edits[`${zid}_${day}_${pi}`] = {
-            act: se?.act ?? p.activity, time: se?.time ?? p.time, enabled: se?.enabled ?? p.enabled,
-          };
-        });
-      }
-    }
-    this._schedEdits = edits;
-  }
-
-  async _saveSched() {
-    const sch = this._getScheduleData();
-    for (const zid of Object.keys(sch)) {
-      const prog = DAYS.map(day => ({
-        id: day,
-        period: (sch[zid]?.[day] || []).map((p, pi) => {
-          const ed = this._schedEdits[`${zid}_${day}_${pi}`];
-          return {
-            id: p.id || String(pi + 1),
-            activity: ed?.act ?? p.activity,
-            time: ed?.time ?? p.time,
-            enabled: (ed?.enabled ?? p.enabled) ? 'on' : 'off',
-          };
-        }),
-      }));
-      await this._svc('infinitude_direct', 'save_schedule', { zone_id: zid, schedule: JSON.stringify(prog) });
-    }
-    this._schedEdits = {};
-  }
-
-  // ── Profiles ───────────────────────────────────────────────────────────
-  _profs() {
-    const profiles = this._getProfilesData();
-    if (!profiles.length) return html`
+            </div>`})}
+      </div>`}_schedEdit(t,e,s,o){let r=`${t}_${this._schedDay}_${e}`,i=this._schedEdits[r]||{},c=(this._getScheduleData()[t]?.[this._schedDay]||[])[e]||{};this._schedEdits={...this._schedEdits,[r]:{act:s==="act"?o:i.act??c.activity,time:s==="time"?o:i.time??c.time,enabled:s==="enabled"?o:i.enabled??c.enabled}}}_copySched(t){let e=t.target.value;if(!e)return;t.target.value="";let s=this._getScheduleData(),o=e==="__all__"?C.filter(i=>i!==this._schedDay):[e],r={...this._schedEdits};for(let i of Object.keys(s)){let c=s[i]?.[this._schedDay]||[];for(let a of o)c.forEach((l,p)=>{let d=this._schedEdits[`${i}_${this._schedDay}_${p}`];r[`${i}_${a}_${p}`]={act:d?.act??l.activity,time:d?.time??l.time,enabled:d?.enabled??l.enabled}})}this._schedEdits=r}async _saveSched(){let t=this._getScheduleData();for(let e of Object.keys(t)){let s=C.map(o=>({id:o,period:(t[e]?.[o]||[]).map((r,i)=>{let c=this._schedEdits[`${e}_${o}_${i}`];return{id:r.id||String(i+1),activity:c?.act??r.activity,time:c?.time??r.time,enabled:c?.enabled??r.enabled?"on":"off"}})}));await this._svc("infinitude_direct","save_schedule",{zone_id:e,schedule:JSON.stringify(s)})}this._schedEdits={}}_profs(){let t=this._getProfilesData();if(!t.length)return u`
       <div style="padding:20px;text-align:center;color:var(--secondary-text-color)">
         <ha-icon icon="mdi:tune-vertical" style="--mdc-icon-size:48px;opacity:0.3;margin-bottom:12px;display:block"></ha-icon>
         No profile data available. Waiting for thermostat data…
-      </div>`;
-
-    const hasEdits = Object.keys(this._profileEdits).length > 0;
-    return html`
+      </div>`;let e=Object.keys(this._profileEdits).length>0;return u`
       <div class="section-title">Comfort Profiles</div>
-      ${ACTIVITIES.map(actId => html`
+      ${et.map(s=>u`
         <div class="prof-card">
-          <div class="prof-header">${actId}</div>
-          ${profiles.map(zone => {
-            const act = zone.activities?.[actId] || {};
-            const ek = `${zone.id}_${actId}`;
-            const ed = this._profileEdits[ek];
-            const htsp = ed?.htsp ?? (act.htsp ? Math.round(parseFloat(act.htsp)) : 68);
-            const clsp = ed?.clsp ?? (act.clsp ? Math.round(parseFloat(act.clsp)) : 76);
-            const fan  = ed?.fan  ?? act.fan ?? 'low';
-            return html`
+          <div class="prof-header">${s}</div>
+          ${t.map(o=>{let r=o.activities?.[s]||{},i=`${o.id}_${s}`,c=this._profileEdits[i],a=c?.htsp??(r.htsp?Math.round(parseFloat(r.htsp)):68),l=c?.clsp??(r.clsp?Math.round(parseFloat(r.clsp)):76),p=c?.fan??r.fan??"low";return u`
               <div class="prof-line">
-                <span class="prof-name">${zone.name}</span>
+                <span class="prof-name">${o.name}</span>
                 <div class="sp-row">
-                  <button class="btn-adj" @click=${() => this._profAdj(zone.id, actId, 'htsp', -1)}>−</button>
-                  <span class="sp-val sp-heat">${htsp}°</span>
-                  <button class="btn-adj" @click=${() => this._profAdj(zone.id, actId, 'htsp', 1)}>+</button>
+                  <button class="btn-adj" @click=${()=>this._profAdj(o.id,s,"htsp",-1)}>−</button>
+                  <span class="sp-val sp-heat">${a}°</span>
+                  <button class="btn-adj" @click=${()=>this._profAdj(o.id,s,"htsp",1)}>+</button>
                 </div>
                 <div class="sp-row">
-                  <button class="btn-adj" @click=${() => this._profAdj(zone.id, actId, 'clsp', -1)}>−</button>
-                  <span class="sp-val sp-cool">${clsp}°</span>
-                  <button class="btn-adj" @click=${() => this._profAdj(zone.id, actId, 'clsp', 1)}>+</button>
+                  <button class="btn-adj" @click=${()=>this._profAdj(o.id,s,"clsp",-1)}>−</button>
+                  <span class="sp-val sp-cool">${l}°</span>
+                  <button class="btn-adj" @click=${()=>this._profAdj(o.id,s,"clsp",1)}>+</button>
                 </div>
                 <div class="prof-fan">
                   <span class="prof-fan-label">Fan</span>
-                  <select class="sched-select" @change=${(e) => this._profFan(zone.id, actId, e.target.value)}>
-                    ${FAN_OPTIONS.map(f => html`<option value=${f} ?selected=${f === fan}>${f}</option>`)}
+                  <select class="sched-select" @change=${d=>this._profFan(o.id,s,d.target.value)}>
+                    ${Tt.map(d=>u`<option value=${d} ?selected=${d===p}>${d}</option>`)}
                   </select>
                 </div>
-              </div>`;
-          })}
+              </div>`})}
         </div>`)}
-      ${hasEdits ? html`
+      ${e?u`
         <div class="action-bar">
           <span class="action-bar-label">● Unsaved changes</span>
-          <button class="btn" @click=${() => { this._profileEdits = {}; }}>Discard</button>
-          <button class="btn btn-primary" @click=${() => this._saveProfs()}>Save profiles</button>
-        </div>` : nothing}`;
-  }
+          <button class="btn" @click=${()=>{this._profileEdits={}}}>Discard</button>
+          <button class="btn btn-primary" @click=${()=>this._saveProfs()}>Save profiles</button>
+        </div>`:h}`}_profAdj(t,e,s,o){let r=`${t}_${e}`,i=this._getProfilesData().find(g=>g.id===t)?.activities?.[e]||{},c=this._profileEdits[r]||{},a=c.htsp??(i.htsp?Math.round(parseFloat(i.htsp)):68),l=c.clsp??(i.clsp?Math.round(parseFloat(i.clsp)):76),p=s==="htsp"?50:60,d=s==="htsp"?90:99,f=s==="htsp"?a:l;this._profileEdits={...this._profileEdits,[r]:{zone_id:t,activity:e,htsp:s==="htsp"?Math.max(p,Math.min(d,f+o)):a,clsp:s==="clsp"?Math.max(p,Math.min(d,f+o)):l,fan:c.fan??i.fan??"low"}}}_profFan(t,e,s){let o=`${t}_${e}`,r=this._getProfilesData().find(c=>c.id===t)?.activities?.[e]||{},i=this._profileEdits[o]||{};this._profileEdits={...this._profileEdits,[o]:{zone_id:t,activity:e,htsp:i.htsp??(r.htsp?Math.round(parseFloat(r.htsp)):68),clsp:i.clsp??(r.clsp?Math.round(parseFloat(r.clsp)):76),fan:s}}}async _saveProfs(){for(let t of Object.values(this._profileEdits)){let e={zone_id:t.zone_id,activity:t.activity,htsp:t.htsp,clsp:t.clsp};t.fan&&(e.fan=t.fan),await this._svc("infinitude_direct","set_profile",e)}this._profileEdits={}}};customElements.get("infinitude-hvac-card")||customElements.define("infinitude-hvac-card",st);window.customCards=window.customCards||[];window.customCards.some(n=>n.type==="infinitude-hvac-card")||window.customCards.push({type:"infinitude-hvac-card",name:"Infinitude HVAC Card",description:"Full HVAC dashboard for Carrier/Bryant Infinity thermostats",preview:!1});
+/*! Bundled license information:
 
-  _profAdj(zid, actId, field, delta) {
-    const ek = `${zid}_${actId}`;
-    const act = (this._getProfilesData().find(z => z.id === zid)?.activities?.[actId]) || {};
-    const prev = this._profileEdits[ek] || {};
-    const curH = prev.htsp ?? (act.htsp ? Math.round(parseFloat(act.htsp)) : 68);
-    const curC = prev.clsp ?? (act.clsp ? Math.round(parseFloat(act.clsp)) : 76);
-    const min = field === 'htsp' ? 50 : 60, max = field === 'htsp' ? 90 : 99;
-    const cur = field === 'htsp' ? curH : curC;
-    this._profileEdits = { ...this._profileEdits, [ek]: {
-      zone_id: zid, activity: actId,
-      htsp: field === 'htsp' ? Math.max(min, Math.min(max, cur + delta)) : curH,
-      clsp: field === 'clsp' ? Math.max(min, Math.min(max, cur + delta)) : curC,
-      fan: prev.fan ?? act.fan ?? 'low',
-    }};
-  }
+@lit/reactive-element/css-tag.js:
+  (**
+   * @license
+   * Copyright 2019 Google LLC
+   * SPDX-License-Identifier: BSD-3-Clause
+   *)
 
-  _profFan(zid, actId, fan) {
-    const ek = `${zid}_${actId}`;
-    const act = (this._getProfilesData().find(z => z.id === zid)?.activities?.[actId]) || {};
-    const prev = this._profileEdits[ek] || {};
-    this._profileEdits = { ...this._profileEdits, [ek]: {
-      zone_id: zid, activity: actId,
-      htsp: prev.htsp ?? (act.htsp ? Math.round(parseFloat(act.htsp)) : 68),
-      clsp: prev.clsp ?? (act.clsp ? Math.round(parseFloat(act.clsp)) : 76),
-      fan,
-    }};
-  }
+@lit/reactive-element/reactive-element.js:
+lit-html/lit-html.js:
+lit-element/lit-element.js:
+  (**
+   * @license
+   * Copyright 2017 Google LLC
+   * SPDX-License-Identifier: BSD-3-Clause
+   *)
 
-  async _saveProfs() {
-    for (const ed of Object.values(this._profileEdits)) {
-      const d = { zone_id: ed.zone_id, activity: ed.activity, htsp: ed.htsp, clsp: ed.clsp };
-      if (ed.fan) d.fan = ed.fan;
-      await this._svc('infinitude_direct', 'set_profile', d);
-    }
-    this._profileEdits = {};
-  }
-}
-
-if (!customElements.get('infinitude-hvac-card')) {
-  customElements.define('infinitude-hvac-card', InfinitudeHVACCard);
-}
-window.customCards = window.customCards || [];
-if (!window.customCards.some(c => c.type === 'infinitude-hvac-card')) {
-  window.customCards.push({
-    type: 'infinitude-hvac-card',
-    name: 'Infinitude HVAC Card',
-    description: 'Full HVAC dashboard for Carrier/Bryant Infinity thermostats',
-    preview: false,
-  });
-}
+lit-html/is-server.js:
+  (**
+   * @license
+   * Copyright 2022 Google LLC
+   * SPDX-License-Identifier: BSD-3-Clause
+   *)
+*/

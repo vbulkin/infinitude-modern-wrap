@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "scripts": {
+    "build": "esbuild src/infinitude-hvac-card.js --bundle --minify --format=esm --outfile=custom_components/infinitude_direct/www/infinitude-hvac-card.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "lit": "^3.0.0"
+  }
+}
