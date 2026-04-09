@@ -33,6 +33,7 @@ class InfinitudeHVACCard extends LitElement {
     _schedEdits:    { state: true },
     _profileEdits:  { state: true },
     _registryLoaded:{ state: true },
+    _pendingTemps:  { state: true },
   };
 
   constructor() {
@@ -44,6 +45,8 @@ class InfinitudeHVACCard extends LitElement {
     this._profileEdits = {};
     this._registryEntities = null;
     this._registryLoaded = false;
+    this._tempAdj = {};       // per-entity debounce/commit state
+    this._pendingTemps = {};  // reactive: { [eid]: { heat, cool } } for optimistic display
   }
 
   static getConfigElement() { return document.createElement('div'); }
@@ -137,22 +140,83 @@ class InfinitudeHVACCard extends LitElement {
   _setHvacMode(eid, mode) { this._svc('climate', 'set_hvac_mode', { entity_id: eid, hvac_mode: mode }); }
   _setPreset(eid, preset) { this._svc('climate', 'set_preset_mode', { entity_id: eid, preset_mode: preset }); }
 
-  _setTemp(eid, temp, mode) {
-    const d = { entity_id: eid };
-    if (mode === 'heat_cool') { d.target_temp_low = temp.low; d.target_temp_high = temp.high; }
-    else { d.temperature = temp; }
-    this._svc('climate', 'set_temperature', d);
-  }
-
+  // ── Optimistic temperature adjustment with debounce ────────────────────
   _adjustTemp(eid, delta, sp) {
     const s = this._st(eid); if (!s) return;
     const a = s.attributes;
-    if (s.state === 'heat_cool') {
-      const lo = a.target_temp_low || 68, hi = a.target_temp_high || 76;
-      this._setTemp(eid, sp === 'heat' ? { low: lo + delta, high: hi } : { low: lo, high: hi + delta }, 'heat_cool');
-    } else {
-      this._setTemp(eid, (a.temperature || 72) + delta, s.state);
+    const adj = this._tempAdj[eid] || (this._tempAdj[eid] = {});
+
+    // Read from pending value if active, else from entity state
+    const curHeat = adj.heat ?? a.target_temp_low ?? a.temperature ?? 68;
+    const curCool = adj.cool ?? a.target_temp_high ?? (s.state === 'cool' ? a.temperature : null) ?? 76;
+
+    if (sp === 'heat') adj.heat = Math.max(50, Math.min(90, Math.round(curHeat) + delta));
+    else               adj.cool = Math.max(60, Math.min(99, Math.round(curCool) + delta));
+
+    // Optimistic UI — trigger reactive render
+    this._pendingTemps = { ...this._pendingTemps, [eid]: { heat: adj.heat, cool: adj.cool } };
+
+    // Debounce: only schedule commit when no API call is in-flight
+    if (!adj.committing) {
+      clearTimeout(adj.timer);
+      adj.timer = setTimeout(() => this._commitAdj(eid), 800);
     }
+  }
+
+  async _commitAdj(eid) {
+    const adj = this._tempAdj[eid];
+    if (!adj || adj.committing) return;
+    adj.committing = true;
+
+    const s = this._st(eid);
+    const a = s?.attributes || {};
+    const snapH = adj.heat, snapC = adj.cool;
+    const htsp = snapH ?? Math.round(a.target_temp_low ?? a.temperature ?? 68);
+    const clsp = snapC ?? Math.round(a.target_temp_high ?? (s?.state === 'cool' ? a.temperature : null) ?? 76);
+
+    const mode = s?.state || 'off';
+    const d = { entity_id: eid };
+    if (mode === 'heat_cool') { d.target_temp_low = htsp; d.target_temp_high = clsp; }
+    else if (mode === 'heat') { d.temperature = htsp; }
+    else if (mode === 'cool') { d.temperature = clsp; }
+    else { d.target_temp_low = htsp; d.target_temp_high = clsp; }
+
+    try { await this.hass.callService('climate', 'set_temperature', d); }
+    catch (e) { console.error('set_temperature failed', e); }
+
+    adj.committing = false;
+
+    // Did the user adjust while we were committing?
+    if (adj.heat !== snapH || adj.cool !== snapC) {
+      adj.timer = setTimeout(() => this._commitAdj(eid), 400);
+      return;
+    }
+
+    // Done — clear pending state, keep grace window so server state catches up
+    adj.heat = null; adj.cool = null; adj.timer = null;
+    adj.graceUntil = Date.now() + 30000;
+    // Remove pending UI after a short delay so the next hass update takes over
+    setTimeout(() => {
+      if (!this._tempAdj[eid]?.heat && !this._tempAdj[eid]?.cool) {
+        const { [eid]: _, ...rest } = this._pendingTemps;
+        this._pendingTemps = rest;
+      }
+    }, 2000);
+  }
+
+  _hasPending(eid) {
+    const adj = this._tempAdj[eid];
+    return adj && (adj.heat != null || adj.cool != null || adj.committing);
+  }
+
+  // ── Hold controls ──────────────────────────────────────────────────────
+  _cancelHold(eid) {
+    // Extract zone_id from entity's unique_id ("infinitude_{zone_id}")
+    const reg = (this._registryEntities || []).find(e => e.entity_id === eid);
+    if (!reg) return;
+    const zoneId = (reg.unique_id || '').replace(/^infinitude_/, '');
+    if (!zoneId) return;
+    this._svc('infinitude_direct', 'cancel_hold', { zone_id: zoneId });
   }
 
   _setWholeHouseHold(opt) {
@@ -242,6 +306,9 @@ class InfinitudeHVACCard extends LitElement {
       background: rgba(251,191,36,0.06); border-top: 1px solid rgba(251,191,36,0.15); font-size: 11px;
     }
     .hold-label { color: var(--warning-color, #fbbf24); font-weight: 500; flex: 1; }
+    .sp-pending { animation: sp-pulse 0.8s ease-in-out infinite; color: var(--warning-color, #fbbf24) !important; }
+    @keyframes sp-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .zone-actions { padding: 0 14px 10px; display: flex; gap: 8px; }
     .zone-preset-row {
       display: flex; gap: 0; border-radius: 6px; overflow: hidden;
       border: 1px solid var(--divider-color); margin: 0 14px 10px;
@@ -443,11 +510,17 @@ class InfinitudeHVACCard extends LitElement {
     const mode = s.state || 'off';
     const action = a.hvac_action || 'idle';
     const preset = a.preset_mode || '–';
-    const htsp = a.target_temp_low ?? a.temperature ?? null;
-    const clsp = a.target_temp_high ?? (mode === 'cool' ? a.temperature : null) ?? null;
     const ac = action === 'heating' ? 'heating' : action === 'cooling' ? 'cooling' : action === 'drying' ? 'drying' : '';
     const al = action === 'idle' ? 'Idle' : action.charAt(0).toUpperCase() + action.slice(1);
     const isRange = mode === 'heat_cool';
+    const hasHold = !!a.hold_active;
+    const holdActivity = a.hold_activity || preset;
+
+    // Optimistic temps: use pending values if the user is adjusting
+    const pending = this._pendingTemps[eid];
+    const isPending = this._hasPending(eid);
+    const htsp = pending?.heat ?? a.target_temp_low ?? a.temperature ?? null;
+    const clsp = pending?.cool ?? a.target_temp_high ?? (mode === 'cool' ? a.temperature : null) ?? null;
 
     return html`
       <div class="zone-card ${ac}">
@@ -464,13 +537,13 @@ class InfinitudeHVACCard extends LitElement {
             ${htsp != null ? html`
               <div class="sp-row">
                 <button class="btn-adj" @click=${() => this._adjustTemp(eid, -1, 'heat')}>−</button>
-                <span class="sp-val sp-heat">${Math.round(htsp)}°</span>
+                <span class="sp-val sp-heat ${isPending ? 'sp-pending' : ''}">${Math.round(htsp)}°</span>
                 <button class="btn-adj" @click=${() => this._adjustTemp(eid, 1, 'heat')}>+</button>
               </div>` : nothing}
             ${isRange && clsp != null ? html`
               <div class="sp-row">
                 <button class="btn-adj" @click=${() => this._adjustTemp(eid, -1, 'cool')}>−</button>
-                <span class="sp-val sp-cool">${Math.round(clsp)}°</span>
+                <span class="sp-val sp-cool ${isPending ? 'sp-pending' : ''}">${Math.round(clsp)}°</span>
                 <button class="btn-adj" @click=${() => this._adjustTemp(eid, 1, 'cool')}>+</button>
               </div>` : nothing}
           </div>
@@ -485,7 +558,14 @@ class InfinitudeHVACCard extends LitElement {
             <div class="preset-btn ${preset === act ? 'active' : ''}"
                  @click=${() => this._setPreset(eid, act)}>${act}</div>`)}
         </div>
-        ${a.hold_active ? html`<div class="zone-hold"><span class="hold-label">Hold: ${preset}</span></div>` : nothing}
+        ${hasHold ? html`
+          <div class="zone-hold">
+            <span class="hold-label">Hold: ${holdActivity}</span>
+            <button class="btn" style="font-size:11px;padding:3px 10px;color:var(--error-color,#f87171)" @click=${() => this._cancelHold(eid)}>Cancel</button>
+          </div>` : html`
+          <div class="zone-actions">
+            <button class="btn" style="font-size:11px;padding:4px 12px" @click=${() => this._setPreset(eid, preset !== '–' ? preset : 'home')}>Set hold</button>
+          </div>`}
       </div>`;
   }
 

@@ -270,6 +270,23 @@ def _register_services(hass: HomeAssistant) -> None:
         }),
     )
 
+    async def handle_cancel_hold(call: ServiceCall) -> None:
+        zone_id = call.data["zone_id"]
+        for entry_id, coordinator in hass.data[DOMAIN].items():
+            if isinstance(coordinator, InfinitudeDataCoordinator):
+                await coordinator.async_cancel_hold(zone_id)
+                await coordinator.async_request_refresh()
+                return
+
+    hass.services.async_register(
+        DOMAIN,
+        "cancel_hold",
+        handle_cancel_hold,
+        schema=vol.Schema({
+            vol.Required("zone_id"): cv.string,
+        }),
+    )
+
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
