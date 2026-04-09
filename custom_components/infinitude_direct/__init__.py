@@ -39,7 +39,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    _register_services(hass)
+    if not hass.services.has_service(DOMAIN, "save_schedule"):
+        _register_services(hass)
 
     # Install card, resource, and dashboard (fire-and-forget)
     hass.async_create_task(_setup_frontend(hass))
@@ -61,6 +62,8 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     await _remove_lovelace_resource(hass)
     await _remove_dashboard(hass)
     await _remove_card_file(hass)
+    await _remove_dashboard_storage(hass)
+    _unregister_services(hass)
 
 
 # ── Frontend Setup ───────────────────────────────────────────────────────
@@ -229,6 +232,21 @@ async def _remove_card_file(hass: HomeAssistant) -> None:
         _LOGGER.exception("Failed to remove card files")
 
 
+async def _remove_dashboard_storage(hass: HomeAssistant) -> None:
+    """Remove the dashboard view config storage file."""
+    storage_file = Path(hass.config.path(".storage")) / f"lovelace.{DASHBOARD_URL_PATH}"
+
+    def _delete() -> None:
+        if storage_file.is_file():
+            storage_file.unlink()
+            _LOGGER.info("Removed dashboard storage: %s", storage_file)
+
+    try:
+        await hass.async_add_executor_job(_delete)
+    except Exception:
+        _LOGGER.exception("Failed to remove dashboard storage")
+
+
 def _register_services(hass: HomeAssistant) -> None:
     """Register custom services for schedule/profile management."""
 
@@ -302,8 +320,17 @@ def _register_services(hass: HomeAssistant) -> None:
     )
 
 
+def _unregister_services(hass: HomeAssistant) -> None:
+    """Remove all custom services."""
+    for svc in ("save_schedule", "set_profile", "cancel_hold"):
+        hass.services.async_remove(DOMAIN, svc)
+
+
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
+        # Unregister services if no more entries
+        if not hass.data[DOMAIN]:
+            _unregister_services(hass)
     return unload_ok

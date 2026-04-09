@@ -4,7 +4,7 @@
  */
 import { LitElement, html, css, nothing } from 'lit';
 
-const CARD_VERSION = '1.0.70';
+const CARD_VERSION = '1.0.71';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const JS_DAY_MAP = [6,0,1,2,3,4,5];
 const ACTIVITIES = ['home','away','sleep','wake'];
