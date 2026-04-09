@@ -111,7 +111,7 @@ class InfinitudeHVACCard extends HTMLElement {
 
     // Zone cards
     for (const eid of climates) {
-      const card = root.querySelector(`.zone-card[data-entity="${CSS.escape(eid)}"]`);
+      const card = root.querySelector(`.zone-card[data-entity="${eid}"]`);
       if (!card) return false;
 
       const s = this._getState(eid);
