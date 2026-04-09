@@ -34,6 +34,8 @@ class InfinitudeHVACCard extends LitElement {
     _profileEdits:  { state: true },
     _registryLoaded:{ state: true },
     _pendingTemps:  { state: true },
+    _whHoldOpen:    { state: true },
+    _whHoldActivity:{ state: true },
   };
 
   constructor() {
@@ -47,6 +49,8 @@ class InfinitudeHVACCard extends LitElement {
     this._registryLoaded = false;
     this._tempAdj = {};       // per-entity debounce/commit state
     this._pendingTemps = {};  // reactive: { [eid]: { heat, cool } } for optimistic display
+    this._whHoldOpen = false;
+    this._whHoldActivity = 'home';
   }
 
   static getConfigElement() { return document.createElement('div'); }
@@ -251,6 +255,22 @@ class InfinitudeHVACCard extends LitElement {
       border-radius: 8px; font-size: 12px; color: var(--warning-color, #fbbf24); cursor: pointer;
     }
     .wh-hold:hover { background: rgba(251,191,36,0.14); }
+    .wh-set {
+      display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 4px;
+      padding: 10px 12px; background: var(--secondary-background-color);
+      border: 1px solid var(--divider-color); border-radius: 8px; flex-wrap: wrap;
+    }
+    .wh-set-label { font-size: 11px; font-weight: 600; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.5px; }
+    .wh-pills { display: flex; gap: 0; border-radius: 6px; overflow: hidden; border: 1px solid var(--divider-color); }
+    .wh-pill {
+      font-size: 11px; font-weight: 600; padding: 5px 12px; border: none;
+      border-right: 1px solid var(--divider-color);
+      background: var(--card-background-color, var(--ha-card-background)); color: var(--secondary-text-color);
+      cursor: pointer; transition: all 0.12s; text-transform: capitalize;
+    }
+    .wh-pill:last-child { border-right: none; }
+    .wh-pill:hover { color: var(--primary-text-color); }
+    .wh-pill.active { background: var(--primary-color); color: var(--text-primary-color, #fff); }
     .card-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--divider-color); padding: 0 16px; }
     .tab {
       padding: 10px 16px; font-size: 13px; font-weight: 500;
@@ -468,7 +488,24 @@ class InfinitudeHVACCard extends LitElement {
           <ha-icon icon="mdi:home-lock" style="--mdc-icon-size:16px"></ha-icon>
           <span>Whole house: <strong>${whS.state}</strong></span>
           <span style="margin-left:auto;opacity:0.7">Tap to cancel</span>
-        </div>` : nothing}`;
+        </div>` : html`
+        ${this._whHoldOpen ? html`
+          <div class="wh-set">
+            <span class="wh-set-label">WH Hold</span>
+            <div class="wh-pills">
+              ${ACTIVITIES.map(a => html`
+                <div class="wh-pill ${this._whHoldActivity === a ? 'active' : ''}"
+                     @click=${() => { this._whHoldActivity = a; }}>${a}</div>`)}
+            </div>
+            <button class="btn btn-primary" style="font-size:11px;padding:4px 12px" @click=${() => { this._setWholeHouseHold(this._whHoldActivity); this._whHoldOpen = false; }}>Apply</button>
+            <button class="btn" style="font-size:11px;padding:4px 10px" @click=${() => { this._whHoldOpen = false; }}>Cancel</button>
+          </div>` : html`
+          <div style="width:100%;margin-top:4px">
+            <button class="btn" style="font-size:11px;padding:4px 12px" @click=${() => { this._whHoldOpen = true; }}>
+              <ha-icon icon="mdi:home-lock" style="--mdc-icon-size:14px;vertical-align:middle;margin-right:4px"></ha-icon>Set WH hold
+            </button>
+          </div>`}
+      `}`;
   }
 
   // ── Tabs ───────────────────────────────────────────────────────────────
