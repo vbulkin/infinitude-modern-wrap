@@ -67,7 +67,7 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
         zone = self._zone_data
         name = zone["name"] if zone else f"Zone {zone_id}"
         self._attr_unique_id = f"infinitude_{zone_id}"
-        self._attr_name = name
+        self._attr_name = None
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"zone_{zone_id}")},
             name=f"Infinitude {name}",

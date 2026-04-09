@@ -557,7 +557,8 @@ class InfinitudeHVACCard extends HTMLElement {
     if (!s) return '';
 
     const attrs = s.attributes || {};
-    const name = attrs.friendly_name || entityId;
+    const rawName = attrs.friendly_name || entityId;
+    const name = rawName.replace(/^Infinitude\s+/i, '').replace(/^infinitude_direct\s+/i, '');
     const temp = attrs.current_temperature != null ? Math.round(attrs.current_temperature) : '–';
     const rh = attrs.current_humidity;
     const mode = s.state || 'off';
