@@ -2,9 +2,11 @@
 
 import json
 import logging
+from pathlib import Path
 
 import voluptuous as vol
 
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
@@ -16,6 +18,9 @@ from .coordinator import InfinitudeDataCoordinator
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [Platform.CLIMATE, Platform.SELECT, Platform.SENSOR]
+
+CARD_URL = "/infinitude_direct/infinitude-hvac-card.js"
+CARD_PATH = Path(__file__).parent / "www" / "infinitude-hvac-card.js"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -30,7 +35,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register services
     _register_services(hass)
 
+    # Serve the custom card JS
+    await _register_card(hass)
+
     return True
+
+
+async def _register_card(hass: HomeAssistant) -> None:
+    """Register static path for the custom Lovelace card."""
+    try:
+        await hass.http.async_register_static_paths(
+            [StaticPathConfig(CARD_URL, str(CARD_PATH), False)]
+        )
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("Static path %s already registered", CARD_URL)
 
 
 def _register_services(hass: HomeAssistant) -> None:
