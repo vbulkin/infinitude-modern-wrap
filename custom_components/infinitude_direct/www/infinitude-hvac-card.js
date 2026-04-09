@@ -28,6 +28,8 @@ class InfinitudeHVACCard extends HTMLElement {
     this._profileEdits = {};
     this._rendered = false;
     this._stateHash = '';
+    this._renderTimer = null;
+    this._cachedEntities = null;
   }
 
   static getConfigElement() { return document.createElement('div'); }
@@ -41,12 +43,26 @@ class InfinitudeHVACCard extends HTMLElement {
   }
 
   set hass(hass) {
+    const prev = this._hass;
     this._hass = hass;
-    const hash = this._computeStateHash();
-    if (hash !== this._stateHash) {
-      this._stateHash = hash;
-      this._render();
+    // First render — do it immediately
+    if (!prev) { this._doRender(); return; }
+    // Throttle: schedule a render at most every 2s
+    if (!this._renderTimer) {
+      this._renderTimer = setTimeout(() => {
+        this._renderTimer = null;
+        const hash = this._computeStateHash();
+        if (hash !== this._stateHash) {
+          this._stateHash = hash;
+          this._doRender();
+        }
+      }, 2000);
     }
+  }
+
+  _doRender() {
+    this._cachedEntities = null; // bust entity cache
+    this._render();
   }
 
   getCardSize() { return 8; }
@@ -57,12 +73,19 @@ class InfinitudeHVACCard extends HTMLElement {
     const parts = [];
     for (const eid of entities.climates) {
       const s = this._hass.states[eid];
-      if (s) parts.push(eid, s.state, s.last_changed);
+      if (!s) continue;
+      const a = s.attributes || {};
+      parts.push(
+        eid, s.state,
+        a.current_temperature, a.current_humidity,
+        a.target_temp_low, a.target_temp_high, a.temperature,
+        a.hvac_action, a.preset_mode, a.fan_mode, a.damper_position,
+      );
     }
     for (const eid of Object.keys(this._hass.states)) {
       if (eid.includes('infinitude') || eid.includes('whole_house')) {
         const s = this._hass.states[eid];
-        if (s) parts.push(eid, s.state, s.last_changed);
+        if (s) parts.push(eid, s.state);
       }
     }
     return parts.join('|');
