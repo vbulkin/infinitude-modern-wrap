@@ -52,13 +52,20 @@ async def _install_card(hass: HomeAssistant) -> None:
     dst_dir = Path(hass.config.path(CARD_DIR))
     dst = dst_dir / CARD_FILENAME
 
+    _LOGGER.warning(
+        "HVAC card install: src=%s exists=%s, dst=%s", src, src.is_file(), dst
+    )
+
     def _copy() -> None:
         dst_dir.mkdir(parents=True, exist_ok=True)
         if src.is_file():
             shutil.copy2(src, dst)
-            _LOGGER.info("Installed HVAC card JS → %s", dst)
+            _LOGGER.warning("Installed HVAC card JS → %s (size=%d)", dst, dst.stat().st_size)
         else:
-            _LOGGER.error("HVAC card JS source not found: %s", src)
+            _LOGGER.error(
+                "HVAC card JS source not found: %s  parent contents: %s",
+                src, list(src.parent.parent.iterdir()) if src.parent.parent.is_dir() else "N/A",
+            )
 
     try:
         await hass.async_add_executor_job(_copy)
