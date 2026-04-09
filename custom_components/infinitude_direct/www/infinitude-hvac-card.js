@@ -56,7 +56,7 @@ class InfinitudeHVACCard extends HTMLElement {
         const hash = this._computeStateHash();
         if (hash !== this._stateHash) {
           this._stateHash = hash;
-          this._doRender();
+          if (!this._updateInPlace()) this._doRender();
         }
       }, 2000);
     }
@@ -64,6 +64,86 @@ class InfinitudeHVACCard extends HTMLElement {
 
   _doRender() {
     this._render();
+  }
+
+  // ── In-place DOM update (no innerHTML rebuild, no shimmer) ──────────────
+  _updateInPlace() {
+    const root = this.shadowRoot;
+    if (!root.querySelector('ha-card') || this._tab !== 'zones') return false;
+
+    const entities = this._findEntities();
+    const { climates, system } = entities;
+    const mode = climates.length > 0 ? (this._getState(climates[0])?.state || 'off') : 'off';
+
+    // Header mode badge
+    const modeBadge = root.querySelector('.header-mode');
+    if (modeBadge) {
+      const mc = mode === 'heat' ? 'heat' : mode === 'cool' ? 'cool' : (mode === 'heat_cool' || mode === 'auto') ? 'auto' : '';
+      modeBadge.className = `header-mode ${mc}`;
+      modeBadge.textContent = mode === 'heat_cool' ? 'Auto' : mode.charAt(0).toUpperCase() + mode.slice(1);
+    }
+    const oatEl = root.querySelector('[data-field="oat"]');
+    if (oatEl) {
+      const os = system.oat ? this._getState(system.oat) : null;
+      let oat = '\u2013';
+      if (os?.state && os.state !== 'unavailable') oat = `${Math.round(Number(os.state))}\u00B0`;
+      else if (climates.length) { const v = this._getAttr(climates[0], 'outdoor_temperature'); if (v != null) oat = `${Math.round(Number(v))}\u00B0`; }
+      oatEl.textContent = oat;
+    }
+    const rhHdr = root.querySelector('[data-field="indoor-rh"]');
+    if (rhHdr && climates.length) {
+      const rh = this._getAttr(climates[0], 'current_humidity');
+      rhHdr.textContent = rh != null ? `${rh}%` : '';
+    }
+    const humEl = root.querySelector('[data-field="humidifier"]');
+    if (humEl) {
+      const hs = system.humidifier ? this._getState(system.humidifier) : null;
+      humEl.style.display = hs?.state === 'on' ? '' : 'none';
+    }
+    const opEl = root.querySelector('[data-field="op-status"]');
+    if (opEl) {
+      const os = system.opStatus ? this._getState(system.opStatus) : null;
+      opEl.textContent = os?.state && os.state !== 'unavailable' ? os.state : '';
+    }
+
+    // Mode pills
+    root.querySelectorAll('.mode-pill').forEach(p => p.classList.toggle('active', p.dataset.mode === mode));
+
+    // Zone cards
+    for (const eid of climates) {
+      const card = root.querySelector(`.zone-card[data-entity="${CSS.escape(eid)}"]`);
+      if (!card) return false;
+
+      const s = this._getState(eid);
+      if (!s) continue;
+      const a = s.attributes || {};
+      const action = a.hvac_action || 'idle';
+      const ac = action === 'heating' ? 'heating' : action === 'cooling' ? 'cooling' : action === 'drying' ? 'drying' : '';
+
+      card.className = `zone-card ${ac}`;
+      card.setAttribute('data-entity', eid);
+
+      const badge = card.querySelector('.zone-badge');
+      if (badge) {
+        badge.textContent = action === 'idle' ? 'Idle' : action.charAt(0).toUpperCase() + action.slice(1);
+        badge.className = `zone-badge ${ac}`;
+      }
+
+      const hero = card.querySelector('.temp-hero');
+      if (hero) hero.textContent = a.current_temperature != null ? Math.round(a.current_temperature) : '\u2013';
+
+      const hv = card.querySelector('.sp-val.sp-heat');
+      if (hv) { const v = a.target_temp_low ?? a.temperature; if (v != null) hv.textContent = Math.round(v) + '\u00B0'; }
+      const cv = card.querySelector('.sp-val.sp-cool');
+      if (cv) { const v = a.target_temp_high ?? (s.state === 'cool' ? a.temperature : null); if (v != null) cv.textContent = Math.round(v) + '\u00B0'; }
+
+      const preset = a.preset_mode || '\u2013';
+      card.querySelectorAll('.preset-btn').forEach(b => b.classList.toggle('active', b.dataset.preset === preset));
+      const pv = card.querySelector('[data-field="preset"]'); if (pv) pv.textContent = preset;
+      const fv = card.querySelector('[data-field="fan"]'); if (fv && a.fan_mode) fv.textContent = a.fan_mode;
+      const dv = card.querySelector('[data-field="damper"]'); if (dv && a.damper_position != null) dv.textContent = a.damper_position + '%';
+    }
+    return true;
   }
 
   getCardSize() { return 8; }
@@ -545,10 +625,10 @@ class InfinitudeHVACCard extends HTMLElement {
         <span class="header-mode ${modeClass}">${modeLabel}</span>
       </div>
       <div class="header-stats">
-        <span>Outside <span class="stat-val">${oat}</span></span>
-        ${indoorRh ? `<span>Indoor RH <span class="stat-val">${indoorRh}</span></span>` : ''}
-        ${humid === 'on' ? `<span style="color: var(--label-badge-blue, #38bdf8)">💧 Humidifier On</span>` : ''}
-        ${opStatus ? `<span>${opStatus}</span>` : ''}
+        <span>Outside <span class="stat-val" data-field="oat">${oat}</span></span>
+        <span${indoorRh ? '' : ' style="display:none"'}>Indoor RH <span class="stat-val" data-field="indoor-rh">${indoorRh}</span></span>
+        <span data-field="humidifier" style="color: var(--label-badge-blue, #38bdf8);${humid !== 'on' ? ' display:none;' : ''}">💧 Humidifier On</span>
+        <span data-field="op-status">${opStatus}</span>
       </div>
       ${whHold ? `
         <div class="wh-hold" data-action="cancel-wh-hold">
@@ -620,7 +700,7 @@ class InfinitudeHVACCard extends HTMLElement {
     const isRange = mode === 'heat_cool';
 
     return `
-      <div class="zone-card ${actionClass}">
+      <div class="zone-card ${actionClass}" data-entity="${entityId}">
         <div class="zone-top">
           <span class="zone-name">${name}</span>
           <span class="zone-badge ${actionClass}">${actionLabel}</span>
@@ -648,9 +728,9 @@ class InfinitudeHVACCard extends HTMLElement {
           </div>
         </div>
         <div class="zone-meta">
-          <span class="meta-item">Activity <span class="meta-val">${preset}</span></span>
-          ${fan ? `<span class="meta-item">Fan <span class="meta-val">${fan}</span></span>` : ''}
-          ${damper != null ? `<span class="meta-item">Damper <span class="meta-val">${damper}%</span></span>` : ''}
+          <span class="meta-item">Activity <span class="meta-val" data-field="preset">${preset}</span></span>
+          ${fan ? `<span class="meta-item">Fan <span class="meta-val" data-field="fan">${fan}</span></span>` : ''}
+          ${damper != null ? `<span class="meta-item">Damper <span class="meta-val" data-field="damper">${damper}%</span></span>` : ''}
         </div>
         <div class="zone-preset-row">
           ${ACTIVITIES.map(a =>
