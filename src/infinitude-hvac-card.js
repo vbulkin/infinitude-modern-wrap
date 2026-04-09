@@ -4,6 +4,7 @@
  */
 import { LitElement, html, css, nothing } from 'lit';
 
+const CARD_VERSION = '1.0.68';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const JS_DAY_MAP = [6,0,1,2,3,4,5];
 const ACTIVITIES = ['home','away','sleep','wake'];
@@ -476,6 +477,7 @@ class InfinitudeHVACCard extends LitElement {
       <div class="header-left">
         <span class="header-title">HVAC</span>
         <span class="header-mode ${mc}">${ml}</span>
+        <span style="font-size:10px;color:var(--secondary-text-color);opacity:0.5">v${CARD_VERSION}</span>
       </div>
       <div class="header-stats">
         <span>Outside <span class="stat-val">${oat}</span></span>

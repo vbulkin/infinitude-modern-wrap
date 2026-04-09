@@ -21,7 +21,7 @@ PLATFORMS = [Platform.CLIMATE, Platform.SELECT, Platform.SENSOR]
 
 CARD_FILENAME = "infinitude-hvac-card.js"
 CARD_DIR = "www/community/infinitude_direct"
-CARD_URL = "/local/community/infinitude_direct/infinitude-hvac-card.js"
+CARD_URL_BASE = "/local/community/infinitude_direct/infinitude-hvac-card.js"
 DASHBOARD_URL_PATH = "hvac-panel"
 
 
@@ -92,7 +92,7 @@ async def _install_card(hass: HomeAssistant) -> None:
 
 
 async def _ensure_lovelace_resource(hass: HomeAssistant) -> None:
-    """Register the card JS as a Lovelace resource if not already present."""
+    """Register or update the card JS Lovelace resource with cache-busting version."""
     try:
         lovelace = hass.data.get("lovelace")
         if not lovelace:
@@ -106,16 +106,30 @@ async def _ensure_lovelace_resource(hass: HomeAssistant) -> None:
             await resources.async_load()
             resources.loaded = True
 
+        # Read version from manifest for cache-busting
+        manifest = Path(__file__).parent / "manifest.json"
+        version = "0"
+        if manifest.is_file():
+            import json as _json
+            version = _json.loads(manifest.read_text()).get("version", "0")
+        card_url = f"{CARD_URL_BASE}?v={version}"
+
         # Check if already registered
         for item in resources.async_items():
-            if CARD_URL in item.get("url", ""):
+            if CARD_URL_BASE in item.get("url", ""):
+                # Update URL if version changed
+                if item.get("url") != card_url:
+                    await resources.async_update_item(
+                        item["id"], {"url": card_url}
+                    )
+                    _LOGGER.info("Updated Lovelace resource to: %s", card_url)
                 return
 
         await resources.async_create_item({
             "res_type": "module",
-            "url": CARD_URL,
+            "url": card_url,
         })
-        _LOGGER.info("Registered Lovelace resource: %s", CARD_URL)
+        _LOGGER.info("Registered Lovelace resource: %s", card_url)
     except Exception:
         _LOGGER.exception("Failed to register Lovelace resource")
 

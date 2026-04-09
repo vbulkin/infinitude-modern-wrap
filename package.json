@@ -1,7 +1,8 @@
 {
   "private": true,
   "scripts": {
-    "build": "esbuild src/infinitude-hvac-card.js --bundle --minify --format=esm --outfile=custom_components/infinitude_direct/www/infinitude-hvac-card.js"
+    "build": "esbuild src/infinitude-hvac-card.js --bundle --minify --format=esm --outfile=custom_components/infinitude_direct/www/infinitude-hvac-card.js",
+    "release": "git push && gh release create v$(node -p \"require('./custom_components/infinitude_direct/manifest.json').version\") --title v$(node -p \"require('./custom_components/infinitude_direct/manifest.json').version\") --generate-notes"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
