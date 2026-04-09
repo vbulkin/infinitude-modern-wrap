@@ -176,7 +176,10 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
         z = self._zone_data
         if z:
             if z.get("damper"):
-                attrs["damper_position"] = z["damper"]
+                try:
+                    attrs["damper_position"] = round(int(z["damper"]) / 15 * 100)
+                except (ValueError, TypeError):
+                    _LOGGER.warning("Invalid damper value '%s' for zone %s", z["damper"], self._zone_id)
             if z.get("fan"):
                 attrs["fan_mode"] = z["fan"]
             attrs["hold_active"] = z.get("hold", False)
