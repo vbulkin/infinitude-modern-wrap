@@ -127,19 +127,18 @@ This bundles `src/infinitude-hvac-card.js` (with Lit) into a single minified fil
 npm run release
 ```
 
-Pushes to remote with tags.
+Bumps the patch version in all files, builds, commits, tags, and pushes.
 
 ```bash
 npm run gh-release
 ```
 
-Creates a GitHub Release with auto-generated notes (run separately after push).
+Creates a GitHub Release with auto-generated notes (run separately after release).
 
 ### Version Management
 
-Versions are managed automatically via git hooks:
-- **Pre-commit** — Bumps the patch version in `manifest.json`, `config.yaml`, `infinitude-ui.html`, and `src/infinitude-hvac-card.js`, then runs the esbuild build and stages the output.
-- **Post-commit** — Creates an annotated git tag `v{version}` from the manifest version.
+- **Pre-commit hook** — Rebuilds the Lovelace card via esbuild and stages the output. No version bump.
+- **`npm run release`** — Bumps the patch version in `manifest.json`, `config.yaml`, `infinitude-ui.html`, and `src/infinitude-hvac-card.js`, builds, commits, tags (`v{version}`), and pushes.
 
 ## License
 
