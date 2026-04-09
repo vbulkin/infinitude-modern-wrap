@@ -61,7 +61,6 @@ class InfinitudeHVACCard extends HTMLElement {
   }
 
   _doRender() {
-    this._cachedEntities = null; // bust entity cache
     this._render();
   }
 
@@ -71,6 +70,7 @@ class InfinitudeHVACCard extends HTMLElement {
     if (!this._hass) return '';
     const entities = this._findEntities();
     const parts = [];
+    // Only hash the specific entities we've discovered — not all states
     for (const eid of entities.climates) {
       const s = this._hass.states[eid];
       if (!s) continue;
@@ -82,17 +82,22 @@ class InfinitudeHVACCard extends HTMLElement {
         a.hvac_action, a.preset_mode, a.fan_mode, a.damper_position,
       );
     }
-    for (const eid of Object.keys(this._hass.states)) {
-      if (eid.includes('infinitude') || eid.includes('whole_house')) {
-        const s = this._hass.states[eid];
-        if (s) parts.push(eid, s.state);
-      }
+    const { system, selects } = entities;
+    for (const eid of [system.humidifier, system.oat, system.opStatus, system.info, selects.wholeHouse]) {
+      if (!eid) continue;
+      const s = this._hass.states[eid];
+      if (s) parts.push(eid, s.state);
     }
     return parts.join('|');
   }
 
   // ── Entity Discovery ────────────────────────────────────────────────────
   _findEntities() {
+    // Cache discovery — only rescan every 30s
+    if (this._cachedEntities && (Date.now() - this._entitiesCacheTime < 30000)) {
+      return this._cachedEntities;
+    }
+
     if (!this._hass) return { climates: [], sensors: {}, selects: {}, system: {} };
     const states = this._hass.states;
     const climates = [];
@@ -117,22 +122,23 @@ class InfinitudeHVACCard extends HTMLElement {
       }
     }
 
-    // Find related entities by name patterns or explicit config
+    // Find related entities — only scan infinitude_direct integration entities
     for (const eid of Object.keys(states)) {
-      if (eid.includes('infinitude') || eid.includes('whole_house')) {
-        if (eid.includes('_damper')) sensors.damper[eid] = states[eid];
-        else if (eid.includes('_fan') && eid.startsWith('sensor.')) sensors.fan[eid] = states[eid];
-        else if (eid.includes('humidifier')) system.humidifier = eid;
-        else if (eid.includes('oat') || eid.includes('outdoor_temperature')) system.oat = eid;
-        else if (eid.includes('op_status') || eid.includes('operation_status')) system.opStatus = eid;
-        else if (eid.includes('system_info')) system.info = eid;
-        else if (eid.includes('whole_house') && eid.startsWith('select.')) selects.wholeHouse = eid;
-      }
+      if (!eid.includes('infinitude') && !eid.includes('whole_house_hold')) continue;
+      if (eid.includes('_damper')) sensors.damper[eid] = states[eid];
+      else if (eid.includes('_fan') && eid.startsWith('sensor.')) sensors.fan[eid] = states[eid];
+      else if (eid.includes('humidifier')) system.humidifier = eid;
+      else if (eid.includes('outdoor_temperature') && eid.startsWith('sensor.')) system.oat = eid;
+      else if (eid.includes('operation_status')) system.opStatus = eid;
+      else if (eid.includes('system_info')) system.info = eid;
+      else if (eid === 'select.whole_house_hold') selects.wholeHouse = eid;
     }
 
-    // Sort climates by entity_id for consistent ordering
     climates.sort();
-    return { climates, sensors, selects, system };
+    const result = { climates, sensors, selects, system };
+    this._cachedEntities = result;
+    this._entitiesCacheTime = Date.now();
+    return result;
   }
 
   _getState(entityId) {
