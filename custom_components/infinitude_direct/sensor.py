@@ -248,6 +248,7 @@ class InfinitudeSystemInfoSensor(CoordinatorEntity, SensorEntity):
             })
         return {
             "host": data.get("host", ""),
+            "carrier_ok": data.get("carrier_ok"),
             "schedule": json.dumps(data.get("schedule", {})),
             "profiles": json.dumps(zones_summary),
         }

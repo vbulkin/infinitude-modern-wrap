@@ -18,6 +18,22 @@
       "already_configured": "Infinitude is already configured."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Infinitude Settings",
+        "description": "Update the Infinitude proxy URL.",
+        "data": {
+          "host": "Infinitude URL"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect — check the URL and that Infinitude is running.",
+      "invalid_response": "Connected but got an unexpected response. Is this an Infinitude instance?",
+      "unknown": "An unexpected error occurred."
+    }
+  },
   "entity": {
     "climate": {
       "infinitude_zone": {

@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from datetime import timedelta
 
 from homeassistant.core import HomeAssistant
@@ -11,6 +12,9 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .const import DOMAIN, SCAN_INTERVAL_SECONDS
 
 _LOGGER = logging.getLogger(__name__)
+
+_CARRIER_OK_INTERVAL = 300  # 5 min when ok
+_CARRIER_ERR_INTERVAL = 120  # 2 min when error
 
 
 class InfinitudeDataCoordinator(DataUpdateCoordinator):
@@ -28,6 +32,8 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         self.api_lock = asyncio.Lock()
         self._last_local_time: str | None = None
         self._stale_count: int = 0
+        self._carrier_ok: bool | None = None
+        self._carrier_last_check: float = 0
 
     async def _async_update_data(self) -> dict:
         try:
@@ -45,6 +51,8 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         parsed = self._parse(systems, status)
         self._update_staleness(parsed.get("local_time"))
         parsed["stale"] = self._stale_count >= 2
+        await self._check_carrier()
+        parsed["carrier_ok"] = self._carrier_ok
         return parsed
 
     def _update_staleness(self, local_time: str | None) -> None:
@@ -55,6 +63,21 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         else:
             self._stale_count = 0
         self._last_local_time = local_time
+
+    async def _check_carrier(self) -> None:
+        """Periodically check /Alive to see if Carrier cloud is reachable."""
+        now = time.monotonic()
+        interval = _CARRIER_OK_INTERVAL if self._carrier_ok else _CARRIER_ERR_INTERVAL
+        if now - self._carrier_last_check < interval:
+            return
+        self._carrier_last_check = now
+        try:
+            async with asyncio.timeout(10):
+                resp = await self._session.get(f"{self.host}/Alive")
+                text = await resp.text()
+                self._carrier_ok = resp.ok and "alive" in text.lower()
+        except Exception:
+            self._carrier_ok = False
 
     def _parse(self, systems: dict, status: dict) -> dict:
         try:

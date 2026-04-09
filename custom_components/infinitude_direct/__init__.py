@@ -42,10 +42,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not hass.services.has_service(DOMAIN, "save_schedule"):
         _register_services(hass)
 
+    # Reload integration when options (host URL) change
+    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+
     # Install card, resource, and dashboard (fire-and-forget)
     hass.async_create_task(_setup_frontend(hass))
 
     return True
+
+
+async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the integration when configuration changes."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

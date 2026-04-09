@@ -4,7 +4,7 @@
  */
 import { LitElement, html, css, nothing } from 'lit';
 
-const CARD_VERSION = '1.0.75';
+const CARD_VERSION = '1.0.76';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const JS_DAY_MAP = [6,0,1,2,3,4,5];
 const ACTIVITIES = ['home','away','sleep','wake'];
@@ -60,7 +60,7 @@ class InfinitudeHVACCard extends LitElement {
   constructor() {
     super();
     this._config = {};
-    this._tab = 'zones';
+    this._tab = 'status';
     this._schedDay = DAYS[JS_DAY_MAP[new Date().getDay()]];
     this._schedEdits = {};
     this._profileEdits = {};
@@ -332,30 +332,38 @@ class InfinitudeHVACCard extends LitElement {
     :host { display: block; }
     ha-card { overflow: hidden; }
     .card-header {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 16px 16px 8px; flex-wrap: wrap; gap: 8px;
+      display: flex; align-items: center;
+      padding: 12px 16px 8px; gap: 8px;
     }
-    .header-left { display: flex; align-items: center; gap: 12px; }
+    .header-left { display: flex; align-items: center; gap: 8px; }
     .header-title { font-size: 18px; font-weight: 500; color: var(--primary-text-color); }
-    .header-mode {
-      font-size: 11px; font-weight: 600; text-transform: uppercase;
-      padding: 3px 8px; border-radius: 4px;
-      background: var(--primary-color); color: var(--text-primary-color, #fff);
+    .conn-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .conn-dot.ok { background: var(--label-badge-green, #34d399); animation: pulse-dot 2.5s ease infinite; }
+    .conn-dot.err { background: #ef4444; }
+    .conn-dot.unk { background: var(--secondary-text-color); opacity: 0.4; }
+    @keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .summary-stats {
+      display: flex; align-items: center; gap: 0; margin-bottom: 14px;
+      border: 1px solid var(--divider-color); border-radius: 8px; overflow: hidden;
     }
-    .header-mode.heat { background: var(--label-badge-red, #f97316); }
-    .header-mode.cool { background: var(--label-badge-blue, #38bdf8); }
-    .header-mode.auto { background: var(--label-badge-green, #34d399); }
-    .header-stats { display: flex; gap: 16px; align-items: center; font-size: 12px; color: var(--secondary-text-color); }
-    .stat-val { font-weight: 600; color: var(--primary-text-color); }
+    .summary-stat {
+      display: flex; flex-direction: column; align-items: center; gap: 2px;
+      padding: 8px 14px; flex: 1; min-width: 0;
+    }
+    .summary-stat-label { font-size: 10px; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.5px; }
+    .summary-stat-val { font-size: 14px; font-weight: 700; color: var(--primary-text-color); }
+    .summary-stat-val.heat { color: var(--label-badge-red, #f97316); }
+    .summary-stat-val.cool { color: var(--label-badge-blue, #38bdf8); }
+    .summary-divider { width: 1px; align-self: stretch; background: var(--divider-color); }
     .wh-hold {
       display: flex; align-items: center; gap: 6px; width: 100%;
-      padding: 8px 12px; margin-top: 4px;
+      padding: 8px 12px; margin-bottom: 14px;
       background: rgba(251,191,36,0.08); border: 1px solid rgba(251,191,36,0.2);
       border-radius: 8px; font-size: 12px; color: var(--warning-color, #fbbf24); cursor: pointer;
     }
     .wh-hold:hover { background: rgba(251,191,36,0.14); }
     .wh-set {
-      display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 4px;
+      display: flex; align-items: center; gap: 8px; width: 100%; margin-bottom: 14px;
       padding: 10px 12px; background: var(--secondary-background-color);
       border: 1px solid var(--divider-color); border-radius: 8px; flex-wrap: wrap;
     }
@@ -565,19 +573,34 @@ class InfinitudeHVACCard extends LitElement {
         <div class="card-header">${this._hdr(ent)}</div>
         <div class="card-tabs">${this._tabs()}</div>
         <div class="card-content">
-          ${this._tab === 'zones'    ? this._zones(ent) : nothing}
-          ${this._tab === 'schedule' ? this._sched(ent) : nothing}
-          ${this._tab === 'profiles' ? this._profs()     : nothing}
+          ${this._tab === 'status'   ? this._status(ent) : nothing}
+          ${this._tab === 'schedule' ? this._sched(ent)   : nothing}
+          ${this._tab === 'profiles' ? this._profs()      : nothing}
         </div>
       </ha-card>`;
   }
 
-  // ── Header ─────────────────────────────────────────────────────────────
+  // ── Header (branding + dots + version only) ────────────────────────────
   _hdr(ent) {
+    const { system } = ent;
+    const infAvail = system.info ? this._st(system.info)?.state !== 'unavailable' : false;
+    const carrierOk = system.info ? this._at(system.info, 'carrier_ok') : null;
+
+    return html`
+      <div class="header-left">
+        <span class="header-title">infinitude</span>
+        <span class="conn-dot ${infAvail ? 'ok' : 'err'}" title="${infAvail ? 'Infinitude: connected' : 'Infinitude: unavailable'}"></span>
+        <span class="conn-dot ${carrierOk === true ? 'ok' : carrierOk === false ? 'err' : 'unk'}" title="${carrierOk === true ? 'Carrier cloud: connected' : carrierOk === false ? 'Carrier cloud: unreachable' : 'Carrier cloud: checking…'}"></span>
+        <span style="font-size:10px;color:var(--secondary-text-color);opacity:0.5">v${CARD_VERSION}</span>
+      </div>`;
+  }
+
+  // ── Summary strip (mode, stats, WH hold — inside Status tab) ───────────
+  _summaryStrip(ent) {
     const { system, selects, climates } = ent;
     const mode = climates.length ? (this._st(climates[0])?.state || 'off') : 'off';
-    const mc = mode === 'heat' ? 'heat' : mode === 'cool' ? 'cool' : (mode === 'heat_cool' || mode === 'auto') ? 'auto' : '';
-    const ml = mode === 'heat_cool' ? 'Auto' : mode.charAt(0).toUpperCase() + mode.slice(1);
+    const modes = ['off','heat','cool','heat_cool'];
+    const lbl = { off:'Off', heat:'Heat', cool:'Cool', heat_cool:'Auto' };
 
     const os = this._st(system.oat);
     let oat = '–';
@@ -593,16 +616,37 @@ class InfinitudeHVACCard extends LitElement {
     const rh = climates.length ? this._at(climates[0], 'current_humidity') : null;
 
     return html`
-      <div class="header-left">
-        <span class="header-title">HVAC</span>
-        <span class="header-mode ${mc}">${ml}</span>
-        <span style="font-size:10px;color:var(--secondary-text-color);opacity:0.5">v${CARD_VERSION}</span>
+      <div class="mode-row">
+        <span class="mode-label">Mode</span>
+        <div class="mode-pills">
+          ${modes.map(m => {
+            const mc = m === 'heat' ? 'heat' : m === 'cool' ? 'cool' : m === 'heat_cool' ? 'auto' : '';
+            return html`<div class="mode-pill ${m === mode ? 'active' : ''} ${mc}"
+              @click=${() => this._setHvacMode(climates[0], m)}>${lbl[m]}</div>`;
+          })}
+        </div>
       </div>
-      <div class="header-stats">
-        <span>Outside <span class="stat-val">${oat}</span></span>
-        ${rh != null ? html`<span>Indoor RH <span class="stat-val">${rh}%</span></span>` : nothing}
-        ${humid ? html`<span style="color:var(--label-badge-blue,#38bdf8)">💧 Humidifier On</span>` : nothing}
-        ${opStatus ? html`<span>${opStatus}</span>` : nothing}
+      <div class="summary-stats">
+        <div class="summary-stat">
+          <span class="summary-stat-label">Status</span>
+          <span class="summary-stat-val ${opStatus.toLowerCase().includes('heat') ? 'heat' : opStatus.toLowerCase().includes('cool') ? 'cool' : ''}">${opStatus || 'Idle'}</span>
+        </div>
+        <div class="summary-divider"></div>
+        <div class="summary-stat">
+          <span class="summary-stat-label">Outdoor</span>
+          <span class="summary-stat-val">${oat}</span>
+        </div>
+        <div class="summary-divider"></div>
+        <div class="summary-stat">
+          <span class="summary-stat-label">Humidity</span>
+          <span class="summary-stat-val">${rh != null ? `${rh}%` : '–'}</span>
+        </div>
+        ${humid ? html`
+          <div class="summary-divider"></div>
+          <div class="summary-stat">
+            <span class="summary-stat-label">Humidifier</span>
+            <span class="summary-stat-val" style="color:var(--label-badge-blue,#38bdf8)">💧 On</span>
+          </div>` : nothing}
       </div>
       ${whHold ? html`
         <div class="wh-hold" @click=${() => this._cancelWholeHouseHold()}>
@@ -627,7 +671,7 @@ class InfinitudeHVACCard extends LitElement {
             <button class="btn btn-primary" style="font-size:11px;padding:4px 12px" @click=${() => this._setWholeHouseHold()}>Apply</button>
             <button class="btn" style="font-size:11px;padding:4px 10px" @click=${() => { this._whHoldOpen = false; }}>Cancel</button>
           </div>` : html`
-          <div style="width:100%;margin-top:4px">
+          <div>
             <button class="btn" style="font-size:11px;padding:4px 12px" @click=${() => { this._whHoldOpen = true; }}>
               <ha-icon icon="mdi:home-lock" style="--mdc-icon-size:14px;vertical-align:middle;margin-right:4px"></ha-icon>Set WH hold
             </button>
@@ -637,30 +681,19 @@ class InfinitudeHVACCard extends LitElement {
 
   // ── Tabs ───────────────────────────────────────────────────────────────
   _tabs() {
-    return html`${['zones','schedule','profiles'].map(t => html`
+    const tabs = ['status','schedule','profiles'];
+    return html`${tabs.map(t => html`
       <div class="tab ${this._tab === t ? 'active' : ''}"
            @click=${() => { this._tab = t; }}>${t.charAt(0).toUpperCase() + t.slice(1)}</div>`)}`;
   }
 
-  // ── Zones ──────────────────────────────────────────────────────────────
-  _zones(ent) {
+  // ── Status tab (summary strip + zone cards) ──────────────────────────
+  _status(ent) {
     const { climates } = ent;
     if (!climates.length) return html`<div style="padding:20px;text-align:center;color:var(--secondary-text-color)">No zone entities found</div>`;
-    const mode = this._st(climates[0])?.state || 'off';
-    const modes = ['off','heat','cool','heat_cool'];
-    const lbl = { off:'Off', heat:'Heat', cool:'Cool', heat_cool:'Auto' };
 
     return html`
-      <div class="mode-row">
-        <span class="mode-label">Mode</span>
-        <div class="mode-pills">
-          ${modes.map(m => {
-            const mc = m === 'heat' ? 'heat' : m === 'cool' ? 'cool' : m === 'heat_cool' ? 'auto' : '';
-            return html`<div class="mode-pill ${m === mode ? 'active' : ''} ${mc}"
-              @click=${() => this._setHvacMode(climates[0], m)}>${lbl[m]}</div>`;
-          })}
-        </div>
-      </div>
+      ${this._summaryStrip(ent)}
       <div class="zone-grid">${climates.map(eid => this._zoneCard(eid))}</div>`;
   }
 
