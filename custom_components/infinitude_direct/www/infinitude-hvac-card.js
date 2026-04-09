@@ -29,7 +29,8 @@ class InfinitudeHVACCard extends HTMLElement {
     this._rendered = false;
     this._stateHash = '';
     this._renderTimer = null;
-    this._cachedEntities = null;
+    this._registryEntities = null;
+    this._registryLoaded = false;
   }
 
   static getConfigElement() { return document.createElement('div'); }
@@ -45,9 +46,10 @@ class InfinitudeHVACCard extends HTMLElement {
   set hass(hass) {
     const prev = this._hass;
     this._hass = hass;
-    // First render — do it immediately
-    if (!prev) { this._doRender(); return; }
-    // Throttle: schedule a render at most every 2s
+    if (!prev) {
+      this._loadRegistry().then(() => this._doRender());
+      return;
+    }
     if (!this._renderTimer) {
       this._renderTimer = setTimeout(() => {
         this._renderTimer = null;
@@ -66,11 +68,28 @@ class InfinitudeHVACCard extends HTMLElement {
 
   getCardSize() { return 8; }
 
+  // ── Entity Registry ─────────────────────────────────────────────────────
+  async _loadRegistry() {
+    if (this._registryLoaded || !this._hass) return;
+    try {
+      const entries = await this._hass.connection.sendMessagePromise({
+        type: 'config/entity_registry/list',
+      });
+      // Filter to our integration only
+      this._registryEntities = entries.filter(
+        e => e.platform === 'infinitude_direct'
+      );
+      this._registryLoaded = true;
+    } catch (e) {
+      console.warn('Failed to load entity registry', e);
+      this._registryEntities = [];
+    }
+  }
+
   _computeStateHash() {
     if (!this._hass) return '';
     const entities = this._findEntities();
     const parts = [];
-    // Only hash the specific entities we've discovered — not all states
     for (const eid of entities.climates) {
       const s = this._hass.states[eid];
       if (!s) continue;
@@ -82,8 +101,9 @@ class InfinitudeHVACCard extends HTMLElement {
         a.hvac_action, a.preset_mode, a.fan_mode, a.damper_position,
       );
     }
-    const { system, selects } = entities;
-    for (const eid of [system.humidifier, system.oat, system.opStatus, system.info, selects.wholeHouse]) {
+    const sys = entities.system;
+    const sel = entities.selects;
+    for (const eid of [sys.humidifier, sys.oat, sys.opStatus, sys.info, sel.wholeHouse]) {
       if (!eid) continue;
       const s = this._hass.states[eid];
       if (s) parts.push(eid, s.state);
@@ -91,54 +111,47 @@ class InfinitudeHVACCard extends HTMLElement {
     return parts.join('|');
   }
 
-  // ── Entity Discovery ────────────────────────────────────────────────────
+  // ── Entity Discovery (registry-based) ──────────────────────────────────
   _findEntities() {
-    // Cache discovery — only rescan every 30s
-    if (this._cachedEntities && (Date.now() - this._entitiesCacheTime < 30000)) {
-      return this._cachedEntities;
-    }
-
     if (!this._hass) return { climates: [], sensors: {}, selects: {}, system: {} };
+
+    const reg = this._registryEntities || [];
     const states = this._hass.states;
     const climates = [];
     const sensors = { damper: {}, fan: {} };
     const selects = {};
     const system = {};
 
-    // If user specified entities in config, use those
+    // User-specified overrides always win
     if (this._config.climate_entities) {
       for (const eid of this._config.climate_entities) {
         if (states[eid]) climates.push(eid);
       }
     }
 
-    // Auto-discover: climate entities with outdoor_temperature attribute
-    // (unique fingerprint of Infinitude climate entities)
-    if (!climates.length) {
-      for (const eid of Object.keys(states)) {
-        if (eid.startsWith('climate.') && states[eid].attributes?.outdoor_temperature !== undefined) {
-          climates.push(eid);
-        }
+    // Classify entities from the registry
+    for (const entry of reg) {
+      const eid = entry.entity_id;
+      if (!states[eid]) continue;
+      const domain = eid.split('.')[0];
+      const uid = entry.unique_id || '';
+
+      if (domain === 'climate') {
+        if (!this._config.climate_entities) climates.push(eid);
+      } else if (domain === 'select') {
+        selects.wholeHouse = eid;
+      } else if (domain === 'sensor') {
+        if (uid.includes('damper')) sensors.damper[eid] = states[eid];
+        else if (uid.includes('fan')) sensors.fan[eid] = states[eid];
+        else if (uid.includes('humidifier')) system.humidifier = eid;
+        else if (uid.includes('oat')) system.oat = eid;
+        else if (uid.includes('op_status')) system.opStatus = eid;
+        else if (uid.includes('system_info')) system.info = eid;
       }
     }
 
-    // Find related entities — only scan infinitude_direct integration entities
-    for (const eid of Object.keys(states)) {
-      if (!eid.includes('infinitude') && !eid.includes('whole_house_hold')) continue;
-      if (eid.includes('_damper')) sensors.damper[eid] = states[eid];
-      else if (eid.includes('_fan') && eid.startsWith('sensor.')) sensors.fan[eid] = states[eid];
-      else if (eid.includes('humidifier')) system.humidifier = eid;
-      else if (eid.includes('outdoor_temperature') && eid.startsWith('sensor.')) system.oat = eid;
-      else if (eid.includes('operation_status')) system.opStatus = eid;
-      else if (eid.includes('system_info')) system.info = eid;
-      else if (eid === 'select.whole_house_hold') selects.wholeHouse = eid;
-    }
-
     climates.sort();
-    const result = { climates, sensors, selects, system };
-    this._cachedEntities = result;
-    this._entitiesCacheTime = Date.now();
-    return result;
+    return { climates, sensors, selects, system };
   }
 
   _getState(entityId) {
