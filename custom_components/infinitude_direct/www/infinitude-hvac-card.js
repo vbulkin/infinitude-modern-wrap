@@ -1050,12 +1050,16 @@ class InfinitudeHVACCard extends HTMLElement {
   }
 }
 
-customElements.define('infinitude-hvac-card', InfinitudeHVACCard);
+if (!customElements.get('infinitude-hvac-card')) {
+  customElements.define('infinitude-hvac-card', InfinitudeHVACCard);
+}
 
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: 'infinitude-hvac-card',
-  name: 'Infinitude HVAC Card',
-  description: 'Full HVAC dashboard for Carrier/Bryant Infinity thermostats',
-  preview: false,
-});
+if (!window.customCards.some(c => c.type === 'infinitude-hvac-card')) {
+  window.customCards.push({
+    type: 'infinitude-hvac-card',
+    name: 'Infinitude HVAC Card',
+    description: 'Full HVAC dashboard for Carrier/Bryant Infinity thermostats',
+    preview: false,
+  });
+}

@@ -2,11 +2,11 @@
 
 import json
 import logging
+import shutil
 from pathlib import Path
 
 import voluptuous as vol
 
-from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
@@ -19,8 +19,14 @@ _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [Platform.CLIMATE, Platform.SELECT, Platform.SENSOR]
 
-CARD_URL = "/infinitude_direct/infinitude-hvac-card.js"
-CARD_PATH = Path(__file__).parent / "www" / "infinitude-hvac-card.js"
+CARD_FILENAME = "infinitude-hvac-card.js"
+CARD_DIR = "www/community/infinitude_direct"
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Set up the Infinitude Direct domain (card installation)."""
+    await _install_card(hass)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -35,20 +41,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register services
     _register_services(hass)
 
-    # Serve the custom card JS
-    await _register_card(hass)
-
     return True
 
 
-async def _register_card(hass: HomeAssistant) -> None:
-    """Register static path for the custom Lovelace card."""
+async def _install_card(hass: HomeAssistant) -> None:
+    """Copy card JS to HA www directory so /local/ can serve it."""
+    src = Path(__file__).parent / "www" / CARD_FILENAME
+    dst_dir = Path(hass.config.path(CARD_DIR))
+    dst = dst_dir / CARD_FILENAME
+
+    def _copy() -> None:
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        if src.is_file():
+            shutil.copy2(src, dst)
+            _LOGGER.info("Installed HVAC card JS → %s", dst)
+        else:
+            _LOGGER.error("HVAC card JS source not found: %s", src)
+
     try:
-        await hass.http.async_register_static_paths(
-            [StaticPathConfig(CARD_URL, str(CARD_PATH), False)]
-        )
-    except Exception:  # noqa: BLE001
-        _LOGGER.debug("Static path %s already registered", CARD_URL)
+        await hass.async_add_executor_job(_copy)
+    except Exception:
+        _LOGGER.exception("Failed to install HVAC card JS")
 
 
 def _register_services(hass: HomeAssistant) -> None:
