@@ -27,6 +27,7 @@ class InfinitudeHVACCard extends HTMLElement {
     this._schedEdits = {};
     this._profileEdits = {};
     this._rendered = false;
+    this._stateHash = '';
   }
 
   static getConfigElement() { return document.createElement('div'); }
@@ -41,10 +42,31 @@ class InfinitudeHVACCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
-    this._render();
+    const hash = this._computeStateHash();
+    if (hash !== this._stateHash) {
+      this._stateHash = hash;
+      this._render();
+    }
   }
 
   getCardSize() { return 8; }
+
+  _computeStateHash() {
+    if (!this._hass) return '';
+    const entities = this._findEntities();
+    const parts = [];
+    for (const eid of entities.climates) {
+      const s = this._hass.states[eid];
+      if (s) parts.push(eid, s.state, s.last_changed);
+    }
+    for (const eid of Object.keys(this._hass.states)) {
+      if (eid.includes('infinitude') || eid.includes('whole_house')) {
+        const s = this._hass.states[eid];
+        if (s) parts.push(eid, s.state, s.last_changed);
+      }
+    }
+    return parts.join('|');
+  }
 
   // ── Entity Discovery ────────────────────────────────────────────────────
   _findEntities() {
