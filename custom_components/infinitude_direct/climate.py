@@ -16,10 +16,17 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    DAMPER_RAW_MAX,
+    DEFAULT_COOL_SP,
+    DEFAULT_HEAT_SP,
     DOMAIN,
     HA_TO_INFINITUDE_HVAC,
     INFINITUDE_TO_HA_HVAC,
     MANUFACTURER,
+    MAX_COOL_TEMP,
+    MAX_HEAT_TEMP,
+    MIN_COOL_TEMP,
+    MIN_HEAT_TEMP,
     MODEL,
     PRESET_MODES,
 )
@@ -55,8 +62,8 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
         HVACMode.HEAT_COOL,
     ]
     _attr_preset_modes = PRESET_MODES
-    _attr_min_temp = 50
-    _attr_max_temp = 99
+    _attr_min_temp = MIN_HEAT_TEMP
+    _attr_max_temp = MAX_COOL_TEMP
     _attr_target_temperature_step = 1
 
     def __init__(
@@ -90,7 +97,7 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
     def supported_features(self) -> ClimateEntityFeature:
         features = ClimateEntityFeature.PRESET_MODE
         mode = self.coordinator.data.get("mode", "off")
-        if mode in ("auto", "heatcool"):
+        if mode == "auto":
             features |= ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
         else:
             features |= ClimateEntityFeature.TARGET_TEMPERATURE
@@ -126,7 +133,7 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
     def target_temperature_high(self) -> float | None:
         z = self._zone_data
         mode = self.coordinator.data.get("mode", "off")
-        if mode in ("auto", "heatcool") and z and z.get("clsp"):
+        if mode == "auto" and z and z.get("clsp"):
             return float(z["clsp"])
         return None
 
@@ -134,7 +141,7 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
     def target_temperature_low(self) -> float | None:
         z = self._zone_data
         mode = self.coordinator.data.get("mode", "off")
-        if mode in ("auto", "heatcool") and z and z.get("htsp"):
+        if mode == "auto" and z and z.get("htsp"):
             return float(z["htsp"])
         return None
 
@@ -177,7 +184,7 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
         if z:
             if z.get("damper"):
                 try:
-                    attrs["damper_position"] = round(int(z["damper"]) / 15 * 100)
+                    attrs["damper_position"] = round(int(z["damper"]) / DAMPER_RAW_MAX * 100)
                 except (ValueError, TypeError):
                     _LOGGER.warning("Invalid damper value '%s' for zone %s", z["damper"], self._zone_id)
             if z.get("fan"):
@@ -200,8 +207,7 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         inf_mode = HA_TO_INFINITUDE_HVAC.get(hvac_mode, "off")
-        async with self.coordinator.api_lock:
-            await self.coordinator.async_set_mode(inf_mode)
+        await self.coordinator.async_set_mode(inf_mode)
         await self.coordinator.async_request_refresh()
 
     async def async_set_temperature(self, **kwargs) -> None:
@@ -210,43 +216,41 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
             _LOGGER.warning("set_temperature: zone %s data not available", self._zone_id)
             return
 
-        current_htsp = int(float(z.get("htsp") or 68))
-        current_clsp = int(float(z.get("clsp") or 76))
+        current_htsp = int(float(z.get("htsp") or DEFAULT_HEAT_SP))
+        current_clsp = int(float(z.get("clsp") or DEFAULT_COOL_SP))
 
         mode = self.coordinator.data.get("mode", "off")
 
         if "target_temp_low" in kwargs and "target_temp_high" in kwargs:
-            new_htsp = max(50, min(90, int(kwargs["target_temp_low"])))
-            new_clsp = max(60, min(99, int(kwargs["target_temp_high"])))
+            new_htsp = max(MIN_HEAT_TEMP, min(MAX_HEAT_TEMP, int(kwargs["target_temp_low"])))
+            new_clsp = max(MIN_COOL_TEMP, min(MAX_COOL_TEMP, int(kwargs["target_temp_high"])))
         elif "temperature" in kwargs:
             temp = int(kwargs["temperature"])
             if mode == "heat":
-                new_htsp = max(50, min(90, temp))
+                new_htsp = max(MIN_HEAT_TEMP, min(MAX_HEAT_TEMP, temp))
                 new_clsp = current_clsp
             elif mode == "cool":
                 new_htsp = current_htsp
-                new_clsp = max(60, min(99, temp))
+                new_clsp = max(MIN_COOL_TEMP, min(MAX_COOL_TEMP, temp))
             else:
-                new_htsp = max(50, min(90, temp))
+                new_htsp = max(MIN_HEAT_TEMP, min(MAX_HEAT_TEMP, temp))
                 new_clsp = current_clsp
         else:
             return
 
-        async with self.coordinator.api_lock:
-            await self.coordinator.async_set_activity_temps(
-                self._zone_id, "manual", new_htsp, new_clsp
-            )
-            await self.coordinator.async_set_hold(
-                self._zone_id, "manual"
-            )
+        await self.coordinator.async_set_activity_temps(
+            self._zone_id, "manual", new_htsp, new_clsp
+        )
+        await self.coordinator.async_set_hold(
+            self._zone_id, "manual"
+        )
         await self.coordinator.async_request_refresh()
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         if preset_mode in PRESET_MODES:
-            async with self.coordinator.api_lock:
-                await self.coordinator.async_set_hold(
-                    self._zone_id, preset_mode, "forever"
-                )
+            await self.coordinator.async_set_hold(
+                self._zone_id, preset_mode, "forever"
+            )
             await self.coordinator.async_request_refresh()
         else:
             _LOGGER.warning("set_preset_mode: unknown preset '%s'", preset_mode)

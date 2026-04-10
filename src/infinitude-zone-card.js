@@ -6,6 +6,8 @@
 import {
   InfinitudeBase, sharedStyles, html, css, nothing,
   ACTIVITIES, HOLD_ACTIVITIES, DURATION_OPTIONS,
+  MIN_HEAT_TEMP, MAX_HEAT_TEMP, MIN_COOL_TEMP, MAX_COOL_TEMP,
+  DEFAULT_HEAT_SP, DEFAULT_COOL_SP,
 } from './shared.js';
 
 class InfinitudeZoneCard extends InfinitudeBase {
@@ -30,8 +32,8 @@ class InfinitudeZoneCard extends InfinitudeBase {
     this._holdActivity = 'home';
     this._holdDuration = '120';
     this._holdCustom = '';
-    this._holdHtsp = 68;
-    this._holdClsp = 76;
+    this._holdHtsp = DEFAULT_HEAT_SP;
+    this._holdClsp = DEFAULT_COOL_SP;
     this._holdFan = 'auto';
   }
 
@@ -167,14 +169,14 @@ class InfinitudeZoneCard extends InfinitudeBase {
               ${this._holdActivity === 'manual' ? html`
                 <div class="hold-picker-row" style="gap:10px;flex-wrap:wrap">
                   <div class="sp-row">
-                    <button class="btn-adj" @click=${() => { this._holdHtsp = Math.max(50, this._holdHtsp - 1); }}>−</button>
-                    <span class="sp-val sp-heat">${this._holdHtsp}°</span>
-                    <button class="btn-adj" @click=${() => { this._holdHtsp = Math.min(90, this._holdHtsp + 1); }}>+</button>
-                  </div>
-                  <div class="sp-row">
-                    <button class="btn-adj" @click=${() => { this._holdClsp = Math.max(60, this._holdClsp - 1); }}>−</button>
-                    <span class="sp-val sp-cool">${this._holdClsp}°</span>
-                    <button class="btn-adj" @click=${() => { this._holdClsp = Math.min(99, this._holdClsp + 1); }}>+</button>
+                  <button class="btn-adj" @click=${() => { this._holdHtsp = Math.max(MIN_HEAT_TEMP, this._holdHtsp - 1); }}>−</button>
+                  <span class="sp-val sp-heat">${this._holdHtsp}°</span>
+                  <button class="btn-adj" @click=${() => { this._holdHtsp = Math.min(MAX_HEAT_TEMP, this._holdHtsp + 1); }}>+</button>
+                </div>
+                <div class="sp-row">
+                  <button class="btn-adj" @click=${() => { this._holdClsp = Math.max(MIN_COOL_TEMP, this._holdClsp - 1); }}>−</button>
+                  <span class="sp-val sp-cool">${this._holdClsp}°</span>
+                  <button class="btn-adj" @click=${() => { this._holdClsp = Math.min(MAX_COOL_TEMP, this._holdClsp + 1); }}>+</button>
                   </div>
                   <div style="display:flex;align-items:center;gap:4px">
                     <span style="font-size:10px;color:var(--secondary-text-color)">Fan</span>
@@ -206,101 +208,6 @@ class InfinitudeZoneCard extends InfinitudeBase {
       </ha-card>`;
   }
 
-  // ── Temperature adjustment with debounce ────────────────────────────
-  _adjustTemp(eid, delta, sp) {
-    const s = this._st(eid); if (!s) return;
-    const a = s.attributes || {};
-    const adj = this._tempAdj[eid] || (this._tempAdj[eid] = {});
-
-    const curHeat = adj.heat ?? a.target_temp_low ?? a.temperature ?? 68;
-    const curCool = adj.cool ?? a.target_temp_high ?? (s.state === 'cool' ? a.temperature : null) ?? 76;
-
-    if (sp === 'heat') adj.heat = Math.max(50, Math.min(90, Math.round(curHeat) + delta));
-    else               adj.cool = Math.max(60, Math.min(99, Math.round(curCool) + delta));
-
-    this._pendingTemps = { ...this._pendingTemps, [eid]: { heat: adj.heat, cool: adj.cool } };
-
-    if (!adj.committing) {
-      clearTimeout(adj.timer);
-      adj.timer = setTimeout(() => this._commitAdj(eid), 800);
-    }
-  }
-
-  async _commitAdj(eid) {
-    const adj = this._tempAdj[eid];
-    if (!adj || adj.committing) return;
-    adj.committing = true;
-
-    const s = this._st(eid);
-    const a = s?.attributes || {};
-    const snapH = adj.heat, snapC = adj.cool;
-    const htsp = snapH ?? Math.round(a.target_temp_low ?? a.temperature ?? 68);
-    const clsp = snapC ?? Math.round(a.target_temp_high ?? (s?.state === 'cool' ? a.temperature : null) ?? 76);
-
-    const mode = s?.state || 'off';
-    const d = { entity_id: eid };
-    if (mode === 'heat_cool') { d.target_temp_low = htsp; d.target_temp_high = clsp; }
-    else if (mode === 'heat') { d.temperature = htsp; }
-    else if (mode === 'cool') { d.temperature = clsp; }
-    else { d.target_temp_low = htsp; d.target_temp_high = clsp; }
-
-    try { await this.hass.callService('climate', 'set_temperature', d); }
-    catch (e) { console.error('set_temperature failed', e); }
-
-    adj.committing = false;
-
-    if (adj.heat !== snapH || adj.cool !== snapC) {
-      adj.timer = setTimeout(() => this._commitAdj(eid), 400);
-      return;
-    }
-
-    adj.heat = null; adj.cool = null; adj.timer = null;
-    adj.graceUntil = Date.now() + 30000;
-    setTimeout(() => {
-      if (!this._tempAdj[eid]?.heat && !this._tempAdj[eid]?.cool) {
-        const { [eid]: _, ...rest } = this._pendingTemps;
-        this._pendingTemps = rest;
-      }
-    }, 2000);
-  }
-
-  _hasPending(eid) {
-    const adj = this._tempAdj[eid];
-    return adj && (adj.heat != null || adj.cool != null || adj.committing);
-  }
-
-  // ── Hold controls ──────────────────────────────────────────────────────
-  _cancelHold(eid) {
-    const zoneId = this._zoneId(eid);
-    if (!zoneId) return;
-    this._svc('infinitude_direct', 'cancel_hold', { zone_id: zoneId });
-  }
-
-  _setZoneHold(eid) {
-    const zoneId = this._zoneId(eid);
-    if (!zoneId) return;
-    const until = this._resolveUntil(this._holdDuration, this._holdCustom);
-    if (until === null) return;
-    if (this._holdActivity === 'manual') {
-      this._svc('infinitude_direct', 'set_profile', {
-        zone_id: zoneId, activity: 'manual',
-        htsp: this._holdHtsp, clsp: this._holdClsp, fan: this._holdFan,
-      });
-    }
-    this._svc('infinitude_direct', 'set_hold', {
-      zone_id: zoneId, activity: this._holdActivity,
-      ...(until !== undefined && { until }),
-    });
-    this._holdOpen = false;
-  }
-
-  _initHoldManual(eid) {
-    const zid = this._zoneId(eid);
-    const act = (this._getProfilesData().find(z => z.id === zid)?.activities?.manual) || {};
-    this._holdHtsp = act.htsp ? Math.round(Number(act.htsp) || 68) : 68;
-    this._holdClsp = act.clsp ? Math.round(Number(act.clsp) || 76) : 76;
-    this._holdFan  = act.fan || 'auto';
-  }
 }
 
 if (!customElements.get('infinitude-zone-card')) {

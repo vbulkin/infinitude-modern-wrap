@@ -15,7 +15,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, MANUFACTURER, MODEL
+from .const import DAMPER_RAW_MAX, DOMAIN, MANUFACTURER, MODEL
 from .coordinator import InfinitudeDataCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -122,7 +122,7 @@ class InfinitudeDamperSensor(InfinitudeZoneSensor):
         z = self._zone_data
         if z and z.get("damper"):
             try:
-                return round(int(z["damper"]) / 15 * 100)
+                return round(int(z["damper"]) / DAMPER_RAW_MAX * 100)
             except (ValueError, TypeError):
                 _LOGGER.warning("Invalid damper value '%s' for zone %s", z["damper"], self._zone_id)
                 return None

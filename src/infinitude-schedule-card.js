@@ -19,6 +19,7 @@ class InfinitudeScheduleCard extends InfinitudeBase {
     super();
     this._schedDay = DAYS[JS_DAY_MAP[new Date().getDay()]];
     this._schedEdits = {};
+    this._saving = false;
   }
 
   static getConfigElement() { return document.createElement('div'); }
@@ -109,112 +110,6 @@ class InfinitudeScheduleCard extends InfinitudeBase {
       </ha-card>`;
   }
 
-  _periodCard(pi, zids, schedule, profiles, zn, zi) {
-    const multiZone = zids.length > 1;
-    return html`
-      <div class="period-card">
-        <div class="period-header">Period ${pi + 1}</div>
-        ${zids.map(zid => {
-          const period = (schedule[zid]?.[this._schedDay] || [])[pi];
-          if (!period) return nothing;
-          const ek = `${zid}_${this._schedDay}_${pi}`;
-          const ed = this._schedEdits[ek];
-          const act = ed?.act ?? period.activity;
-          const time = ed?.time ?? period.time;
-          const enabled = ed?.enabled ?? period.enabled;
-          const zp = profiles.find(z => z.id === zid);
-          const ap = zp?.activities?.[act];
-          const htsp = ap?.htsp ? Math.round(Number(ap.htsp) || 0) : '–';
-          const clsp = ap?.clsp ? Math.round(Number(ap.clsp) || 0) : '–';
-          const label = multiZone ? (CIRCLED[zi[zid]] ?? zid) : (zn[zid] || `Zone ${zid}`);
-
-          return html`
-            <div class="sched-line ${enabled ? '' : 'disabled'}">
-              <span class="sched-name ${multiZone ? 'sched-name-compact' : ''}">${label}</span>
-              <select class="sched-select" .value=${act} @change=${(e) => this._schedEdit(zid, pi, 'act', e.target.value)}>
-                ${ACTIVITIES.map(a => html`<option value=${a} ?selected=${a === act}>${a}</option>`)}
-              </select>
-              <select class="sched-select" .value=${time} @change=${(e) => this._schedEdit(zid, pi, 'time', e.target.value)}>
-                ${TIME_OPTIONS.map(o => html`<option value=${o.v} ?selected=${o.v === time}>${o.l}</option>`)}
-              </select>
-              <label class="sched-toggle">
-                <input type="checkbox" .checked=${enabled}
-                       @change=${(e) => this._schedEdit(zid, pi, 'enabled', e.target.checked)}>
-                <span>on</span>
-              </label>
-              <div class="sched-temps">
-                <span class="sp-heat">${htsp}°</span>
-                <span class="sp-cool">${clsp}°</span>
-              </div>
-            </div>`;
-        })}
-      </div>`;
-  }
-
-  _schedEdit(zid, pi, field, val) {
-    const ek = `${zid}_${this._schedDay}_${pi}`;
-    const prev = this._schedEdits[ek] || {};
-    const p = (this._getScheduleData()[zid]?.[this._schedDay] || [])[pi] || {};
-    this._schedEdits = { ...this._schedEdits, [ek]: {
-      act:     field === 'act'     ? val : (prev.act     ?? p.activity),
-      time:    field === 'time'    ? val : (prev.time    ?? p.time),
-      enabled: field === 'enabled' ? val : (prev.enabled ?? p.enabled),
-    }};
-  }
-
-  _copySched(e) {
-    const tgt = e.target.value; if (!tgt) return;
-    e.target.value = '';
-    const sch = this._getScheduleData();
-    const targets = tgt === '__all__' ? DAYS.filter(d => d !== this._schedDay) : [tgt];
-    const edits = { ...this._schedEdits };
-    for (const zid of Object.keys(sch)) {
-      const periods = sch[zid]?.[this._schedDay] || [];
-      for (const day of targets) {
-        periods.forEach((p, pi) => {
-          const se = this._schedEdits[`${zid}_${this._schedDay}_${pi}`];
-          edits[`${zid}_${day}_${pi}`] = {
-            act: se?.act ?? p.activity, time: se?.time ?? p.time, enabled: se?.enabled ?? p.enabled,
-          };
-        });
-      }
-    }
-    this._schedEdits = edits;
-  }
-
-  async _saveSched() {
-    if (this._saving) return;
-    this._saving = true;
-    const edits = { ...this._schedEdits };
-    try {
-      const sch = this._getScheduleData();
-      for (const zid of Object.keys(sch)) {
-        const prog = DAYS.map(day => ({
-          id: day,
-          period: (sch[zid]?.[day] || []).map((p, pi) => {
-            const ed = edits[`${zid}_${day}_${pi}`];
-            return {
-              id: p.id || String(pi + 1),
-              activity: ed?.act ?? p.activity,
-              time: ed?.time ?? p.time,
-              enabled: (ed?.enabled ?? p.enabled) ? 'on' : 'off',
-            };
-          }),
-        }));
-        await this._svc('infinitude_direct', 'save_schedule', { zone_id: zid, schedule: JSON.stringify(prog) });
-      }
-    } finally {
-      setTimeout(() => {
-        const cur = this._schedEdits;
-        const kept = {};
-        for (const k of Object.keys(cur)) {
-          if (!(k in edits) || cur[k] !== edits[k]) kept[k] = cur[k];
-        }
-        this._schedEdits = kept;
-        this._saving = false;
-      }, 500);
-    }
-  }
 }
 
 if (!customElements.get('infinitude-schedule-card')) {

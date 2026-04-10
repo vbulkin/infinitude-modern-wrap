@@ -100,7 +100,7 @@ async def _install_card(hass: HomeAssistant) -> None:
 
     try:
         await hass.async_add_executor_job(_copy)
-    except Exception:
+    except OSError:
         _LOGGER.exception("Failed to install card JS")
 
 
@@ -143,7 +143,7 @@ async def _ensure_lovelace_resource(hass: HomeAssistant) -> None:
             "url": card_url,
         })
         _LOGGER.info("Registered Lovelace resource: %s", card_url)
-    except Exception:
+    except Exception:  # HA Lovelace internals — no stable API to catch narrower types
         _LOGGER.exception("Failed to register Lovelace resource")
 
 
@@ -180,7 +180,7 @@ async def _ensure_dashboard(hass: HomeAssistant) -> None:
                 }]
             })
         _LOGGER.info("Created HVAC dashboard")
-    except Exception:
+    except Exception:  # HA Lovelace internals — no stable API to catch narrower types
         _LOGGER.exception("Failed to create HVAC dashboard")
 
 
@@ -208,7 +208,7 @@ async def _remove_lovelace_resource(hass: HomeAssistant) -> None:
                     await resources.async_delete_item(item_id)
                     _LOGGER.info("Removed Lovelace resource: %s", item.get("url"))
                 return
-    except Exception:
+    except Exception:  # HA Lovelace internals — no stable API to catch narrower types
         _LOGGER.exception("Failed to remove Lovelace resource")
 
 
@@ -227,7 +227,7 @@ async def _remove_dashboard(hass: HomeAssistant) -> None:
                     await dashboards.async_delete_item(db_id)
                     _LOGGER.info("Removed HVAC dashboard")
                 return
-    except Exception:
+    except Exception:  # HA Lovelace internals — no stable API to catch narrower types
         _LOGGER.exception("Failed to remove HVAC dashboard")
 
 
@@ -242,7 +242,7 @@ async def _remove_card_file(hass: HomeAssistant) -> None:
 
     try:
         await hass.async_add_executor_job(_delete)
-    except Exception:
+    except OSError:
         _LOGGER.exception("Failed to remove card files")
 
 
@@ -257,12 +257,19 @@ async def _remove_dashboard_storage(hass: HomeAssistant) -> None:
 
     try:
         await hass.async_add_executor_job(_delete)
-    except Exception:
+    except OSError:
         _LOGGER.exception("Failed to remove dashboard storage")
 
 
 def _register_services(hass: HomeAssistant) -> None:
     """Register custom services for schedule/profile management."""
+
+    def _coordinator() -> InfinitudeDataCoordinator | None:
+        """Return the first active coordinator, or None."""
+        for coordinator in hass.data[DOMAIN].values():
+            if isinstance(coordinator, InfinitudeDataCoordinator):
+                return coordinator
+        return None
 
     async def handle_save_schedule(call: ServiceCall) -> None:
         zone_id = call.data["zone_id"]
@@ -273,12 +280,12 @@ def _register_services(hass: HomeAssistant) -> None:
             except json.JSONDecodeError:
                 _LOGGER.error("Invalid JSON in schedule data")
                 return
-        for entry_id, coordinator in hass.data[DOMAIN].items():
-            if isinstance(coordinator, InfinitudeDataCoordinator):
-                await coordinator.async_save_schedule(zone_id, schedule_data)
-                await coordinator.async_request_refresh()
-                return
-        _LOGGER.warning("save_schedule: no active coordinator found")
+        c = _coordinator()
+        if not c:
+            _LOGGER.warning("save_schedule: no active coordinator found")
+            return
+        await c.async_save_schedule(zone_id, schedule_data)
+        await c.async_request_refresh()
 
     async def handle_set_profile(call: ServiceCall) -> None:
         zone_id = call.data["zone_id"]
@@ -286,18 +293,14 @@ def _register_services(hass: HomeAssistant) -> None:
         htsp = int(call.data["htsp"])
         clsp = int(call.data["clsp"])
         fan = call.data.get("fan")
-        for entry_id, coordinator in hass.data[DOMAIN].items():
-            if isinstance(coordinator, InfinitudeDataCoordinator):
-                await coordinator.async_set_activity_temps(
-                    zone_id, activity, htsp, clsp
-                )
-                if fan:
-                    await coordinator.async_set_activity_fan(
-                        zone_id, activity, fan
-                    )
-                await coordinator.async_request_refresh()
-                return
-        _LOGGER.warning("set_profile: no active coordinator found")
+        c = _coordinator()
+        if not c:
+            _LOGGER.warning("set_profile: no active coordinator found")
+            return
+        await c.async_set_activity_temps(zone_id, activity, htsp, clsp)
+        if fan:
+            await c.async_set_activity_fan(zone_id, activity, fan)
+        await c.async_request_refresh()
 
     hass.services.async_register(
         DOMAIN,
@@ -324,12 +327,12 @@ def _register_services(hass: HomeAssistant) -> None:
 
     async def handle_cancel_hold(call: ServiceCall) -> None:
         zone_id = call.data["zone_id"]
-        for entry_id, coordinator in hass.data[DOMAIN].items():
-            if isinstance(coordinator, InfinitudeDataCoordinator):
-                await coordinator.async_cancel_hold(zone_id)
-                await coordinator.async_request_refresh()
-                return
-        _LOGGER.warning("cancel_hold: no active coordinator found")
+        c = _coordinator()
+        if not c:
+            _LOGGER.warning("cancel_hold: no active coordinator found")
+            return
+        await c.async_cancel_hold(zone_id)
+        await c.async_request_refresh()
 
     hass.services.async_register(
         DOMAIN,
@@ -344,12 +347,12 @@ def _register_services(hass: HomeAssistant) -> None:
         zone_id = call.data["zone_id"]
         activity = call.data["activity"]
         until = call.data.get("until")
-        for entry_id, coordinator in hass.data[DOMAIN].items():
-            if isinstance(coordinator, InfinitudeDataCoordinator):
-                await coordinator.async_set_hold(zone_id, activity, until)
-                await coordinator.async_request_refresh()
-                return
-        _LOGGER.warning("set_hold: no active coordinator found")
+        c = _coordinator()
+        if not c:
+            _LOGGER.warning("set_hold: no active coordinator found")
+            return
+        await c.async_set_hold(zone_id, activity, until)
+        await c.async_request_refresh()
 
     hass.services.async_register(
         DOMAIN,
@@ -365,12 +368,12 @@ def _register_services(hass: HomeAssistant) -> None:
     async def handle_set_whole_house_hold(call: ServiceCall) -> None:
         activity = call.data["activity"]
         until = call.data.get("until")
-        for entry_id, coordinator in hass.data[DOMAIN].items():
-            if isinstance(coordinator, InfinitudeDataCoordinator):
-                await coordinator.async_set_whole_house_hold(activity, until)
-                await coordinator.async_request_refresh()
-                return
-        _LOGGER.warning("set_whole_house_hold: no active coordinator found")
+        c = _coordinator()
+        if not c:
+            _LOGGER.warning("set_whole_house_hold: no active coordinator found")
+            return
+        await c.async_set_whole_house_hold(activity, until)
+        await c.async_request_refresh()
 
     hass.services.async_register(
         DOMAIN,
@@ -383,12 +386,12 @@ def _register_services(hass: HomeAssistant) -> None:
     )
 
     async def handle_cancel_whole_house_hold(call: ServiceCall) -> None:
-        for entry_id, coordinator in hass.data[DOMAIN].items():
-            if isinstance(coordinator, InfinitudeDataCoordinator):
-                await coordinator.async_cancel_whole_house_hold()
-                await coordinator.async_request_refresh()
-                return
-        _LOGGER.warning("cancel_whole_house_hold: no active coordinator found")
+        c = _coordinator()
+        if not c:
+            _LOGGER.warning("cancel_whole_house_hold: no active coordinator found")
+            return
+        await c.async_cancel_whole_house_hold()
+        await c.async_request_refresh()
 
     hass.services.async_register(
         DOMAIN,

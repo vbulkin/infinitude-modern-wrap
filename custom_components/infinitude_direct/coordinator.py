@@ -3,13 +3,13 @@
 import asyncio
 import logging
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import DOMAIN, SCAN_INTERVAL_SECONDS
+from .const import DOMAIN, SCAN_INTERVAL_SECONDS, STALE_THRESHOLD
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
 
         parsed = self._parse(systems, status)
         self._update_staleness(parsed.get("local_time"))
-        parsed["stale"] = self._stale_count >= 2
+        parsed["stale"] = self._stale_count >= STALE_THRESHOLD
         await self._check_carrier()
         parsed["carrier_ok"] = self._carrier_ok
         return parsed
@@ -89,7 +89,8 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         except (KeyError, IndexError, TypeError) as err:
             raise UpdateFailed(f"Invalid status.json structure: {err}") from err
 
-        mode = self._v(cfg.get("mode")) or "off"
+        raw_mode = self._v(cfg.get("mode")) or "off"
+        mode = "auto" if raw_mode == "heatcool" else raw_mode
         oat = self._v(st.get("oat"))
 
         cfg_zones = self._force_array(
@@ -194,7 +195,15 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
 
     @staticmethod
     def _v(x):
-        """Unwrap Infinitude's single-element array values. [{}] → None."""
+        """Extract a value from XML::Simple's single-element array wrapping.
+
+        XML::Simple encodes `<mode>auto</mode>` as `{"mode": ["auto"]}`
+        and empty elements as `{"tag": [{}]}`.  This unwraps the array
+        and returns None for missing / empty values.
+
+        NOT suitable for ID fields that may be plain strings in the JSON.
+        Use `_scalar()` for those.
+        """
         if not isinstance(x, list) or len(x) == 0:
             return None
         val = x[0]
@@ -205,8 +214,13 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         return val
 
     @staticmethod
-    def _unwrap(x):
-        """Unwrap single-element arrays, pass scalars through unchanged."""
+    def _scalar(x):
+        """Return a scalar value regardless of wrapping.
+
+        Unlike `_v()`, this passes plain strings/ints through unchanged
+        and only unwraps single-element lists.  Used for ID fields that
+        may or may not be array-wrapped depending on context.
+        """
         if isinstance(x, list):
             return x[0] if x else None
         return x
@@ -222,8 +236,6 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
     @staticmethod
     def otmr_from_now(hours: int = 2) -> str:
         """Return an HH:MM string *hours* from now, rounded to 15 min."""
-        from datetime import datetime, timedelta
-
         target = datetime.now() + timedelta(hours=hours)
         minutes = round(target.minute / 15) * 15
         if minutes == 60:
@@ -310,7 +322,7 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
 
             target = None
             for z in cfg_zones:
-                if str(self._unwrap(z.get("id"))) == str(zone_id):
+                if str(self._scalar(z.get("id"))) == str(zone_id):
                     target = z
                     break
 
@@ -333,12 +345,12 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
             days = self._force_array(target["program"][0].get("day", []))
 
             for day in days:
-                day_id = self._unwrap(day.get("id"))
+                day_id = self._scalar(day.get("id"))
                 if day_id not in new_sched:
                     continue
                 day_periods = new_sched[day_id]
                 for period in self._force_array(day.get("period", [])):
-                    p_id = str(self._unwrap(period.get("id")))
+                    p_id = str(self._scalar(period.get("id")))
                     if p_id not in day_periods:
                         continue
                     np = day_periods[p_id]

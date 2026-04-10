@@ -136,19 +136,6 @@ class InfinitudeStatusCard extends InfinitudeBase {
       </ha-card>`;
   }
 
-  _setWholeHouseHold() {
-    const until = this._resolveUntil(this._whHoldDuration, this._whHoldCustom);
-    if (until === null) return;
-    this._svc('infinitude_direct', 'set_whole_house_hold', {
-      activity: this._whHoldActivity,
-      ...(until !== undefined && { until }),
-    });
-    this._whHoldOpen = false;
-  }
-
-  _cancelWholeHouseHold() {
-    this._svc('infinitude_direct', 'cancel_whole_house_hold', {});
-  }
 }
 
 if (!customElements.get('infinitude-status-card')) {

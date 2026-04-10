@@ -9,6 +9,20 @@ CONF_HOST = "host"
 DEFAULT_HOST = "http://local-infinitude:3000"
 SCAN_INTERVAL_SECONDS = 30
 
+# Temperature bounds (Fahrenheit)
+MIN_HEAT_TEMP = 50
+MAX_HEAT_TEMP = 90
+MIN_COOL_TEMP = 60
+MAX_COOL_TEMP = 99
+DEFAULT_HEAT_SP = 68
+DEFAULT_COOL_SP = 76
+
+# Damper raw value range (0–15 from thermostat, displayed as percentage)
+DAMPER_RAW_MAX = 15
+
+# Number of consecutive stale polls before marking data stale
+STALE_THRESHOLD = 2
+
 PRESET_HOME = "home"
 PRESET_AWAY = "away"
 PRESET_SLEEP = "sleep"
@@ -20,7 +34,6 @@ INFINITUDE_TO_HA_HVAC = {
     "cool": "cool",
     "heat": "heat",
     "auto": "heat_cool",
-    "heatcool": "heat_cool",
     "fanonly": "fan_only",
 }
 

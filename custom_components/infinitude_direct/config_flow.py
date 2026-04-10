@@ -13,6 +13,27 @@ from .const import CONF_HOST, DEFAULT_HOST, DOMAIN
 _LOGGER = logging.getLogger(__name__)
 
 
+async def _validate_connection(session, host: str) -> str | None:
+    """Test the connection to an Infinitude proxy.
+
+    Returns an error key string on failure, or None on success.
+    """
+    try:
+        resp = await session.get(
+            f"{host}/status.json", timeout=aiohttp.ClientTimeout(total=10)
+        )
+        resp.raise_for_status()
+        data = await resp.json(content_type=None)
+        if "status" not in data:
+            return "invalid_response"
+    except aiohttp.ClientError:
+        return "cannot_connect"
+    except Exception:
+        _LOGGER.exception("Unexpected error validating connection to %s", host)
+        return "unknown"
+    return None
+
+
 class InfinitudeDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Infinitude Direct."""
 
@@ -20,7 +41,7 @@ class InfinitudeDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     def async_get_options_flow(config_entry):
-        return InfinitudeOptionsFlow(config_entry)
+        return InfinitudeOptionsFlow()
 
     async def async_step_user(self, user_input=None):
         errors = {}
@@ -28,26 +49,16 @@ class InfinitudeDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             host = user_input[CONF_HOST].rstrip("/")
             session = async_get_clientsession(self.hass)
-            try:
-                resp = await session.get(
-                    f"{host}/status.json", timeout=aiohttp.ClientTimeout(total=10)
+            error = await _validate_connection(session, host)
+            if error:
+                errors["base"] = error
+            else:
+                await self.async_set_unique_id(f"{DOMAIN}_{host}")
+                self._abort_if_unique_id_configured()
+                return self.async_create_entry(
+                    title="Infinitude",
+                    data={CONF_HOST: host},
                 )
-                resp.raise_for_status()
-                data = await resp.json(content_type=None)
-                if "status" not in data:
-                    errors["base"] = "invalid_response"
-                else:
-                    await self.async_set_unique_id(f"{DOMAIN}_{host}")
-                    self._abort_if_unique_id_configured()
-                    return self.async_create_entry(
-                        title="Infinitude",
-                        data={CONF_HOST: host},
-                    )
-            except aiohttp.ClientError:
-                errors["base"] = "cannot_connect"
-            except Exception:
-                _LOGGER.exception("Unexpected error during config flow")
-                errors["base"] = "unknown"
 
         return self.async_show_form(
             step_id="user",
@@ -63,34 +74,21 @@ class InfinitudeDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class InfinitudeOptionsFlow(config_entries.OptionsFlow):
     """Handle options for Infinitude Direct (change host URL)."""
 
-    def __init__(self, config_entry):
-        self._entry = config_entry
-
     async def async_step_init(self, user_input=None):
         errors = {}
-        current_host = self._entry.data.get(CONF_HOST, DEFAULT_HOST)
+        current_host = self.config_entry.data.get(CONF_HOST, DEFAULT_HOST)
 
         if user_input is not None:
             host = user_input[CONF_HOST].rstrip("/")
             session = async_get_clientsession(self.hass)
-            try:
-                resp = await session.get(
-                    f"{host}/status.json", timeout=aiohttp.ClientTimeout(total=10)
+            error = await _validate_connection(session, host)
+            if error:
+                errors["base"] = error
+            else:
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry, data={**self.config_entry.data, CONF_HOST: host}
                 )
-                resp.raise_for_status()
-                data = await resp.json(content_type=None)
-                if "status" not in data:
-                    errors["base"] = "invalid_response"
-                else:
-                    self.hass.config_entries.async_update_entry(
-                        self._entry, data={**self._entry.data, CONF_HOST: host}
-                    )
-                    return self.async_create_entry(title="", data={})
-            except aiohttp.ClientError:
-                errors["base"] = "cannot_connect"
-            except Exception:
-                _LOGGER.exception("Unexpected error during options flow")
-                errors["base"] = "unknown"
+                return self.async_create_entry(title="", data={})
 
         return self.async_show_form(
             step_id="init",

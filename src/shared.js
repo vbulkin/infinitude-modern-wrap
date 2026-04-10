@@ -5,7 +5,7 @@ import { LitElement, html, css, nothing } from 'lit';
 
 export { html, css, nothing };
 
-export const CARD_VERSION = '1.0.81';
+export const CARD_VERSION = '1.0.82';
 export const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 export const JS_DAY_MAP = [6,0,1,2,3,4,5];
 export const ACTIVITIES = ['home','away','sleep','wake'];
@@ -34,8 +34,23 @@ export const TIME_OPTIONS = (() => {
   return opts;
 })();
 
+// Temperature bounds (must match Python const.py)
+export const MIN_HEAT_TEMP = 50;
+export const MAX_HEAT_TEMP = 90;
+export const MIN_COOL_TEMP = 60;
+export const MAX_COOL_TEMP = 99;
+export const DEFAULT_HEAT_SP = 68;
+export const DEFAULT_COOL_SP = 76;
+
+// Debounce / cleanup timers (ms)
+export const TEMP_DEBOUNCE_MS = 800;
+export const TEMP_RETRY_MS = 400;
+export const TEMP_CLEANUP_MS = 2000;
+export const SAVE_CLEANUP_MS = 500;
+
 /**
- * Base class providing registry/entity discovery, state helpers, and service calls.
+ * Base class providing registry/entity discovery, state helpers, service calls,
+ * and shared logic methods used by multiple cards.
  * Every Infinitude card extends this.
  */
 export class InfinitudeBase extends LitElement {
@@ -53,6 +68,8 @@ export class InfinitudeBase extends LitElement {
     this._config = {};
     this._registryEntities = null;
     this._registryLoaded = false;
+    this._cachedEntities = null;
+    this._cachedEntitiesHass = null;
   }
 
   setConfig(c) { this._config = c; }
@@ -71,6 +88,9 @@ export class InfinitudeBase extends LitElement {
     if (changed.has('hass') && this.hass && !this._registryLoaded) {
       this._loadRegistry();
     }
+    if (changed.has('hass')) {
+      this._cachedEntities = null;
+    }
   }
 
   async _loadRegistry() {
@@ -86,10 +106,12 @@ export class InfinitudeBase extends LitElement {
       this._registryEntities = [];
     }
     this._registryLoaded = true;
+    this._cachedEntities = null;
   }
 
-  // ── Entity discovery ───────────────────────────────────────────────────
+  // ── Entity discovery (cached per hass update) ──────────────────────────
   _findEntities() {
+    if (this._cachedEntities && this._cachedEntitiesHass === this.hass) return this._cachedEntities;
     if (!this.hass) return { climates: [], sensors: {}, selects: {}, system: {} };
     const reg = this._registryEntities || [];
     const st = this.hass.states;
@@ -118,7 +140,10 @@ export class InfinitudeBase extends LitElement {
       }
     }
     climates.sort();
-    return { climates, sensors, selects, system };
+    const result = { climates, sensors, selects, system };
+    this._cachedEntities = result;
+    this._cachedEntitiesHass = this.hass;
+    return result;
   }
 
   _st(eid) { return eid ? this.hass?.states[eid] ?? null : null; }
@@ -175,6 +200,267 @@ export class InfinitudeBase extends LitElement {
     return html`<ha-card>
       <div style="padding:24px;text-align:center;color:var(--secondary-text-color)">Loading…</div>
     </ha-card>`;
+  }
+
+  // ── Temperature adjustment with debounce ────────────────────────────────
+  _adjustTemp(eid, delta, sp) {
+    const s = this._st(eid); if (!s) return;
+    const a = s.attributes || {};
+    if (!this._tempAdj) this._tempAdj = {};
+    const adj = this._tempAdj[eid] || (this._tempAdj[eid] = {});
+    const curHeat = adj.heat ?? a.target_temp_low ?? a.temperature ?? DEFAULT_HEAT_SP;
+    const curCool = adj.cool ?? a.target_temp_high ?? (s.state === 'cool' ? a.temperature : null) ?? DEFAULT_COOL_SP;
+    if (sp === 'heat') adj.heat = Math.max(MIN_HEAT_TEMP, Math.min(MAX_HEAT_TEMP, Math.round(curHeat) + delta));
+    else               adj.cool = Math.max(MIN_COOL_TEMP, Math.min(MAX_COOL_TEMP, Math.round(curCool) + delta));
+    this._pendingTemps = { ...this._pendingTemps, [eid]: { heat: adj.heat, cool: adj.cool } };
+    if (!adj.committing) {
+      clearTimeout(adj.timer);
+      adj.timer = setTimeout(() => this._commitAdj(eid), TEMP_DEBOUNCE_MS);
+    }
+  }
+
+  async _commitAdj(eid) {
+    if (!this._tempAdj) return;
+    const adj = this._tempAdj[eid];
+    if (!adj || adj.committing) return;
+    adj.committing = true;
+    const s = this._st(eid);
+    const a = s?.attributes || {};
+    const snapH = adj.heat, snapC = adj.cool;
+    const htsp = snapH ?? Math.round(a.target_temp_low ?? a.temperature ?? DEFAULT_HEAT_SP);
+    const clsp = snapC ?? Math.round(a.target_temp_high ?? (s?.state === 'cool' ? a.temperature : null) ?? DEFAULT_COOL_SP);
+    const mode = s?.state || 'off';
+    const d = { entity_id: eid };
+    if (mode === 'heat_cool') { d.target_temp_low = htsp; d.target_temp_high = clsp; }
+    else if (mode === 'heat') { d.temperature = htsp; }
+    else if (mode === 'cool') { d.temperature = clsp; }
+    else { d.target_temp_low = htsp; d.target_temp_high = clsp; }
+    try { await this.hass.callService('climate', 'set_temperature', d); }
+    catch (e) { console.error('set_temperature failed', e); }
+    adj.committing = false;
+    if (adj.heat !== snapH || adj.cool !== snapC) {
+      adj.timer = setTimeout(() => this._commitAdj(eid), TEMP_RETRY_MS);
+      return;
+    }
+    adj.heat = null; adj.cool = null; adj.timer = null;
+    setTimeout(() => {
+      if (!this._tempAdj[eid]?.heat && !this._tempAdj[eid]?.cool) {
+        const { [eid]: _, ...rest } = this._pendingTemps;
+        this._pendingTemps = rest;
+      }
+    }, TEMP_CLEANUP_MS);
+  }
+
+  _hasPending(eid) {
+    const adj = this._tempAdj?.[eid];
+    return adj && (adj.heat != null || adj.cool != null || adj.committing);
+  }
+
+  // ── Hold controls ──────────────────────────────────────────────────────
+  _cancelHold(eid) {
+    const zoneId = this._zoneId(eid);
+    if (!zoneId) return;
+    this._svc('infinitude_direct', 'cancel_hold', { zone_id: zoneId });
+  }
+
+  _setZoneHold(eid) {
+    const zoneId = this._zoneId(eid);
+    if (!zoneId) return;
+    const until = this._resolveUntil(this._holdDuration, this._holdCustom);
+    if (until === null) return;
+    if (this._holdActivity === 'manual') {
+      this._svc('infinitude_direct', 'set_profile', {
+        zone_id: zoneId, activity: 'manual',
+        htsp: this._holdHtsp, clsp: this._holdClsp, fan: this._holdFan,
+      });
+    }
+    this._svc('infinitude_direct', 'set_hold', {
+      zone_id: zoneId, activity: this._holdActivity,
+      ...(until !== undefined && { until }),
+    });
+    this._holdOpen = null;
+  }
+
+  _initHoldManual(eid) {
+    const zid = this._zoneId(eid);
+    const act = (this._getProfilesData().find(z => z.id === zid)?.activities?.manual) || {};
+    this._holdHtsp = act.htsp ? Math.round(Number(act.htsp) || DEFAULT_HEAT_SP) : DEFAULT_HEAT_SP;
+    this._holdClsp = act.clsp ? Math.round(Number(act.clsp) || DEFAULT_COOL_SP) : DEFAULT_COOL_SP;
+    this._holdFan  = act.fan || 'auto';
+  }
+
+  _setWholeHouseHold() {
+    const until = this._resolveUntil(this._whHoldDuration, this._whHoldCustom);
+    if (until === null) return;
+    this._svc('infinitude_direct', 'set_whole_house_hold', {
+      activity: this._whHoldActivity,
+      ...(until !== undefined && { until }),
+    });
+    this._whHoldOpen = false;
+  }
+
+  _cancelWholeHouseHold() {
+    this._svc('infinitude_direct', 'cancel_whole_house_hold', {});
+  }
+
+  // ── Schedule logic ─────────────────────────────────────────────────────
+  _periodCard(pi, zids, schedule, profiles, zn, zi) {
+    const multiZone = zids.length > 1;
+    return html`
+      <div class="period-card">
+        <div class="period-header">Period ${pi + 1}</div>
+        ${zids.map(zid => {
+          const period = (schedule[zid]?.[this._schedDay] || [])[pi];
+          if (!period) return nothing;
+          const ek = `${zid}_${this._schedDay}_${pi}`;
+          const ed = this._schedEdits[ek];
+          const act = ed?.act ?? period.activity;
+          const time = ed?.time ?? period.time;
+          const enabled = ed?.enabled ?? period.enabled;
+          const zp = profiles.find(z => z.id === zid);
+          const ap = zp?.activities?.[act];
+          const htsp = ap?.htsp ? Math.round(Number(ap.htsp) || 0) : '–';
+          const clsp = ap?.clsp ? Math.round(Number(ap.clsp) || 0) : '–';
+          const label = multiZone ? (CIRCLED[zi[zid]] ?? zid) : (zn[zid] || `Zone ${zid}`);
+          return html`
+            <div class="sched-line ${enabled ? '' : 'disabled'}">
+              <span class="sched-name ${multiZone ? 'sched-name-compact' : ''}">${label}</span>
+              <select class="sched-select" .value=${act} @change=${(e) => this._schedEdit(zid, pi, 'act', e.target.value)}>
+                ${ACTIVITIES.map(a => html`<option value=${a} ?selected=${a === act}>${a}</option>`)}
+              </select>
+              <select class="sched-select" .value=${time} @change=${(e) => this._schedEdit(zid, pi, 'time', e.target.value)}>
+                ${TIME_OPTIONS.map(o => html`<option value=${o.v} ?selected=${o.v === time}>${o.l}</option>`)}
+              </select>
+              <label class="sched-toggle">
+                <input type="checkbox" .checked=${enabled}
+                       @change=${(e) => this._schedEdit(zid, pi, 'enabled', e.target.checked)}>
+                <span>on</span>
+              </label>
+              <div class="sched-temps">
+                <span class="sp-heat">${htsp}°</span>
+                <span class="sp-cool">${clsp}°</span>
+              </div>
+            </div>`;
+        })}
+      </div>`;
+  }
+
+  _schedEdit(zid, pi, field, val) {
+    const ek = `${zid}_${this._schedDay}_${pi}`;
+    const prev = this._schedEdits[ek] || {};
+    const p = (this._getScheduleData()[zid]?.[this._schedDay] || [])[pi] || {};
+    this._schedEdits = { ...this._schedEdits, [ek]: {
+      act:     field === 'act'     ? val : (prev.act     ?? p.activity),
+      time:    field === 'time'    ? val : (prev.time    ?? p.time),
+      enabled: field === 'enabled' ? val : (prev.enabled ?? p.enabled),
+    }};
+  }
+
+  _copySched(e) {
+    const tgt = e.target.value; if (!tgt) return;
+    e.target.value = '';
+    const sch = this._getScheduleData();
+    const targets = tgt === '__all__' ? DAYS.filter(d => d !== this._schedDay) : [tgt];
+    const edits = { ...this._schedEdits };
+    for (const zid of Object.keys(sch)) {
+      const periods = sch[zid]?.[this._schedDay] || [];
+      for (const day of targets) {
+        periods.forEach((p, pi) => {
+          const se = this._schedEdits[`${zid}_${this._schedDay}_${pi}`];
+          edits[`${zid}_${day}_${pi}`] = {
+            act: se?.act ?? p.activity, time: se?.time ?? p.time, enabled: se?.enabled ?? p.enabled,
+          };
+        });
+      }
+    }
+    this._schedEdits = edits;
+  }
+
+  async _saveSched() {
+    if (this._saving) return;
+    this._saving = true;
+    const edits = { ...this._schedEdits };
+    try {
+      const sch = this._getScheduleData();
+      for (const zid of Object.keys(sch)) {
+        const prog = DAYS.map(day => ({
+          id: day,
+          period: (sch[zid]?.[day] || []).map((p, pi) => {
+            const ed = edits[`${zid}_${day}_${pi}`];
+            return {
+              id: p.id || String(pi + 1),
+              activity: ed?.act ?? p.activity,
+              time: ed?.time ?? p.time,
+              enabled: (ed?.enabled ?? p.enabled) ? 'on' : 'off',
+            };
+          }),
+        }));
+        await this._svc('infinitude_direct', 'save_schedule', { zone_id: zid, schedule: JSON.stringify(prog) });
+      }
+    } finally {
+      setTimeout(() => {
+        const cur = this._schedEdits;
+        const kept = {};
+        for (const k of Object.keys(cur)) {
+          if (!(k in edits) || cur[k] !== edits[k]) kept[k] = cur[k];
+        }
+        this._schedEdits = kept;
+        this._saving = false;
+      }, SAVE_CLEANUP_MS);
+    }
+  }
+
+  // ── Profile logic ──────────────────────────────────────────────────────
+  _profAdj(zid, actId, field, delta) {
+    const ek = `${zid}_${actId}`;
+    const act = (this._getProfilesData().find(z => z.id === zid)?.activities?.[actId]) || {};
+    const prev = this._profileEdits[ek] || {};
+    const curH = prev.htsp ?? (act.htsp ? Math.round(Number(act.htsp) || DEFAULT_HEAT_SP) : DEFAULT_HEAT_SP);
+    const curC = prev.clsp ?? (act.clsp ? Math.round(Number(act.clsp) || DEFAULT_COOL_SP) : DEFAULT_COOL_SP);
+    const min = field === 'htsp' ? MIN_HEAT_TEMP : MIN_COOL_TEMP;
+    const max = field === 'htsp' ? MAX_HEAT_TEMP : MAX_COOL_TEMP;
+    const cur = field === 'htsp' ? curH : curC;
+    this._profileEdits = { ...this._profileEdits, [ek]: {
+      zone_id: zid, activity: actId,
+      htsp: field === 'htsp' ? Math.max(min, Math.min(max, cur + delta)) : curH,
+      clsp: field === 'clsp' ? Math.max(min, Math.min(max, cur + delta)) : curC,
+      fan: prev.fan ?? act.fan ?? 'low',
+    }};
+  }
+
+  _profFan(zid, actId, fan) {
+    const ek = `${zid}_${actId}`;
+    const act = (this._getProfilesData().find(z => z.id === zid)?.activities?.[actId]) || {};
+    const prev = this._profileEdits[ek] || {};
+    this._profileEdits = { ...this._profileEdits, [ek]: {
+      zone_id: zid, activity: actId,
+      htsp: prev.htsp ?? (act.htsp ? Math.round(Number(act.htsp) || DEFAULT_HEAT_SP) : DEFAULT_HEAT_SP),
+      clsp: prev.clsp ?? (act.clsp ? Math.round(Number(act.clsp) || DEFAULT_COOL_SP) : DEFAULT_COOL_SP),
+      fan,
+    }};
+  }
+
+  async _saveProfs() {
+    if (this._savingProfs) return;
+    this._savingProfs = true;
+    const edits = { ...this._profileEdits };
+    try {
+      for (const ed of Object.values(edits)) {
+        const d = { zone_id: ed.zone_id, activity: ed.activity, htsp: ed.htsp, clsp: ed.clsp };
+        if (ed.fan) d.fan = ed.fan;
+        await this._svc('infinitude_direct', 'set_profile', d);
+      }
+    } finally {
+      setTimeout(() => {
+        const cur = this._profileEdits;
+        const kept = {};
+        for (const k of Object.keys(cur)) {
+          if (!(k in edits) || cur[k] !== edits[k]) kept[k] = cur[k];
+        }
+        this._profileEdits = kept;
+        this._savingProfs = false;
+      }, SAVE_CLEANUP_MS);
+    }
   }
 }
 

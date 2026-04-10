@@ -5,6 +5,7 @@
 import {
   InfinitudeBase, sharedStyles, html, css, nothing,
   ACTIVITIES, FAN_OPTIONS, CIRCLED,
+  DEFAULT_HEAT_SP, DEFAULT_COOL_SP,
 } from './shared.js';
 
 class InfinitudeProfilesCard extends InfinitudeBase {
@@ -17,6 +18,7 @@ class InfinitudeProfilesCard extends InfinitudeBase {
   constructor() {
     super();
     this._profileEdits = {};
+    this._savingProfs = false;
   }
 
   static getConfigElement() { return document.createElement('div'); }
@@ -69,8 +71,8 @@ class InfinitudeProfilesCard extends InfinitudeBase {
                 const act = zone.activities?.[actId] || {};
                 const ek = `${zone.id}_${actId}`;
                 const ed = this._profileEdits[ek];
-                const htsp = ed?.htsp ?? (act.htsp ? Math.round(Number(act.htsp) || 68) : 68);
-                const clsp = ed?.clsp ?? (act.clsp ? Math.round(Number(act.clsp) || 76) : 76);
+                const htsp = ed?.htsp ?? (act.htsp ? Math.round(Number(act.htsp) || DEFAULT_HEAT_SP) : DEFAULT_HEAT_SP);
+                const clsp = ed?.clsp ?? (act.clsp ? Math.round(Number(act.clsp) || DEFAULT_COOL_SP) : DEFAULT_COOL_SP);
                 const fan  = ed?.fan  ?? act.fan ?? 'low';
                 const label = multiZone ? (CIRCLED[idx] || idx+1) : zone.name;
                 return html`
@@ -105,56 +107,6 @@ class InfinitudeProfilesCard extends InfinitudeBase {
       </ha-card>`;
   }
 
-  _profAdj(zid, actId, field, delta) {
-    const ek = `${zid}_${actId}`;
-    const act = (this._getProfilesData().find(z => z.id === zid)?.activities?.[actId]) || {};
-    const prev = this._profileEdits[ek] || {};
-    const curH = prev.htsp ?? (act.htsp ? Math.round(Number(act.htsp) || 68) : 68);
-    const curC = prev.clsp ?? (act.clsp ? Math.round(Number(act.clsp) || 76) : 76);
-    const min = field === 'htsp' ? 50 : 60, max = field === 'htsp' ? 90 : 99;
-    const cur = field === 'htsp' ? curH : curC;
-    this._profileEdits = { ...this._profileEdits, [ek]: {
-      zone_id: zid, activity: actId,
-      htsp: field === 'htsp' ? Math.max(min, Math.min(max, cur + delta)) : curH,
-      clsp: field === 'clsp' ? Math.max(min, Math.min(max, cur + delta)) : curC,
-      fan: prev.fan ?? act.fan ?? 'low',
-    }};
-  }
-
-  _profFan(zid, actId, fan) {
-    const ek = `${zid}_${actId}`;
-    const act = (this._getProfilesData().find(z => z.id === zid)?.activities?.[actId]) || {};
-    const prev = this._profileEdits[ek] || {};
-    this._profileEdits = { ...this._profileEdits, [ek]: {
-      zone_id: zid, activity: actId,
-      htsp: prev.htsp ?? (act.htsp ? Math.round(Number(act.htsp) || 68) : 68),
-      clsp: prev.clsp ?? (act.clsp ? Math.round(Number(act.clsp) || 76) : 76),
-      fan,
-    }};
-  }
-
-  async _saveProfs() {
-    if (this._savingProfs) return;
-    this._savingProfs = true;
-    const edits = { ...this._profileEdits };
-    try {
-      for (const ed of Object.values(edits)) {
-        const d = { zone_id: ed.zone_id, activity: ed.activity, htsp: ed.htsp, clsp: ed.clsp };
-        if (ed.fan) d.fan = ed.fan;
-        await this._svc('infinitude_direct', 'set_profile', d);
-      }
-    } finally {
-      setTimeout(() => {
-        const cur = this._profileEdits;
-        const kept = {};
-        for (const k of Object.keys(cur)) {
-          if (!(k in edits) || cur[k] !== edits[k]) kept[k] = cur[k];
-        }
-        this._profileEdits = kept;
-        this._savingProfs = false;
-      }, 500);
-    }
-  }
 }
 
 if (!customElements.get('infinitude-profiles-card')) {

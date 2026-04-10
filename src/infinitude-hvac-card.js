@@ -20,6 +20,8 @@ import {
   InfinitudeBase, sharedStyles, html, css, nothing,
   CARD_VERSION, DAYS, JS_DAY_MAP, ACTIVITIES, HOLD_ACTIVITIES, FAN_OPTIONS,
   DURATION_OPTIONS, CIRCLED, TIME_OPTIONS,
+  MIN_HEAT_TEMP, MAX_HEAT_TEMP, MIN_COOL_TEMP, MAX_COOL_TEMP,
+  DEFAULT_HEAT_SP, DEFAULT_COOL_SP,
 } from './shared.js';
 
 class InfinitudeHVACCard extends InfinitudeBase {
@@ -60,9 +62,11 @@ class InfinitudeHVACCard extends InfinitudeBase {
     this._holdActivity = 'home';
     this._holdDuration = '120';
     this._holdCustom = '';
-    this._holdHtsp = 68;
-    this._holdClsp = 76;
+    this._holdHtsp = DEFAULT_HEAT_SP;
+    this._holdClsp = DEFAULT_COOL_SP;
     this._holdFan = 'auto';
+    this._saving = false;
+    this._savingProfs = false;
   }
 
   static getConfigElement() { return document.createElement('div'); }
@@ -408,14 +412,14 @@ class InfinitudeHVACCard extends InfinitudeBase {
             ${this._holdActivity === 'manual' ? html`
               <div class="hold-picker-row" style="gap:10px;flex-wrap:wrap">
                 <div class="sp-row">
-                  <button class="btn-adj" @click=${() => { this._holdHtsp = Math.max(50, this._holdHtsp - 1); }}>−</button>
+                  <button class="btn-adj" @click=${() => { this._holdHtsp = Math.max(MIN_HEAT_TEMP, this._holdHtsp - 1); }}>−</button>
                   <span class="sp-val sp-heat">${this._holdHtsp}°</span>
-                  <button class="btn-adj" @click=${() => { this._holdHtsp = Math.min(90, this._holdHtsp + 1); }}>+</button>
+                  <button class="btn-adj" @click=${() => { this._holdHtsp = Math.min(MAX_HEAT_TEMP, this._holdHtsp + 1); }}>+</button>
                 </div>
                 <div class="sp-row">
-                  <button class="btn-adj" @click=${() => { this._holdClsp = Math.max(60, this._holdClsp - 1); }}>−</button>
+                  <button class="btn-adj" @click=${() => { this._holdClsp = Math.max(MIN_COOL_TEMP, this._holdClsp - 1); }}>−</button>
                   <span class="sp-val sp-cool">${this._holdClsp}°</span>
-                  <button class="btn-adj" @click=${() => { this._holdClsp = Math.min(99, this._holdClsp + 1); }}>+</button>
+                  <button class="btn-adj" @click=${() => { this._holdClsp = Math.min(MAX_COOL_TEMP, this._holdClsp + 1); }}>+</button>
                 </div>
                 <div style="display:flex;align-items:center;gap:4px">
                   <span style="font-size:10px;color:var(--secondary-text-color)">Fan</span>
@@ -444,106 +448,6 @@ class InfinitudeHVACCard extends InfinitudeBase {
             <button class="btn" style="font-size:11px;padding:4px 12px" @click=${() => { this._holdActivity = preset !== '–' ? preset : 'home'; this._holdDuration = '120'; this._holdCustom = ''; if (this._holdActivity === 'manual') this._initHoldManual(eid); this._holdOpen = eid; }}>Set hold</button>
           </div>`}
       </div>`;
-  }
-
-  // ── Temperature adjustment ─────────────────────────────────────────────
-  _adjustTemp(eid, delta, sp) {
-    const s = this._st(eid); if (!s) return;
-    const a = s.attributes || {};
-    const adj = this._tempAdj[eid] || (this._tempAdj[eid] = {});
-    const curHeat = adj.heat ?? a.target_temp_low ?? a.temperature ?? 68;
-    const curCool = adj.cool ?? a.target_temp_high ?? (s.state === 'cool' ? a.temperature : null) ?? 76;
-    if (sp === 'heat') adj.heat = Math.max(50, Math.min(90, Math.round(curHeat) + delta));
-    else               adj.cool = Math.max(60, Math.min(99, Math.round(curCool) + delta));
-    this._pendingTemps = { ...this._pendingTemps, [eid]: { heat: adj.heat, cool: adj.cool } };
-    if (!adj.committing) {
-      clearTimeout(adj.timer);
-      adj.timer = setTimeout(() => this._commitAdj(eid), 800);
-    }
-  }
-
-  async _commitAdj(eid) {
-    const adj = this._tempAdj[eid];
-    if (!adj || adj.committing) return;
-    adj.committing = true;
-    const s = this._st(eid);
-    const a = s?.attributes || {};
-    const snapH = adj.heat, snapC = adj.cool;
-    const htsp = snapH ?? Math.round(a.target_temp_low ?? a.temperature ?? 68);
-    const clsp = snapC ?? Math.round(a.target_temp_high ?? (s?.state === 'cool' ? a.temperature : null) ?? 76);
-    const mode = s?.state || 'off';
-    const d = { entity_id: eid };
-    if (mode === 'heat_cool') { d.target_temp_low = htsp; d.target_temp_high = clsp; }
-    else if (mode === 'heat') { d.temperature = htsp; }
-    else if (mode === 'cool') { d.temperature = clsp; }
-    else { d.target_temp_low = htsp; d.target_temp_high = clsp; }
-    try { await this.hass.callService('climate', 'set_temperature', d); }
-    catch (e) { console.error('set_temperature failed', e); }
-    adj.committing = false;
-    if (adj.heat !== snapH || adj.cool !== snapC) {
-      adj.timer = setTimeout(() => this._commitAdj(eid), 400);
-      return;
-    }
-    adj.heat = null; adj.cool = null; adj.timer = null;
-    adj.graceUntil = Date.now() + 30000;
-    setTimeout(() => {
-      if (!this._tempAdj[eid]?.heat && !this._tempAdj[eid]?.cool) {
-        const { [eid]: _, ...rest } = this._pendingTemps;
-        this._pendingTemps = rest;
-      }
-    }, 2000);
-  }
-
-  _hasPending(eid) {
-    const adj = this._tempAdj[eid];
-    return adj && (adj.heat != null || adj.cool != null || adj.committing);
-  }
-
-  // ── Hold controls ──────────────────────────────────────────────────────
-  _cancelHold(eid) {
-    const zoneId = this._zoneId(eid);
-    if (!zoneId) return;
-    this._svc('infinitude_direct', 'cancel_hold', { zone_id: zoneId });
-  }
-
-  _setZoneHold(eid) {
-    const zoneId = this._zoneId(eid);
-    if (!zoneId) return;
-    const until = this._resolveUntil(this._holdDuration, this._holdCustom);
-    if (until === null) return;
-    if (this._holdActivity === 'manual') {
-      this._svc('infinitude_direct', 'set_profile', {
-        zone_id: zoneId, activity: 'manual',
-        htsp: this._holdHtsp, clsp: this._holdClsp, fan: this._holdFan,
-      });
-    }
-    this._svc('infinitude_direct', 'set_hold', {
-      zone_id: zoneId, activity: this._holdActivity,
-      ...(until !== undefined && { until }),
-    });
-    this._holdOpen = null;
-  }
-
-  _initHoldManual(eid) {
-    const zid = this._zoneId(eid);
-    const act = (this._getProfilesData().find(z => z.id === zid)?.activities?.manual) || {};
-    this._holdHtsp = act.htsp ? Math.round(Number(act.htsp) || 68) : 68;
-    this._holdClsp = act.clsp ? Math.round(Number(act.clsp) || 76) : 76;
-    this._holdFan  = act.fan || 'auto';
-  }
-
-  _setWholeHouseHold() {
-    const until = this._resolveUntil(this._whHoldDuration, this._whHoldCustom);
-    if (until === null) return;
-    this._svc('infinitude_direct', 'set_whole_house_hold', {
-      activity: this._whHoldActivity,
-      ...(until !== undefined && { until }),
-    });
-    this._whHoldOpen = false;
-  }
-
-  _cancelWholeHouseHold() {
-    this._svc('infinitude_direct', 'cancel_whole_house_hold', {});
   }
 
   // ── Schedule tab ───────────────────────────────────────────────────────
@@ -589,112 +493,6 @@ class InfinitudeHVACCard extends InfinitudeBase {
         </div>` : nothing}`;
   }
 
-  _periodCard(pi, zids, schedule, profiles, zn, zi) {
-    const multiZone = zids.length > 1;
-    return html`
-      <div class="period-card">
-        <div class="period-header">Period ${pi + 1}</div>
-        ${zids.map(zid => {
-          const period = (schedule[zid]?.[this._schedDay] || [])[pi];
-          if (!period) return nothing;
-          const ek = `${zid}_${this._schedDay}_${pi}`;
-          const ed = this._schedEdits[ek];
-          const act = ed?.act ?? period.activity;
-          const time = ed?.time ?? period.time;
-          const enabled = ed?.enabled ?? period.enabled;
-          const zp = profiles.find(z => z.id === zid);
-          const ap = zp?.activities?.[act];
-          const htsp = ap?.htsp ? Math.round(Number(ap.htsp) || 0) : '–';
-          const clsp = ap?.clsp ? Math.round(Number(ap.clsp) || 0) : '–';
-          const label = multiZone ? (CIRCLED[zi[zid]] ?? zid) : (zn[zid] || `Zone ${zid}`);
-          return html`
-            <div class="sched-line ${enabled ? '' : 'disabled'}">
-              <span class="sched-name ${multiZone ? 'sched-name-compact' : ''}">${label}</span>
-              <select class="sched-select" .value=${act} @change=${(e) => this._schedEdit(zid, pi, 'act', e.target.value)}>
-                ${ACTIVITIES.map(a => html`<option value=${a} ?selected=${a === act}>${a}</option>`)}
-              </select>
-              <select class="sched-select" .value=${time} @change=${(e) => this._schedEdit(zid, pi, 'time', e.target.value)}>
-                ${TIME_OPTIONS.map(o => html`<option value=${o.v} ?selected=${o.v === time}>${o.l}</option>`)}
-              </select>
-              <label class="sched-toggle">
-                <input type="checkbox" .checked=${enabled}
-                       @change=${(e) => this._schedEdit(zid, pi, 'enabled', e.target.checked)}>
-                <span>on</span>
-              </label>
-              <div class="sched-temps">
-                <span class="sp-heat">${htsp}°</span>
-                <span class="sp-cool">${clsp}°</span>
-              </div>
-            </div>`;
-        })}
-      </div>`;
-  }
-
-  _schedEdit(zid, pi, field, val) {
-    const ek = `${zid}_${this._schedDay}_${pi}`;
-    const prev = this._schedEdits[ek] || {};
-    const p = (this._getScheduleData()[zid]?.[this._schedDay] || [])[pi] || {};
-    this._schedEdits = { ...this._schedEdits, [ek]: {
-      act:     field === 'act'     ? val : (prev.act     ?? p.activity),
-      time:    field === 'time'    ? val : (prev.time    ?? p.time),
-      enabled: field === 'enabled' ? val : (prev.enabled ?? p.enabled),
-    }};
-  }
-
-  _copySched(e) {
-    const tgt = e.target.value; if (!tgt) return;
-    e.target.value = '';
-    const sch = this._getScheduleData();
-    const targets = tgt === '__all__' ? DAYS.filter(d => d !== this._schedDay) : [tgt];
-    const edits = { ...this._schedEdits };
-    for (const zid of Object.keys(sch)) {
-      const periods = sch[zid]?.[this._schedDay] || [];
-      for (const day of targets) {
-        periods.forEach((p, pi) => {
-          const se = this._schedEdits[`${zid}_${this._schedDay}_${pi}`];
-          edits[`${zid}_${day}_${pi}`] = {
-            act: se?.act ?? p.activity, time: se?.time ?? p.time, enabled: se?.enabled ?? p.enabled,
-          };
-        });
-      }
-    }
-    this._schedEdits = edits;
-  }
-
-  async _saveSched() {
-    if (this._saving) return;
-    this._saving = true;
-    const edits = { ...this._schedEdits };
-    try {
-      const sch = this._getScheduleData();
-      for (const zid of Object.keys(sch)) {
-        const prog = DAYS.map(day => ({
-          id: day,
-          period: (sch[zid]?.[day] || []).map((p, pi) => {
-            const ed = edits[`${zid}_${day}_${pi}`];
-            return {
-              id: p.id || String(pi + 1),
-              activity: ed?.act ?? p.activity,
-              time: ed?.time ?? p.time,
-              enabled: (ed?.enabled ?? p.enabled) ? 'on' : 'off',
-            };
-          }),
-        }));
-        await this._svc('infinitude_direct', 'save_schedule', { zone_id: zid, schedule: JSON.stringify(prog) });
-      }
-    } finally {
-      setTimeout(() => {
-        const cur = this._schedEdits;
-        const kept = {};
-        for (const k of Object.keys(cur)) {
-          if (!(k in edits) || cur[k] !== edits[k]) kept[k] = cur[k];
-        }
-        this._schedEdits = kept;
-        this._saving = false;
-      }, 500);
-    }
-  }
-
   // ── Profiles tab ───────────────────────────────────────────────────────
   _profs() {
     const profiles = this._getProfilesData();
@@ -716,8 +514,8 @@ class InfinitudeHVACCard extends InfinitudeBase {
             const act = zone.activities?.[actId] || {};
             const ek = `${zone.id}_${actId}`;
             const ed = this._profileEdits[ek];
-            const htsp = ed?.htsp ?? (act.htsp ? Math.round(Number(act.htsp) || 68) : 68);
-            const clsp = ed?.clsp ?? (act.clsp ? Math.round(Number(act.clsp) || 76) : 76);
+            const htsp = ed?.htsp ?? (act.htsp ? Math.round(Number(act.htsp) || DEFAULT_HEAT_SP) : DEFAULT_HEAT_SP);
+            const clsp = ed?.clsp ?? (act.clsp ? Math.round(Number(act.clsp) || DEFAULT_COOL_SP) : DEFAULT_COOL_SP);
             const fan  = ed?.fan  ?? act.fan ?? 'low';
             const label = multiZone ? (CIRCLED[idx] || idx+1) : zone.name;
             return html`
@@ -750,56 +548,6 @@ class InfinitudeHVACCard extends InfinitudeBase {
         </div>` : nothing}`;
   }
 
-  _profAdj(zid, actId, field, delta) {
-    const ek = `${zid}_${actId}`;
-    const act = (this._getProfilesData().find(z => z.id === zid)?.activities?.[actId]) || {};
-    const prev = this._profileEdits[ek] || {};
-    const curH = prev.htsp ?? (act.htsp ? Math.round(Number(act.htsp) || 68) : 68);
-    const curC = prev.clsp ?? (act.clsp ? Math.round(Number(act.clsp) || 76) : 76);
-    const min = field === 'htsp' ? 50 : 60, max = field === 'htsp' ? 90 : 99;
-    const cur = field === 'htsp' ? curH : curC;
-    this._profileEdits = { ...this._profileEdits, [ek]: {
-      zone_id: zid, activity: actId,
-      htsp: field === 'htsp' ? Math.max(min, Math.min(max, cur + delta)) : curH,
-      clsp: field === 'clsp' ? Math.max(min, Math.min(max, cur + delta)) : curC,
-      fan: prev.fan ?? act.fan ?? 'low',
-    }};
-  }
-
-  _profFan(zid, actId, fan) {
-    const ek = `${zid}_${actId}`;
-    const act = (this._getProfilesData().find(z => z.id === zid)?.activities?.[actId]) || {};
-    const prev = this._profileEdits[ek] || {};
-    this._profileEdits = { ...this._profileEdits, [ek]: {
-      zone_id: zid, activity: actId,
-      htsp: prev.htsp ?? (act.htsp ? Math.round(Number(act.htsp) || 68) : 68),
-      clsp: prev.clsp ?? (act.clsp ? Math.round(Number(act.clsp) || 76) : 76),
-      fan,
-    }};
-  }
-
-  async _saveProfs() {
-    if (this._savingProfs) return;
-    this._savingProfs = true;
-    const edits = { ...this._profileEdits };
-    try {
-      for (const ed of Object.values(edits)) {
-        const d = { zone_id: ed.zone_id, activity: ed.activity, htsp: ed.htsp, clsp: ed.clsp };
-        if (ed.fan) d.fan = ed.fan;
-        await this._svc('infinitude_direct', 'set_profile', d);
-      }
-    } finally {
-      setTimeout(() => {
-        const cur = this._profileEdits;
-        const kept = {};
-        for (const k of Object.keys(cur)) {
-          if (!(k in edits) || cur[k] !== edits[k]) kept[k] = cur[k];
-        }
-        this._profileEdits = kept;
-        this._savingProfs = false;
-      }, 500);
-    }
-  }
 }
 
 if (!customElements.get('infinitude-hvac-card')) {
