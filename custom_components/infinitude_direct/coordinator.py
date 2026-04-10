@@ -205,6 +205,13 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         return val
 
     @staticmethod
+    def _unwrap(x):
+        """Unwrap single-element arrays, pass scalars through unchanged."""
+        if isinstance(x, list):
+            return x[0] if x else None
+        return x
+
+    @staticmethod
     def _force_array(x):
         if isinstance(x, list):
             return x
@@ -303,7 +310,7 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
 
             target = None
             for z in cfg_zones:
-                if str(self._v(z.get("id"))) == str(zone_id):
+                if str(self._unwrap(z.get("id"))) == str(zone_id):
                     target = z
                     break
 
@@ -326,12 +333,12 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
             days = self._force_array(target["program"][0].get("day", []))
 
             for day in days:
-                day_id = self._v(day.get("id"))
+                day_id = self._unwrap(day.get("id"))
                 if day_id not in new_sched:
                     continue
                 day_periods = new_sched[day_id]
                 for period in self._force_array(day.get("period", [])):
-                    p_id = str(self._v(period.get("id")))
+                    p_id = str(self._unwrap(period.get("id")))
                     if p_id not in day_periods:
                         continue
                     np = day_periods[p_id]

@@ -212,7 +212,7 @@ class InfinitudeScheduleCard extends InfinitudeBase {
         }
         this._schedEdits = kept;
         this._saving = false;
-      }, 3000);
+      }, 500);
     }
   }
 }

@@ -152,7 +152,7 @@ class InfinitudeProfilesCard extends InfinitudeBase {
         }
         this._profileEdits = kept;
         this._savingProfs = false;
-      }, 3000);
+      }, 500);
     }
   }
 }

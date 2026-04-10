@@ -691,7 +691,7 @@ class InfinitudeHVACCard extends InfinitudeBase {
         }
         this._schedEdits = kept;
         this._saving = false;
-      }, 3000);
+      }, 500);
     }
   }
 
@@ -797,7 +797,7 @@ class InfinitudeHVACCard extends InfinitudeBase {
         }
         this._profileEdits = kept;
         this._savingProfs = false;
-      }, 3000);
+      }, 500);
     }
   }
 }
