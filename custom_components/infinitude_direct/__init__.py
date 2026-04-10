@@ -276,7 +276,7 @@ def _register_services(hass: HomeAssistant) -> None:
         for entry_id, coordinator in hass.data[DOMAIN].items():
             if isinstance(coordinator, InfinitudeDataCoordinator):
                 await coordinator.async_save_schedule(zone_id, schedule_data)
-                await coordinator.async_refresh()
+                await coordinator.async_request_refresh()
                 return
         _LOGGER.warning("save_schedule: no active coordinator found")
 
@@ -295,7 +295,7 @@ def _register_services(hass: HomeAssistant) -> None:
                     await coordinator.async_set_activity_fan(
                         zone_id, activity, fan
                     )
-                await coordinator.async_refresh()
+                await coordinator.async_request_refresh()
                 return
         _LOGGER.warning("set_profile: no active coordinator found")
 
@@ -327,7 +327,7 @@ def _register_services(hass: HomeAssistant) -> None:
         for entry_id, coordinator in hass.data[DOMAIN].items():
             if isinstance(coordinator, InfinitudeDataCoordinator):
                 await coordinator.async_cancel_hold(zone_id)
-                await coordinator.async_refresh()
+                await coordinator.async_request_refresh()
                 return
         _LOGGER.warning("cancel_hold: no active coordinator found")
 
@@ -347,7 +347,7 @@ def _register_services(hass: HomeAssistant) -> None:
         for entry_id, coordinator in hass.data[DOMAIN].items():
             if isinstance(coordinator, InfinitudeDataCoordinator):
                 await coordinator.async_set_hold(zone_id, activity, until)
-                await coordinator.async_refresh()
+                await coordinator.async_request_refresh()
                 return
         _LOGGER.warning("set_hold: no active coordinator found")
 
@@ -368,7 +368,7 @@ def _register_services(hass: HomeAssistant) -> None:
         for entry_id, coordinator in hass.data[DOMAIN].items():
             if isinstance(coordinator, InfinitudeDataCoordinator):
                 await coordinator.async_set_whole_house_hold(activity, until)
-                await coordinator.async_refresh()
+                await coordinator.async_request_refresh()
                 return
         _LOGGER.warning("set_whole_house_hold: no active coordinator found")
 
@@ -386,7 +386,7 @@ def _register_services(hass: HomeAssistant) -> None:
         for entry_id, coordinator in hass.data[DOMAIN].items():
             if isinstance(coordinator, InfinitudeDataCoordinator):
                 await coordinator.async_cancel_whole_house_hold()
-                await coordinator.async_refresh()
+                await coordinator.async_request_refresh()
                 return
         _LOGGER.warning("cancel_whole_house_hold: no active coordinator found")
 
