@@ -283,10 +283,67 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         resp.raise_for_status()
 
     async def async_save_schedule(self, zone_id: str, program: list) -> None:
-        """Save full schedule for a zone. program = list of {id, period[]}."""
-        resp = await self._session.put(
-            f"{self.host}/api/config/zones/zone/{zone_id}/program",
-            json={"day": program},
+        """Save full schedule for a zone via GET-modify-POST.
+
+        The Infinitude proxy catch-all API reads query params only, not JSON
+        body, so complex nested writes must go through POST /systems/infinitude
+        which accepts a full JSON config and converts it back to XML.
+        """
+        # 1. Fetch current full config
+        resp = await self._session.get(f"{self.host}/systems.json")
+        resp.raise_for_status()
+        systems = await resp.json(content_type=None)
+
+        # 2. Navigate to target zone — mirrors _parse() navigation exactly
+        cfg = systems["system"][0]["config"][0]
+        cfg_zones = self._force_array(
+            cfg.get("zones", [{}])[0].get("zone") if cfg.get("zones") else []
+        )
+
+        target = None
+        for z in cfg_zones:
+            if str(self._v(z.get("id"))) == str(zone_id):
+                target = z
+                break
+
+        if not target:
+            _LOGGER.error("save_schedule: zone %s not found in config", zone_id)
+            return
+
+        # 3. Build day→period lookup from incoming data
+        new_sched: dict[str, dict[str, dict]] = {}
+        for d in program:
+            new_sched[d["id"]] = {
+                str(p["id"]): p for p in d.get("period", [])
+            }
+
+        # 4. Patch periods in existing structure (preserves array wrapping)
+        # program is array-wrapped like all XML::Simple nodes
+        if not target.get("program"):
+            _LOGGER.error("save_schedule: zone %s has no program", zone_id)
+            return
+        days = self._force_array(target["program"][0].get("day", []))
+
+        for day in days:
+            day_id = self._v(day.get("id"))
+            if day_id not in new_sched:
+                continue
+            day_periods = new_sched[day_id]
+            for period in self._force_array(day.get("period", [])):
+                p_id = str(self._v(period.get("id")))
+                if p_id not in day_periods:
+                    continue
+                np = day_periods[p_id]
+                # Preserve original wrapping style (list vs plain)
+                wrap = isinstance(period.get("activity"), list)
+                period["activity"] = [np["activity"]] if wrap else np["activity"]
+                period["time"] = [np["time"]] if wrap else np["time"]
+                period["enabled"] = [np["enabled"]] if wrap else np["enabled"]
+
+        # 5. POST full config back — triggers changes flag
+        resp = await self._session.post(
+            f"{self.host}/systems/infinitude",
+            json=systems,
         )
         resp.raise_for_status()
 

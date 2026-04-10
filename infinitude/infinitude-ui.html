@@ -498,7 +498,7 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.76';
+const APP_VERSION = '1.0.77';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const JS_DAY_MAP = [6,0,1,2,3,4,5]; // JS getDay() (0=Sun) -> DAYS index
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
@@ -1432,7 +1432,19 @@ function _readDayFromDOM(day) {
 
 async function saveSchedule() {
   try {
-    // Collect from all days: mix original state data with DOM edits
+    // The Infinitude proxy catch-all API reads query params only, not JSON
+    // body. Complex nested writes must use POST /systems/infinitude which
+    // accepts the full JSON config and converts it back to XML.
+
+    // 1. Fetch full systems config
+    const sysResp = await fetch(base() + '/systems.json');
+    if (!sysResp.ok) throw new Error(`Fetch systems.json: HTTP ${sysResp.status}`);
+    const sysText = await sysResp.text();
+    const systems = JSON.parse(sysText);
+
+    const cfgZones = forceArray(systems.system[0].config[0].zones[0].zone);
+
+    // 2. Collect edits per zone
     const zoneMaps = state.zones.map(z => {
       const m = {};
       forceArray(z.program).forEach(d => { m[d.id] = forceArray(d.period); });
@@ -1441,16 +1453,26 @@ async function saveSchedule() {
 
     for (let zIdx = 0; zIdx < state.zones.length; zIdx++) {
       const z = state.zones[zIdx];
-      const dayPayload = DAYS.map(day => {
-        const periods = zoneMaps[zIdx][day] || [];
-        const dayPeriods = [];
 
+      // Find matching zone in the raw config
+      const cfgZone = cfgZones.find(cz => {
+        const id = Array.isArray(cz.id) ? cz.id[0] : cz.id;
+        return String(id) === String(z.id);
+      });
+      if (!cfgZone || !cfgZone.program) continue;
+
+      const cfgDays = forceArray(cfgZone.program[0].day);
+
+      // Build a lookup of new period values
+      const newDayMap = {};
+      DAYS.forEach(day => {
+        const periods = zoneMaps[zIdx][day] || [];
+        const periodMap = {};
         for (let pi = 0; pi < 5; pi++) {
           const period = periods[pi];
           if (!period) continue;
           const pid = v(period.id) || String(pi + 1);
 
-          // Check DOM (if viewing this day) or edits
           let act, time, enabled;
           if (day === _schedDay) {
             const line = document.querySelector(`.sched-zone-line[data-zidx="${zIdx}"][data-pi="${pi}"][data-day="${day}"]`);
@@ -1472,19 +1494,36 @@ async function saveSchedule() {
               enabled = v(period.enabled) || 'on';
             }
           }
-
-          dayPeriods.push({ id: pid, activity: act, time, enabled });
+          periodMap[pid] = { activity: act, time, enabled };
         }
-
-        return { id: day, period: dayPeriods };
+        newDayMap[day] = periodMap;
       });
 
-      await apiFetch(`/api/config/zones/zone/${z.id}/program`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ day: dayPayload }),
-      });
+      // 3. Patch periods in-place (preserves array wrapping)
+      for (const cfgDay of cfgDays) {
+        const dayId = Array.isArray(cfgDay.id) ? cfgDay.id[0] : cfgDay.id;
+        const dayEdits = newDayMap[dayId];
+        if (!dayEdits) continue;
+        for (const cfgPeriod of forceArray(cfgDay.period)) {
+          const pid = Array.isArray(cfgPeriod.id) ? cfgPeriod.id[0] : cfgPeriod.id;
+          const np = dayEdits[String(pid)];
+          if (!np) continue;
+          const wrap = Array.isArray(cfgPeriod.activity);
+          cfgPeriod.activity = wrap ? [np.activity] : np.activity;
+          cfgPeriod.time     = wrap ? [np.time]     : np.time;
+          cfgPeriod.enabled  = wrap ? [np.enabled]  : np.enabled;
+        }
+      }
     }
+
+    // 4. POST full config back
+    const postResp = await fetch(base() + '/systems/infinitude', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(systems),
+    });
+    if (!postResp.ok) throw new Error(`POST systems/infinitude: HTTP ${postResp.status}`);
+
     toast('Schedule saved', 'success');
     _schedEdits = {};
     setScheduleDirty(false);

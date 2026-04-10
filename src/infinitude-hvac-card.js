@@ -1,48 +1,35 @@
 /**
- * Infinitude HVAC Card — LitElement Lovelace card for Carrier/Bryant Infinity thermostats.
- * Zones, schedule editing, and comfort profile management.
+ * Infinitude HVAC Card — composite tabbed dashboard.
+ * Registers all sub-cards and provides a single-card full dashboard experience.
+ * type: custom:infinitude-hvac-card
+ *
+ * Individual cards are also available:
+ *   custom:infinitude-status-card    — system mode, stats, connectivity, WH hold
+ *   custom:infinitude-zone-card      — single zone (config: { entity: "climate.xxx" })
+ *   custom:infinitude-schedule-card  — weekly schedule editing
+ *   custom:infinitude-profiles-card  — comfort profile editing
  */
-import { LitElement, html, css, nothing } from 'lit';
 
-const CARD_VERSION = '1.0.76';
-const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
-const JS_DAY_MAP = [6,0,1,2,3,4,5];
-const ACTIVITIES = ['home','away','sleep','wake'];
-const HOLD_ACTIVITIES = ['home','away','sleep','wake','manual'];
-const FAN_OPTIONS = ['off','low','med','high'];
-const DURATION_OPTIONS = [
-  { v: '60', l: '1 hour' },
-  { v: '120', l: '2 hours' },
-  { v: '240', l: '4 hours' },
-  { v: 'forever', l: 'Indefinite' },
-  { v: 'custom', l: 'Custom time…' },
-];
-const CIRCLED = ['①','②','③','④','⑤','⑥','⑦','⑧'];
-const TIME_OPTIONS = (() => {
-  const opts = [];
-  for (let h = 0; h < 24; h++) {
-    for (let m = 0; m < 60; m += 15) {
-      const v = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
-      const l = h === 0 ? `12:${String(m).padStart(2,'0')} AM`
-        : h < 12 ? `${h}:${String(m).padStart(2,'0')} AM`
-        : h === 12 ? `12:${String(m).padStart(2,'0')} PM`
-        : `${h-12}:${String(m).padStart(2,'0')} PM`;
-      opts.push({ v, l });
-    }
-  }
-  return opts;
-})();
+// Import sub-cards so they register their custom elements in this bundle
+import './infinitude-status-card.js';
+import './infinitude-zone-card.js';
+import './infinitude-schedule-card.js';
+import './infinitude-profiles-card.js';
 
-class InfinitudeHVACCard extends LitElement {
+import {
+  InfinitudeBase, sharedStyles, html, css, nothing,
+  CARD_VERSION, DAYS, JS_DAY_MAP, ACTIVITIES, HOLD_ACTIVITIES, FAN_OPTIONS,
+  DURATION_OPTIONS, CIRCLED, TIME_OPTIONS,
+} from './shared.js';
+
+class InfinitudeHVACCard extends InfinitudeBase {
 
   static properties = {
-    hass:           { attribute: false },
-    _config:        { state: true },
+    ...InfinitudeBase.baseProperties,
     _tab:           { state: true },
     _schedDay:      { state: true },
     _schedEdits:    { state: true },
     _profileEdits:  { state: true },
-    _registryLoaded:{ state: true },
     _pendingTemps:  { state: true },
     _whHoldOpen:    { state: true },
     _whHoldActivity:{ state: true },
@@ -59,20 +46,17 @@ class InfinitudeHVACCard extends LitElement {
 
   constructor() {
     super();
-    this._config = {};
     this._tab = 'status';
     this._schedDay = DAYS[JS_DAY_MAP[new Date().getDay()]];
     this._schedEdits = {};
     this._profileEdits = {};
-    this._registryEntities = null;
-    this._registryLoaded = false;
-    this._tempAdj = {};       // per-entity debounce/commit state
-    this._pendingTemps = {};  // reactive: { [eid]: { heat, cool } } for optimistic display
+    this._tempAdj = {};
+    this._pendingTemps = {};
     this._whHoldOpen = false;
     this._whHoldActivity = 'home';
     this._whHoldDuration = '120';
     this._whHoldCustom = '';
-    this._holdOpen = null;    // entity_id of zone with hold picker open, or null
+    this._holdOpen = null;
     this._holdActivity = 'home';
     this._holdDuration = '120';
     this._holdCustom = '';
@@ -83,301 +67,15 @@ class InfinitudeHVACCard extends LitElement {
 
   static getConfigElement() { return document.createElement('div'); }
   static getStubConfig() { return {}; }
-  setConfig(c) { this._config = c; }
   getCardSize() { return 8; }
 
-  /* Only re-render when OUR entities change, not every HA state update. */
-  shouldUpdate(changed) {
-    if (!changed.has('hass')) return true;
-    if (!this._registryLoaded) return true;
-    const prev = changed.get('hass');
-    if (!prev) return true;
-    const reg = this._registryEntities || [];
-    return reg.some(e => this.hass.states[e.entity_id] !== prev.states[e.entity_id]);
-  }
-
-  updated(changed) {
-    if (changed.has('hass') && this.hass && !this._registryLoaded) {
-      this._loadRegistry();
-    }
-  }
-
-  async _loadRegistry() {
-    try {
-      const all = await this.hass.connection.sendMessagePromise({
-        type: 'config/entity_registry/list',
-      });
-      this._registryEntities = Array.isArray(all)
-        ? all.filter(e => e.platform === 'infinitude_direct')
-        : [];
-    } catch (e) {
-      console.warn('Failed to load entity registry', e);
-      this._registryEntities = [];
-    }
-    this._registryLoaded = true;
-  }
-
-  // ── Entity discovery (registry-based) ──────────────────────────────────
-  _findEntities() {
-    if (!this.hass) return { climates: [], sensors: {}, selects: {}, system: {} };
-    const reg = this._registryEntities || [];
-    const st = this.hass.states;
-    const climates = [];
-    const sensors = { damper: {}, fan: {} };
-    const selects = {};
-    const system = {};
-
-    if (this._config.climate_entities) {
-      for (const eid of this._config.climate_entities) if (st[eid]) climates.push(eid);
-    }
-    for (const entry of reg) {
-      const eid = entry.entity_id;
-      if (!st[eid]) continue;
-      const dom = eid.split('.')[0];
-      const uid = entry.unique_id || '';
-      if (dom === 'climate') { if (!this._config.climate_entities) climates.push(eid); }
-      else if (dom === 'select') { selects.wholeHouse = eid; }
-      else if (dom === 'sensor') {
-        if (uid.includes('damper'))       sensors.damper[eid] = st[eid];
-        else if (uid.includes('fan'))     sensors.fan[eid] = st[eid];
-        else if (uid.includes('humidifier'))  system.humidifier = eid;
-        else if (uid.includes('oat'))         system.oat = eid;
-        else if (uid.includes('op_status'))   system.opStatus = eid;
-        else if (uid.includes('system_info')) system.info = eid;
-      }
-    }
-    climates.sort();
-    return { climates, sensors, selects, system };
-  }
-
-  _st(eid) { return eid ? this.hass?.states[eid] ?? null : null; }
-  _at(eid, a) { return this._st(eid)?.attributes?.[a]; }
-
-  _getScheduleData() {
-    const { system } = this._findEntities();
-    if (!system.info) return {};
-    try { return JSON.parse(this._at(system.info, 'schedule') || '{}'); } catch (e) { console.warn('Failed to parse schedule data', e); return {}; }
-  }
-
-  _getProfilesData() {
-    const { system } = this._findEntities();
-    if (!system.info) return [];
-    try { return JSON.parse(this._at(system.info, 'profiles') || '[]'); } catch (e) { console.warn('Failed to parse profiles data', e); return []; }
-  }
-
-  // ── Service calls ──────────────────────────────────────────────────────
-  async _svc(domain, service, data) {
-    try { await this.hass.callService(domain, service, data); }
-    catch (e) { console.error(`${domain}.${service} failed`, e); }
-  }
-
-  _setHvacMode(eid, mode) { this._svc('climate', 'set_hvac_mode', { entity_id: eid, hvac_mode: mode }); }
-  _setPreset(eid, preset) { this._svc('climate', 'set_preset_mode', { entity_id: eid, preset_mode: preset }); }
-
-  // ── Optimistic temperature adjustment with debounce ────────────────────
-  _adjustTemp(eid, delta, sp) {
-    const s = this._st(eid); if (!s) return;
-    const a = s.attributes || {};
-    const adj = this._tempAdj[eid] || (this._tempAdj[eid] = {});
-
-    // Read from pending value if active, else from entity state
-    const curHeat = adj.heat ?? a.target_temp_low ?? a.temperature ?? 68;
-    const curCool = adj.cool ?? a.target_temp_high ?? (s.state === 'cool' ? a.temperature : null) ?? 76;
-
-    if (sp === 'heat') adj.heat = Math.max(50, Math.min(90, Math.round(curHeat) + delta));
-    else               adj.cool = Math.max(60, Math.min(99, Math.round(curCool) + delta));
-
-    // Optimistic UI — trigger reactive render
-    this._pendingTemps = { ...this._pendingTemps, [eid]: { heat: adj.heat, cool: adj.cool } };
-
-    // Debounce: only schedule commit when no API call is in-flight
-    if (!adj.committing) {
-      clearTimeout(adj.timer);
-      adj.timer = setTimeout(() => this._commitAdj(eid), 800);
-    }
-  }
-
-  async _commitAdj(eid) {
-    const adj = this._tempAdj[eid];
-    if (!adj || adj.committing) return;
-    adj.committing = true;
-
-    const s = this._st(eid);
-    const a = s?.attributes || {};
-    const snapH = adj.heat, snapC = adj.cool;
-    const htsp = snapH ?? Math.round(a.target_temp_low ?? a.temperature ?? 68);
-    const clsp = snapC ?? Math.round(a.target_temp_high ?? (s?.state === 'cool' ? a.temperature : null) ?? 76);
-
-    const mode = s?.state || 'off';
-    const d = { entity_id: eid };
-    if (mode === 'heat_cool') { d.target_temp_low = htsp; d.target_temp_high = clsp; }
-    else if (mode === 'heat') { d.temperature = htsp; }
-    else if (mode === 'cool') { d.temperature = clsp; }
-    else { d.target_temp_low = htsp; d.target_temp_high = clsp; }
-
-    try { await this.hass.callService('climate', 'set_temperature', d); }
-    catch (e) { console.error('set_temperature failed', e); }
-
-    adj.committing = false;
-
-    // Did the user adjust while we were committing?
-    if (adj.heat !== snapH || adj.cool !== snapC) {
-      adj.timer = setTimeout(() => this._commitAdj(eid), 400);
-      return;
-    }
-
-    // Done — clear pending state, keep grace window so server state catches up
-    adj.heat = null; adj.cool = null; adj.timer = null;
-    adj.graceUntil = Date.now() + 30000;
-    // Remove pending UI after a short delay so the next hass update takes over
-    setTimeout(() => {
-      if (!this._tempAdj[eid]?.heat && !this._tempAdj[eid]?.cool) {
-        const { [eid]: _, ...rest } = this._pendingTemps;
-        this._pendingTemps = rest;
-      }
-    }, 2000);
-  }
-
-  _hasPending(eid) {
-    const adj = this._tempAdj[eid];
-    return adj && (adj.heat != null || adj.cool != null || adj.committing);
-  }
-
-  // ── Hold controls ──────────────────────────────────────────────────────
-  _cancelHold(eid) {
-    const reg = (this._registryEntities || []).find(e => e.entity_id === eid);
-    if (!reg) return;
-    const zoneId = (reg.unique_id || '').replace(/^infinitude_/, '');
-    if (!zoneId) return;
-    this._svc('infinitude_direct', 'cancel_hold', { zone_id: zoneId });
-  }
-
-  _setZoneHold(eid) {
-    const reg = (this._registryEntities || []).find(e => e.entity_id === eid);
-    if (!reg) return;
-    const zoneId = (reg.unique_id || '').replace(/^infinitude_/, '');
-    if (!zoneId) return;
-    const until = this._resolveUntil(this._holdDuration, this._holdCustom);
-    if (until === null) return;
-    // If manual, apply user-adjusted temps and fan to the manual activity first
-    if (this._holdActivity === 'manual') {
-      this._svc('infinitude_direct', 'set_profile', {
-        zone_id: zoneId,
-        activity: 'manual',
-        htsp: this._holdHtsp,
-        clsp: this._holdClsp,
-        fan: this._holdFan,
-      });
-    }
-    this._svc('infinitude_direct', 'set_hold', {
-      zone_id: zoneId,
-      activity: this._holdActivity,
-      ...(until !== undefined && { until }),
-    });
-    this._holdOpen = null;
-  }
-
-  _initHoldManual(eid) {
-    const zid = this._zoneId(eid);
-    const act = (this._getProfilesData().find(z => z.id === zid)?.activities?.manual) || {};
-    this._holdHtsp = act.htsp ? Math.round(Number(act.htsp) || 68) : 68;
-    this._holdClsp = act.clsp ? Math.round(Number(act.clsp) || 76) : 76;
-    this._holdFan  = act.fan || 'auto';
-  }
-
-  _setWholeHouseHold() {
-    const until = this._resolveUntil(this._whHoldDuration, this._whHoldCustom);
-    if (until === null) return;
-    this._svc('infinitude_direct', 'set_whole_house_hold', {
-      activity: this._whHoldActivity,
-      ...(until !== undefined && { until }),
-    });
-    this._whHoldOpen = false;
-  }
-
-  _cancelWholeHouseHold() {
-    this._svc('infinitude_direct', 'cancel_whole_house_hold', {});
-  }
-
-  _resolveUntil(duration, custom) {
-    if (duration === 'forever') return 'forever';
-    if (duration === 'custom') {
-      if (!custom) return null; // don't submit without a time
-      return custom;
-    }
-    // duration is minutes — compute HH:MM
-    const now = new Date();
-    now.setMinutes(now.getMinutes() + parseInt(duration));
-    const m = Math.round(now.getMinutes() / 15) * 15;
-    now.setMinutes(m, 0, 0);
-    if (m === 60) { now.setMinutes(0); now.setHours(now.getHours() + 1); }
-    return `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
-  }
-
-  _otmrRelative(otmr) {
-    if (!otmr) return '';
-    const [h, m] = otmr.split(':').map(Number);
-    const d = new Date();
-    d.setHours(h, m, 0, 0);
-    return 'until ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  }
-
-  _zoneId(eid) {
-    const reg = (this._registryEntities || []).find(e => e.entity_id === eid);
-    return reg ? (reg.unique_id || '').replace(/^infinitude_/, '') : '';
-  }
-
-  // ── Styles ─────────────────────────────────────────────────────────────
-  static styles = css`
-    :host { display: block; }
-    ha-card { overflow: hidden; }
+  static styles = [sharedStyles, css`
     .card-header {
       display: flex; align-items: center;
       padding: 12px 16px 8px; gap: 8px;
     }
     .header-left { display: flex; align-items: center; gap: 8px; }
     .header-title { font-size: 18px; font-weight: 500; color: var(--primary-text-color); }
-    .conn-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-    .conn-dot.ok { background: var(--label-badge-green, #34d399); animation: pulse-dot 2.5s ease infinite; }
-    .conn-dot.err { background: #ef4444; }
-    .conn-dot.unk { background: var(--secondary-text-color); opacity: 0.4; }
-    @keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
-    .summary-stats {
-      display: flex; align-items: center; gap: 0; margin-bottom: 14px;
-      border: 1px solid var(--divider-color); border-radius: 8px; overflow: hidden;
-    }
-    .summary-stat {
-      display: flex; flex-direction: column; align-items: center; gap: 2px;
-      padding: 8px 14px; flex: 1; min-width: 0;
-    }
-    .summary-stat-label { font-size: 10px; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.5px; }
-    .summary-stat-val { font-size: 14px; font-weight: 700; color: var(--primary-text-color); }
-    .summary-stat-val.heat { color: var(--label-badge-red, #f97316); }
-    .summary-stat-val.cool { color: var(--label-badge-blue, #38bdf8); }
-    .summary-divider { width: 1px; align-self: stretch; background: var(--divider-color); }
-    .wh-hold {
-      display: flex; align-items: center; gap: 6px; width: 100%;
-      padding: 8px 12px; margin-bottom: 14px;
-      background: rgba(251,191,36,0.08); border: 1px solid rgba(251,191,36,0.2);
-      border-radius: 8px; font-size: 12px; color: var(--warning-color, #fbbf24); cursor: pointer;
-    }
-    .wh-hold:hover { background: rgba(251,191,36,0.14); }
-    .wh-set {
-      display: flex; align-items: center; gap: 8px; width: 100%; margin-bottom: 14px;
-      padding: 10px 12px; background: var(--secondary-background-color);
-      border: 1px solid var(--divider-color); border-radius: 8px; flex-wrap: wrap;
-    }
-    .wh-set-label { font-size: 11px; font-weight: 600; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.5px; }
-    .wh-pills { display: flex; gap: 0; border-radius: 6px; overflow: hidden; border: 1px solid var(--divider-color); }
-    .wh-pill {
-      font-size: 11px; font-weight: 600; padding: 5px 12px; border: none;
-      border-right: 1px solid var(--divider-color);
-      background: var(--card-background-color, var(--ha-card-background)); color: var(--secondary-text-color);
-      cursor: pointer; transition: all 0.12s; text-transform: capitalize;
-    }
-    .wh-pill:last-child { border-right: none; }
-    .wh-pill:hover { color: var(--primary-text-color); }
-    .wh-pill.active { background: var(--primary-color); color: var(--text-primary-color, #fff); }
     .card-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--divider-color); padding: 0 16px; }
     .tab {
       padding: 10px 16px; font-size: 13px; font-weight: 500;
@@ -412,19 +110,6 @@ class InfinitudeHVACCard extends LitElement {
     .temp-hero { font-size: 42px; font-weight: 300; line-height: 1; color: var(--primary-text-color); font-variant-numeric: tabular-nums; }
     .temp-unit { font-size: 14px; color: var(--secondary-text-color); }
     .zone-sp { display: flex; flex-direction: column; gap: 6px; }
-    .sp-row { display: flex; align-items: center; gap: 4px; font-size: 13px; font-variant-numeric: tabular-nums; }
-    .sp-val { min-width: 32px; text-align: center; font-weight: 600; }
-    .sp-heat { color: var(--label-badge-red, #f97316); }
-    .sp-cool { color: var(--label-badge-blue, #38bdf8); }
-    .btn-adj {
-      width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--divider-color);
-      background: var(--secondary-background-color); color: var(--secondary-text-color);
-      font-size: 16px; font-weight: 600; cursor: pointer;
-      display: inline-flex; align-items: center; justify-content: center;
-      user-select: none; line-height: 1; transition: all 0.12s;
-    }
-    .btn-adj:hover { background: var(--primary-color); color: var(--text-primary-color, #fff); border-color: var(--primary-color); }
-    .btn-adj:active { transform: scale(0.92); }
     .zone-meta { display: flex; gap: 10px; padding: 0 14px 10px; font-size: 11px; color: var(--secondary-text-color); flex-wrap: wrap; }
     .meta-item { display: flex; align-items: center; gap: 4px; }
     .meta-val { color: var(--primary-text-color); font-weight: 500; }
@@ -438,18 +123,6 @@ class InfinitudeHVACCard extends LitElement {
       display: flex; flex-direction: column; gap: 8px; font-size: 11px;
     }
     .hold-picker-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-    .hold-dur-select {
-      background: var(--card-background-color); border: 1px solid var(--divider-color);
-      border-radius: 4px; color: var(--primary-text-color); font-size: 11px; padding: 4px 6px; outline: none;
-    }
-    .hold-dur-select:focus { border-color: var(--primary-color); }
-    .hold-time-input {
-      background: var(--card-background-color); border: 1px solid var(--divider-color);
-      border-radius: 4px; color: var(--primary-text-color); font-size: 11px; padding: 4px 6px; outline: none;
-    }
-    .hold-time-input:focus { border-color: var(--primary-color); }
-    .sp-pending { animation: sp-pulse 0.8s ease-in-out infinite; color: var(--warning-color, #fbbf24) !important; }
-    @keyframes sp-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
     .zone-actions { padding: 0 14px 10px; display: flex; gap: 8px; }
     .zone-preset-row {
       display: flex; gap: 0; border-radius: 6px; overflow: hidden;
@@ -463,21 +136,6 @@ class InfinitudeHVACCard extends LitElement {
     }
     .preset-btn:last-child { border-right: none; }
     .preset-btn:hover, .preset-btn.active { background: var(--primary-color); color: var(--text-primary-color, #fff); }
-    .mode-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; width: 100%; }
-    .mode-label { font-size: 10px; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
-    .mode-pills { display: flex; gap: 0; border-radius: 8px; overflow: hidden; border: 1px solid var(--divider-color); }
-    .mode-pill {
-      font-size: 12px; font-weight: 600; padding: 6px 14px; border: none;
-      border-right: 1px solid var(--divider-color);
-      background: var(--secondary-background-color); color: var(--secondary-text-color);
-      cursor: pointer; transition: all 0.15s;
-    }
-    .mode-pill:last-child { border-right: none; }
-    .mode-pill:hover { color: var(--primary-text-color); }
-    .mode-pill.active { background: var(--primary-color); color: var(--text-primary-color, #fff); }
-    .mode-pill.active.heat { background: var(--label-badge-red, #f97316); }
-    .mode-pill.active.cool { background: var(--label-badge-blue, #38bdf8); }
-    .mode-pill.active.auto { background: var(--label-badge-green, #34d399); }
     .sched-day-tabs { display: flex; gap: 4px; margin-bottom: 12px; flex-wrap: wrap; }
     .day-tab {
       padding: 5px 12px; border-radius: 16px; font-size: 12px; font-weight: 600;
@@ -503,28 +161,12 @@ class InfinitudeHVACCard extends LitElement {
     .sched-line:last-child { border-bottom: none; }
     .sched-line.disabled { opacity: 0.35; }
     .sched-name { width: 120px; min-width: 80px; flex-shrink: 0; font-weight: 600; color: var(--primary-text-color); white-space: nowrap; }
-    .sched-select {
-      background: var(--card-background-color); border: 1px solid var(--divider-color);
-      border-radius: 4px; color: var(--primary-text-color); font-size: 11px; padding: 3px 6px; outline: none;
-    }
-    .sched-select:focus { border-color: var(--primary-color); }
+    .sched-name-compact { width: 28px; min-width: 28px; font-size: 14px; text-align: center; }
     .sched-temps { display: flex; gap: 6px; align-items: center; font-size: 12px; font-variant-numeric: tabular-nums; }
     .sched-toggle { cursor: pointer; display: flex; align-items: center; gap: 3px; }
     .sched-toggle input { cursor: pointer; }
     .sched-toggle span { font-size: 10px; color: var(--secondary-text-color); }
-    .action-bar {
-      display: flex; align-items: center; gap: 8px; padding: 10px 0;
-      border-top: 1px solid var(--divider-color); margin-top: 8px;
-    }
-    .action-bar-label { font-size: 12px; color: var(--warning-color, #fbbf24); margin-right: auto; }
-    .btn {
-      padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 500;
-      border: 1px solid var(--divider-color); cursor: pointer; transition: all 0.12s;
-      background: var(--secondary-background-color); color: var(--secondary-text-color);
-    }
-    .btn:hover { color: var(--primary-text-color); border-color: var(--primary-color); }
-    .btn-primary { background: var(--primary-color); color: var(--text-primary-color, #fff); border-color: var(--primary-color); }
-    .btn-primary:hover { opacity: 0.9; }
+    .copy-bar { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; color: var(--secondary-text-color); }
     .prof-card {
       background: var(--secondary-background-color); border: 1px solid var(--divider-color);
       border-radius: 10px; margin-bottom: 8px; overflow: hidden;
@@ -539,16 +181,10 @@ class InfinitudeHVACCard extends LitElement {
     }
     .prof-line:last-child { border-bottom: none; }
     .prof-name { width: 120px; min-width: 80px; flex-shrink: 0; font-weight: 600; color: var(--primary-text-color); white-space: nowrap; }
+    .prof-name-compact { width: 28px; min-width: 28px; font-size: 14px; text-align: center; }
     .prof-fan { display: flex; align-items: center; gap: 4px; }
     .prof-fan-label { font-size: 10px; color: var(--secondary-text-color); }
-    .copy-bar { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; color: var(--secondary-text-color); }
-    .section-title { font-size: 11px; font-weight: 600; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; }
-    .zone-legend { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; font-size: 12px; color: var(--secondary-text-color); }
-    .legend-item { display: flex; align-items: center; gap: 4px; }
-    .legend-num { font-weight: 700; color: var(--primary-text-color); font-size: 14px; }
-    .sched-name-compact { width: 28px; min-width: 28px; font-size: 14px; text-align: center; }
-    .prof-name-compact { width: 28px; min-width: 28px; font-size: 14px; text-align: center; }
-  `;
+  `];
 
   // ── Render ─────────────────────────────────────────────────────────────
   render() {
@@ -574,13 +210,13 @@ class InfinitudeHVACCard extends LitElement {
         <div class="card-tabs">${this._tabs()}</div>
         <div class="card-content">
           ${this._tab === 'status'   ? this._status(ent) : nothing}
-          ${this._tab === 'schedule' ? this._sched(ent)   : nothing}
+          ${this._tab === 'schedule' ? this._sched()      : nothing}
           ${this._tab === 'profiles' ? this._profs()      : nothing}
         </div>
       </ha-card>`;
   }
 
-  // ── Header (branding + dots + version only) ────────────────────────────
+  // ── Header ─────────────────────────────────────────────────────────────
   _hdr(ent) {
     const { system } = ent;
     const infAvail = system.info ? this._st(system.info)?.state !== 'unavailable' : false;
@@ -595,7 +231,23 @@ class InfinitudeHVACCard extends LitElement {
       </div>`;
   }
 
-  // ── Summary strip (mode, stats, WH hold — inside Status tab) ───────────
+  // ── Tabs ───────────────────────────────────────────────────────────────
+  _tabs() {
+    const tabs = ['status','schedule','profiles'];
+    return html`${tabs.map(t => html`
+      <div class="tab ${this._tab === t ? 'active' : ''}"
+           @click=${() => { this._tab = t; }}>${t.charAt(0).toUpperCase() + t.slice(1)}</div>`)}`;
+  }
+
+  // ── Status tab ─────────────────────────────────────────────────────────
+  _status(ent) {
+    const { climates } = ent;
+    if (!climates.length) return html`<div style="padding:20px;text-align:center;color:var(--secondary-text-color)">No zone entities found</div>`;
+    return html`
+      ${this._summaryStrip(ent)}
+      <div class="zone-grid">${climates.map(eid => this._zoneCard(eid))}</div>`;
+  }
+
   _summaryStrip(ent) {
     const { system, selects, climates } = ent;
     const mode = climates.length ? (this._st(climates[0])?.state || 'off') : 'off';
@@ -679,24 +331,7 @@ class InfinitudeHVACCard extends LitElement {
       `}`;
   }
 
-  // ── Tabs ───────────────────────────────────────────────────────────────
-  _tabs() {
-    const tabs = ['status','schedule','profiles'];
-    return html`${tabs.map(t => html`
-      <div class="tab ${this._tab === t ? 'active' : ''}"
-           @click=${() => { this._tab = t; }}>${t.charAt(0).toUpperCase() + t.slice(1)}</div>`)}`;
-  }
-
-  // ── Status tab (summary strip + zone cards) ──────────────────────────
-  _status(ent) {
-    const { climates } = ent;
-    if (!climates.length) return html`<div style="padding:20px;text-align:center;color:var(--secondary-text-color)">No zone entities found</div>`;
-
-    return html`
-      ${this._summaryStrip(ent)}
-      <div class="zone-grid">${climates.map(eid => this._zoneCard(eid))}</div>`;
-  }
-
+  // ── Zone card (inline) ─────────────────────────────────────────────────
   _zoneCard(eid) {
     const s = this._st(eid);
     if (!s) return nothing;
@@ -715,7 +350,6 @@ class InfinitudeHVACCard extends LitElement {
     const holdUntil = a.hold_until;
     const holdIsOpen = this._holdOpen === eid;
 
-    // Optimistic temps: use pending values if the user is adjusting
     const pending = this._pendingTemps[eid];
     const isPending = this._hasPending(eid);
     const htsp = pending?.heat ?? a.target_temp_low ?? a.temperature ?? null;
@@ -812,7 +446,107 @@ class InfinitudeHVACCard extends LitElement {
       </div>`;
   }
 
-  // ── Schedule ───────────────────────────────────────────────────────────
+  // ── Temperature adjustment ─────────────────────────────────────────────
+  _adjustTemp(eid, delta, sp) {
+    const s = this._st(eid); if (!s) return;
+    const a = s.attributes || {};
+    const adj = this._tempAdj[eid] || (this._tempAdj[eid] = {});
+    const curHeat = adj.heat ?? a.target_temp_low ?? a.temperature ?? 68;
+    const curCool = adj.cool ?? a.target_temp_high ?? (s.state === 'cool' ? a.temperature : null) ?? 76;
+    if (sp === 'heat') adj.heat = Math.max(50, Math.min(90, Math.round(curHeat) + delta));
+    else               adj.cool = Math.max(60, Math.min(99, Math.round(curCool) + delta));
+    this._pendingTemps = { ...this._pendingTemps, [eid]: { heat: adj.heat, cool: adj.cool } };
+    if (!adj.committing) {
+      clearTimeout(adj.timer);
+      adj.timer = setTimeout(() => this._commitAdj(eid), 800);
+    }
+  }
+
+  async _commitAdj(eid) {
+    const adj = this._tempAdj[eid];
+    if (!adj || adj.committing) return;
+    adj.committing = true;
+    const s = this._st(eid);
+    const a = s?.attributes || {};
+    const snapH = adj.heat, snapC = adj.cool;
+    const htsp = snapH ?? Math.round(a.target_temp_low ?? a.temperature ?? 68);
+    const clsp = snapC ?? Math.round(a.target_temp_high ?? (s?.state === 'cool' ? a.temperature : null) ?? 76);
+    const mode = s?.state || 'off';
+    const d = { entity_id: eid };
+    if (mode === 'heat_cool') { d.target_temp_low = htsp; d.target_temp_high = clsp; }
+    else if (mode === 'heat') { d.temperature = htsp; }
+    else if (mode === 'cool') { d.temperature = clsp; }
+    else { d.target_temp_low = htsp; d.target_temp_high = clsp; }
+    try { await this.hass.callService('climate', 'set_temperature', d); }
+    catch (e) { console.error('set_temperature failed', e); }
+    adj.committing = false;
+    if (adj.heat !== snapH || adj.cool !== snapC) {
+      adj.timer = setTimeout(() => this._commitAdj(eid), 400);
+      return;
+    }
+    adj.heat = null; adj.cool = null; adj.timer = null;
+    adj.graceUntil = Date.now() + 30000;
+    setTimeout(() => {
+      if (!this._tempAdj[eid]?.heat && !this._tempAdj[eid]?.cool) {
+        const { [eid]: _, ...rest } = this._pendingTemps;
+        this._pendingTemps = rest;
+      }
+    }, 2000);
+  }
+
+  _hasPending(eid) {
+    const adj = this._tempAdj[eid];
+    return adj && (adj.heat != null || adj.cool != null || adj.committing);
+  }
+
+  // ── Hold controls ──────────────────────────────────────────────────────
+  _cancelHold(eid) {
+    const zoneId = this._zoneId(eid);
+    if (!zoneId) return;
+    this._svc('infinitude_direct', 'cancel_hold', { zone_id: zoneId });
+  }
+
+  _setZoneHold(eid) {
+    const zoneId = this._zoneId(eid);
+    if (!zoneId) return;
+    const until = this._resolveUntil(this._holdDuration, this._holdCustom);
+    if (until === null) return;
+    if (this._holdActivity === 'manual') {
+      this._svc('infinitude_direct', 'set_profile', {
+        zone_id: zoneId, activity: 'manual',
+        htsp: this._holdHtsp, clsp: this._holdClsp, fan: this._holdFan,
+      });
+    }
+    this._svc('infinitude_direct', 'set_hold', {
+      zone_id: zoneId, activity: this._holdActivity,
+      ...(until !== undefined && { until }),
+    });
+    this._holdOpen = null;
+  }
+
+  _initHoldManual(eid) {
+    const zid = this._zoneId(eid);
+    const act = (this._getProfilesData().find(z => z.id === zid)?.activities?.manual) || {};
+    this._holdHtsp = act.htsp ? Math.round(Number(act.htsp) || 68) : 68;
+    this._holdClsp = act.clsp ? Math.round(Number(act.clsp) || 76) : 76;
+    this._holdFan  = act.fan || 'auto';
+  }
+
+  _setWholeHouseHold() {
+    const until = this._resolveUntil(this._whHoldDuration, this._whHoldCustom);
+    if (until === null) return;
+    this._svc('infinitude_direct', 'set_whole_house_hold', {
+      activity: this._whHoldActivity,
+      ...(until !== undefined && { until }),
+    });
+    this._whHoldOpen = false;
+  }
+
+  _cancelWholeHouseHold() {
+    this._svc('infinitude_direct', 'cancel_whole_house_hold', {});
+  }
+
+  // ── Schedule tab ───────────────────────────────────────────────────────
   _sched() {
     const schedule = this._getScheduleData();
     const profiles = this._getProfilesData();
@@ -873,7 +607,6 @@ class InfinitudeHVACCard extends LitElement {
           const htsp = ap?.htsp ? Math.round(Number(ap.htsp) || 0) : '–';
           const clsp = ap?.clsp ? Math.round(Number(ap.clsp) || 0) : '–';
           const label = multiZone ? (CIRCLED[zi[zid]] ?? zid) : (zn[zid] || `Zone ${zid}`);
-
           return html`
             <div class="sched-line ${enabled ? '' : 'disabled'}">
               <span class="sched-name ${multiZone ? 'sched-name-compact' : ''}">${label}</span>
@@ -948,7 +681,7 @@ class InfinitudeHVACCard extends LitElement {
     this._schedEdits = {};
   }
 
-  // ── Profiles ───────────────────────────────────────────────────────────
+  // ── Profiles tab ───────────────────────────────────────────────────────
   _profs() {
     const profiles = this._getProfilesData();
     if (!profiles.length) return html`
