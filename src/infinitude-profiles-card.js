@@ -89,7 +89,7 @@ class InfinitudeProfilesCard extends InfinitudeBase {
                     <div class="prof-fan">
                       <span class="prof-fan-label">Fan</span>
                       <select class="sched-select" .value=${fan} @change=${(e) => this._profFan(zone.id, actId, e.target.value)}>
-                        ${FAN_OPTIONS.map(f => html`<option value=${f}>${f}</option>`)}
+                        ${FAN_OPTIONS.map(f => html`<option value=${f} ?selected=${f === fan}>${f}</option>`)}
                       </select>
                     </div>
                   </div>`;

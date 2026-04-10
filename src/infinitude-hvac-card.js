@@ -611,10 +611,10 @@ class InfinitudeHVACCard extends InfinitudeBase {
             <div class="sched-line ${enabled ? '' : 'disabled'}">
               <span class="sched-name ${multiZone ? 'sched-name-compact' : ''}">${label}</span>
               <select class="sched-select" .value=${act} @change=${(e) => this._schedEdit(zid, pi, 'act', e.target.value)}>
-                ${ACTIVITIES.map(a => html`<option value=${a}>${a}</option>`)}
+                ${ACTIVITIES.map(a => html`<option value=${a} ?selected=${a === act}>${a}</option>`)}
               </select>
               <select class="sched-select" .value=${time} @change=${(e) => this._schedEdit(zid, pi, 'time', e.target.value)}>
-                ${TIME_OPTIONS.map(o => html`<option value=${o.v}>${o.l}</option>`)}
+                ${TIME_OPTIONS.map(o => html`<option value=${o.v} ?selected=${o.v === time}>${o.l}</option>`)}
               </select>
               <label class="sched-toggle">
                 <input type="checkbox" .checked=${enabled}
@@ -736,7 +736,7 @@ class InfinitudeHVACCard extends InfinitudeBase {
                 <div class="prof-fan">
                   <span class="prof-fan-label">Fan</span>
                   <select class="sched-select" .value=${fan} @change=${(e) => this._profFan(zone.id, actId, e.target.value)}>
-                    ${FAN_OPTIONS.map(f => html`<option value=${f}>${f}</option>`)}
+                    ${FAN_OPTIONS.map(f => html`<option value=${f} ?selected=${f === fan}>${f}</option>`)}
                   </select>
                 </div>
               </div>`;
