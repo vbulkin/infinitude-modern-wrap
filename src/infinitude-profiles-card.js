@@ -88,8 +88,8 @@ class InfinitudeProfilesCard extends InfinitudeBase {
                     </div>
                     <div class="prof-fan">
                       <span class="prof-fan-label">Fan</span>
-                      <select class="sched-select" @change=${(e) => this._profFan(zone.id, actId, e.target.value)}>
-                        ${FAN_OPTIONS.map(f => html`<option value=${f} ?selected=${f === fan}>${f}</option>`)}
+                      <select class="sched-select" .value=${fan} @change=${(e) => this._profFan(zone.id, actId, e.target.value)}>
+                        ${FAN_OPTIONS.map(f => html`<option value=${f}>${f}</option>`)}
                       </select>
                     </div>
                   </div>`;
@@ -134,12 +134,26 @@ class InfinitudeProfilesCard extends InfinitudeBase {
   }
 
   async _saveProfs() {
-    for (const ed of Object.values(this._profileEdits)) {
-      const d = { zone_id: ed.zone_id, activity: ed.activity, htsp: ed.htsp, clsp: ed.clsp };
-      if (ed.fan) d.fan = ed.fan;
-      await this._svc('infinitude_direct', 'set_profile', d);
+    if (this._savingProfs) return;
+    this._savingProfs = true;
+    const edits = { ...this._profileEdits };
+    try {
+      for (const ed of Object.values(edits)) {
+        const d = { zone_id: ed.zone_id, activity: ed.activity, htsp: ed.htsp, clsp: ed.clsp };
+        if (ed.fan) d.fan = ed.fan;
+        await this._svc('infinitude_direct', 'set_profile', d);
+      }
+    } finally {
+      setTimeout(() => {
+        const cur = this._profileEdits;
+        const kept = {};
+        for (const k of Object.keys(cur)) {
+          if (!(k in edits) || cur[k] !== edits[k]) kept[k] = cur[k];
+        }
+        this._profileEdits = kept;
+        this._savingProfs = false;
+      }, 3000);
     }
-    this._profileEdits = {};
   }
 }
 

@@ -610,14 +610,14 @@ class InfinitudeHVACCard extends InfinitudeBase {
           return html`
             <div class="sched-line ${enabled ? '' : 'disabled'}">
               <span class="sched-name ${multiZone ? 'sched-name-compact' : ''}">${label}</span>
-              <select class="sched-select" @change=${(e) => this._schedEdit(zid, pi, 'act', e.target.value)}>
-                ${ACTIVITIES.map(a => html`<option value=${a} ?selected=${a === act}>${a}</option>`)}
+              <select class="sched-select" .value=${act} @change=${(e) => this._schedEdit(zid, pi, 'act', e.target.value)}>
+                ${ACTIVITIES.map(a => html`<option value=${a}>${a}</option>`)}
               </select>
-              <select class="sched-select" @change=${(e) => this._schedEdit(zid, pi, 'time', e.target.value)}>
-                ${TIME_OPTIONS.map(o => html`<option value=${o.v} ?selected=${o.v === time}>${o.l}</option>`)}
+              <select class="sched-select" .value=${time} @change=${(e) => this._schedEdit(zid, pi, 'time', e.target.value)}>
+                ${TIME_OPTIONS.map(o => html`<option value=${o.v}>${o.l}</option>`)}
               </select>
               <label class="sched-toggle">
-                <input type="checkbox" ?checked=${enabled}
+                <input type="checkbox" .checked=${enabled}
                        @change=${(e) => this._schedEdit(zid, pi, 'enabled', e.target.checked)}>
                 <span>on</span>
               </label>
@@ -662,23 +662,37 @@ class InfinitudeHVACCard extends InfinitudeBase {
   }
 
   async _saveSched() {
-    const sch = this._getScheduleData();
-    for (const zid of Object.keys(sch)) {
-      const prog = DAYS.map(day => ({
-        id: day,
-        period: (sch[zid]?.[day] || []).map((p, pi) => {
-          const ed = this._schedEdits[`${zid}_${day}_${pi}`];
-          return {
-            id: p.id || String(pi + 1),
-            activity: ed?.act ?? p.activity,
-            time: ed?.time ?? p.time,
-            enabled: (ed?.enabled ?? p.enabled) ? 'on' : 'off',
-          };
-        }),
-      }));
-      await this._svc('infinitude_direct', 'save_schedule', { zone_id: zid, schedule: JSON.stringify(prog) });
+    if (this._saving) return;
+    this._saving = true;
+    const edits = { ...this._schedEdits };
+    try {
+      const sch = this._getScheduleData();
+      for (const zid of Object.keys(sch)) {
+        const prog = DAYS.map(day => ({
+          id: day,
+          period: (sch[zid]?.[day] || []).map((p, pi) => {
+            const ed = edits[`${zid}_${day}_${pi}`];
+            return {
+              id: p.id || String(pi + 1),
+              activity: ed?.act ?? p.activity,
+              time: ed?.time ?? p.time,
+              enabled: (ed?.enabled ?? p.enabled) ? 'on' : 'off',
+            };
+          }),
+        }));
+        await this._svc('infinitude_direct', 'save_schedule', { zone_id: zid, schedule: JSON.stringify(prog) });
+      }
+    } finally {
+      setTimeout(() => {
+        const cur = this._schedEdits;
+        const kept = {};
+        for (const k of Object.keys(cur)) {
+          if (!(k in edits) || cur[k] !== edits[k]) kept[k] = cur[k];
+        }
+        this._schedEdits = kept;
+        this._saving = false;
+      }, 3000);
     }
-    this._schedEdits = {};
   }
 
   // ── Profiles tab ───────────────────────────────────────────────────────
@@ -721,8 +735,8 @@ class InfinitudeHVACCard extends InfinitudeBase {
                 </div>
                 <div class="prof-fan">
                   <span class="prof-fan-label">Fan</span>
-                  <select class="sched-select" @change=${(e) => this._profFan(zone.id, actId, e.target.value)}>
-                    ${FAN_OPTIONS.map(f => html`<option value=${f} ?selected=${f === fan}>${f}</option>`)}
+                  <select class="sched-select" .value=${fan} @change=${(e) => this._profFan(zone.id, actId, e.target.value)}>
+                    ${FAN_OPTIONS.map(f => html`<option value=${f}>${f}</option>`)}
                   </select>
                 </div>
               </div>`;
@@ -765,12 +779,26 @@ class InfinitudeHVACCard extends InfinitudeBase {
   }
 
   async _saveProfs() {
-    for (const ed of Object.values(this._profileEdits)) {
-      const d = { zone_id: ed.zone_id, activity: ed.activity, htsp: ed.htsp, clsp: ed.clsp };
-      if (ed.fan) d.fan = ed.fan;
-      await this._svc('infinitude_direct', 'set_profile', d);
+    if (this._savingProfs) return;
+    this._savingProfs = true;
+    const edits = { ...this._profileEdits };
+    try {
+      for (const ed of Object.values(edits)) {
+        const d = { zone_id: ed.zone_id, activity: ed.activity, htsp: ed.htsp, clsp: ed.clsp };
+        if (ed.fan) d.fan = ed.fan;
+        await this._svc('infinitude_direct', 'set_profile', d);
+      }
+    } finally {
+      setTimeout(() => {
+        const cur = this._profileEdits;
+        const kept = {};
+        for (const k of Object.keys(cur)) {
+          if (!(k in edits) || cur[k] !== edits[k]) kept[k] = cur[k];
+        }
+        this._profileEdits = kept;
+        this._savingProfs = false;
+      }, 3000);
     }
-    this._profileEdits = {};
   }
 }
 
