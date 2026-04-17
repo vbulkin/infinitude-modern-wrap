@@ -67,12 +67,6 @@ class InfinitudeHVACCard extends InfinitudeBase {
     this._holdFan = 'auto';
     this._saving = false;
     this._savingProfs = false;
-    this._lastEntityUpdate = 0;
-  }
-
-  updated(changed) {
-    super.updated(changed);
-    if (changed.has('hass') && this.hass) this._lastEntityUpdate = Date.now();
   }
 
   connectedCallback() {
@@ -295,7 +289,15 @@ class InfinitudeHVACCard extends InfinitudeBase {
     const effectiveStatus = anyHeating ? 'Heating' : anyCooling ? 'Cooling' : anyDrying ? 'Dehumidifying' : (opStatus || 'Idle');
     const statusCls = anyHeating ? 'heat' : anyCooling ? 'cool' : '';
 
-    const stale = this._lastEntityUpdate > 0 && (Date.now() - this._lastEntityUpdate) > 180000;
+    const reg = this._registryEntities || [];
+    let maxReport = 0;
+    for (const e of reg) {
+      const ts = this.hass.states[e.entity_id]?.last_reported;
+      if (!ts) continue;
+      const t = Date.parse(ts);
+      if (t > maxReport) maxReport = t;
+    }
+    const stale = maxReport > 0 && (Date.now() - maxReport) > 90000;
 
     return html`
       <div class="mode-row">
