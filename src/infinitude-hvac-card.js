@@ -67,6 +67,12 @@ class InfinitudeHVACCard extends InfinitudeBase {
     this._holdFan = 'auto';
     this._saving = false;
     this._savingProfs = false;
+    this._lastEntityUpdate = 0;
+  }
+
+  updated(changed) {
+    super.updated(changed);
+    if (changed.has('hass') && this.hass) this._lastEntityUpdate = Date.now();
   }
 
   connectedCallback() {
@@ -138,18 +144,6 @@ class InfinitudeHVACCard extends InfinitudeBase {
     }
     .hold-picker-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .zone-actions { padding: 0 14px 10px; display: flex; gap: 8px; }
-    .zone-preset-row {
-      display: flex; gap: 0; border-radius: 6px; overflow: hidden;
-      border: 1px solid var(--divider-color); margin: 0 14px 10px;
-    }
-    .preset-btn {
-      flex: 1; padding: 5px 0; font-size: 11px; font-weight: 600;
-      text-align: center; border: none; border-right: 1px solid var(--divider-color);
-      background: var(--secondary-background-color); color: var(--secondary-text-color);
-      cursor: pointer; transition: all 0.12s; text-transform: capitalize;
-    }
-    .preset-btn:last-child { border-right: none; }
-    .preset-btn:hover, .preset-btn.active { background: var(--primary-color); color: var(--text-primary-color, #fff); }
     .sched-day-tabs { display: flex; gap: 4px; margin-bottom: 12px; flex-wrap: wrap; }
     .day-tab {
       padding: 5px 12px; border-radius: 16px; font-size: 12px; font-weight: 600;
@@ -301,10 +295,7 @@ class InfinitudeHVACCard extends InfinitudeBase {
     const effectiveStatus = anyHeating ? 'Heating' : anyCooling ? 'Cooling' : anyDrying ? 'Dehumidifying' : (opStatus || 'Idle');
     const statusCls = anyHeating ? 'heat' : anyCooling ? 'cool' : '';
 
-    const infoState = this._st(system.info);
-    const stale = infoState?.last_updated
-      ? (Date.now() - new Date(infoState.last_updated).getTime()) > 90000
-      : false;
+    const stale = this._lastEntityUpdate > 0 && (Date.now() - this._lastEntityUpdate) > 180000;
 
     return html`
       <div class="mode-row">
@@ -402,7 +393,7 @@ class InfinitudeHVACCard extends InfinitudeBase {
       <div class="zone-card ${ac}">
         <div class="zone-top">
           <div style="display:flex;align-items:center;gap:8px">
-            <span class="zone-cond-dot ${dotCls}"></span>
+            <span class="zone-cond-dot ${dotCls}" title="${badgeLabel}"></span>
             <span class="zone-name">${name}</span>
           </div>
           <span class="zone-activity-pill">${preset}</span>
@@ -430,11 +421,6 @@ class InfinitudeHVACCard extends InfinitudeBase {
           ${rh != null ? html`<span class="meta-item">RH <span class="meta-val">${rh}%</span></span>` : nothing}
           ${a.fan_mode ? html`<span class="meta-item">Fan <span class="meta-val">${a.fan_mode}</span></span>` : nothing}
           ${a.damper_position != null ? html`<span class="meta-item">Damper <span class="meta-val">${a.damper_position}%</span></span>` : nothing}
-        </div>
-        <div class="zone-preset-row">
-          ${ACTIVITIES.map(act => html`
-            <div class="preset-btn ${preset === act ? 'active' : ''}"
-                 @click=${() => this._setPreset(eid, act)}>${act}</div>`)}
         </div>
         ${hasHold ? html`
           <div class="zone-hold">

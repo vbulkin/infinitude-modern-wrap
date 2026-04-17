@@ -71,18 +71,6 @@ class InfinitudeZoneCard extends InfinitudeBase {
     }
     .hold-picker-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .zone-actions { padding: 0 0 4px; display: flex; gap: 8px; }
-    .zone-preset-row {
-      display: flex; gap: 0; border-radius: 6px; overflow: hidden;
-      border: 1px solid var(--divider-color); margin-bottom: 10px;
-    }
-    .preset-btn {
-      flex: 1; padding: 5px 0; font-size: 11px; font-weight: 600;
-      text-align: center; border: none; border-right: 1px solid var(--divider-color);
-      background: var(--secondary-background-color); color: var(--secondary-text-color);
-      cursor: pointer; transition: all 0.12s; text-transform: capitalize;
-    }
-    .preset-btn:last-child { border-right: none; }
-    .preset-btn:hover, .preset-btn.active { background: var(--primary-color); color: var(--text-primary-color, #fff); }
     ha-card.heating { border-left: 3px solid var(--label-badge-red, #f97316); }
     ha-card.cooling { border-left: 3px solid var(--label-badge-blue, #38bdf8); }
     ha-card.drying  { border-left: 3px solid var(--accent-color, #a78bfa); }
@@ -131,7 +119,7 @@ class InfinitudeZoneCard extends InfinitudeBase {
         <div class="card-pad">
           <div class="zone-top">
             <div style="display:flex;align-items:center;gap:8px">
-              <span class="zone-cond-dot ${dotCls}"></span>
+              <span class="zone-cond-dot ${dotCls}" title="${action === 'drying' ? 'Dehumidifying' : al}"></span>
               <span class="zone-name">${name}</span>
             </div>
             <span class="zone-activity-pill">${preset}</span>
@@ -159,11 +147,6 @@ class InfinitudeZoneCard extends InfinitudeBase {
             ${rh != null ? html`<span class="meta-item">RH <span class="meta-val">${rh}%</span></span>` : nothing}
             ${a.fan_mode ? html`<span class="meta-item">Fan <span class="meta-val">${a.fan_mode}</span></span>` : nothing}
             ${a.damper_position != null ? html`<span class="meta-item">Damper <span class="meta-val">${a.damper_position}%</span></span>` : nothing}
-          </div>
-          <div class="zone-preset-row">
-            ${ACTIVITIES.map(act => html`
-              <div class="preset-btn ${preset === act ? 'active' : ''}"
-                   @click=${() => this._setPreset(eid, act)}>${act}</div>`)}
           </div>
           ${hasHold ? html`
             <div class="zone-hold">
