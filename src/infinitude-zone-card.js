@@ -38,12 +38,7 @@ class InfinitudeZoneCard extends InfinitudeBase {
   }
 
   static getConfigElement() { return document.createElement('infinitude-zone-card-editor'); }
-  static getStubConfig(hass) {
-    const entity = Object.keys(hass?.states || {}).find(
-      e => e.startsWith('climate.infinitude')
-    );
-    return { entity: entity || '' };
-  }
+  static getStubConfig() { return { entity: '' }; }
   getCardSize() { return 4; }
 
   static styles = [sharedStyles, css`
@@ -218,9 +213,33 @@ class InfinitudeZoneCardEditor extends LitElement {
   static properties = {
     hass: { attribute: false },
     _config: { state: true },
+    _infEntities: { state: true },
   };
 
+  constructor() {
+    super();
+    this._infEntities = null;
+  }
+
   setConfig(config) { this._config = config || {}; }
+
+  async _loadRegistry() {
+    if (this._infEntities || !this.hass) return;
+    try {
+      const all = await this.hass.callWS({ type: 'config/entity_registry/list' });
+      this._infEntities = new Set(
+        (all || [])
+          .filter(e => e.platform === 'infinitude_direct' && e.entity_id.startsWith('climate.'))
+          .map(e => e.entity_id)
+      );
+    } catch (e) {
+      this._infEntities = new Set();
+    }
+  }
+
+  updated(changed) {
+    if (changed.has('hass') && !this._infEntities) this._loadRegistry();
+  }
 
   _entityChanged(ev) {
     ev.stopPropagation();
@@ -236,17 +255,23 @@ class InfinitudeZoneCardEditor extends LitElement {
 
   render() {
     if (!this.hass) return html``;
+    const filter = this._infEntities && this._infEntities.size > 0
+      ? (s) => this._infEntities.has(s.entity_id)
+      : undefined;
     return html`
       <div style="padding:8px 0">
         <ha-entity-picker
           .hass=${this.hass}
           .value=${this._config?.entity || ''}
           .includeDomains=${['climate']}
-          .entityFilter=${(s) => s.entity_id.startsWith('climate.infinitude')}
+          .entityFilter=${filter}
           label="Zone entity"
           allow-custom-entity
           @value-changed=${this._entityChanged}
         ></ha-entity-picker>
+        <div style="font-size:11px;color:var(--secondary-text-color);margin-top:6px">
+          Showing climate entities from the Infinitude Direct integration.
+        </div>
       </div>
     `;
   }
