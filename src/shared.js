@@ -5,7 +5,7 @@ import { LitElement, html, css, nothing } from 'lit';
 
 export { html, css, nothing };
 
-export const CARD_VERSION = '1.0.82';
+export const CARD_VERSION = '1.0.83';
 export const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 export const JS_DAY_MAP = [6,0,1,2,3,4,5];
 export const ACTIVITIES = ['home','away','sleep','wake'];
@@ -474,18 +474,14 @@ export const sharedStyles = css`
   .conn-dot.unk { background: var(--secondary-text-color); opacity: 0.4; }
   @keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
   .summary-stats {
-    display: flex; align-items: center; gap: 0; margin-bottom: 14px;
-    border: 1px solid var(--divider-color); border-radius: 8px; overflow: hidden;
+    display: flex; align-items: center; gap: 20px; flex-wrap: wrap; margin-bottom: 14px;
   }
-  .summary-stat {
-    display: flex; flex-direction: column; align-items: center; gap: 2px;
-    padding: 8px 14px; flex: 1; min-width: 0;
-  }
+  .summary-stat { display: flex; align-items: baseline; gap: 6px; }
   .summary-stat-label { font-size: 10px; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.5px; }
-  .summary-stat-val { font-size: 14px; font-weight: 700; color: var(--primary-text-color); }
+  .summary-stat-val { font-size: 16px; font-weight: 500; color: var(--primary-text-color); }
   .summary-stat-val.heat { color: var(--label-badge-red, #f97316); }
   .summary-stat-val.cool { color: var(--label-badge-blue, #38bdf8); }
-  .summary-divider { width: 1px; align-self: stretch; background: var(--divider-color); }
+  .summary-divider { width: 1px; height: 18px; background: var(--divider-color); flex-shrink: 0; }
   .wh-hold {
     display: flex; align-items: center; gap: 6px; width: 100%;
     padding: 8px 12px; margin-bottom: 14px;

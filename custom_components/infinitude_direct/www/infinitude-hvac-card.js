@@ -1,30 +1,30 @@
-var tt=globalThis,et=tt.ShadowRoot&&(tt.ShadyCSS===void 0||tt.ShadyCSS.nativeShadow)&&"adoptedStyleSheets"in Document.prototype&&"replace"in CSSStyleSheet.prototype,nt=Symbol(),Et=new WeakMap,q=class{constructor(t,e,s){if(this._$cssResult$=!0,s!==nt)throw Error("CSSResult is not constructable. Use `unsafeCSS` or `css` instead.");this.cssText=t,this.t=e}get styleSheet(){let t=this.o,e=this.t;if(et&&t===void 0){let s=e!==void 0&&e.length===1;s&&(t=Et.get(e)),t===void 0&&((this.o=t=new CSSStyleSheet).replaceSync(this.cssText),s&&Et.set(e,t))}return t}toString(){return this.cssText}},St=l=>new q(typeof l=="string"?l:l+"",void 0,nt),S=(l,...t)=>{let e=l.length===1?l[0]:t.reduce((s,i,o)=>s+(r=>{if(r._$cssResult$===!0)return r.cssText;if(typeof r=="number")return r;throw Error("Value passed to 'css' function must be a 'css' function result: "+r+". Use 'unsafeCSS' to pass non-literal values, but take care to ensure page security.")})(i)+l[o+1],l[0]);return new q(e,l,nt)},kt=(l,t)=>{if(et)l.adoptedStyleSheets=t.map(e=>e instanceof CSSStyleSheet?e:e.styleSheet);else for(let e of t){let s=document.createElement("style"),i=tt.litNonce;i!==void 0&&s.setAttribute("nonce",i),s.textContent=e.cssText,l.appendChild(s)}},lt=et?l=>l:l=>l instanceof CSSStyleSheet?(t=>{let e="";for(let s of t.cssRules)e+=s.cssText;return St(e)})(l):l;var{is:Bt,defineProperty:Vt,getOwnPropertyDescriptor:Zt,getOwnPropertyNames:qt,getOwnPropertySymbols:Jt,getPrototypeOf:Yt}=Object,st=globalThis,Ct=st.trustedTypes,Xt=Ct?Ct.emptyScript:"",Kt=st.reactiveElementPolyfillSupport,J=(l,t)=>l,ct={toAttribute(l,t){switch(t){case Boolean:l=l?Xt:null;break;case Object:case Array:l=l==null?l:JSON.stringify(l)}return l},fromAttribute(l,t){let e=l;switch(t){case Boolean:e=l!==null;break;case Number:e=l===null?null:Number(l);break;case Object:case Array:try{e=JSON.parse(l)}catch{e=null}}return e}},Ht=(l,t)=>!Bt(l,t),zt={attribute:!0,type:String,converter:ct,reflect:!1,useDefault:!1,hasChanged:Ht};Symbol.metadata??=Symbol("metadata"),st.litPropertyMetadata??=new WeakMap;var O=class extends HTMLElement{static addInitializer(t){this._$Ei(),(this.l??=[]).push(t)}static get observedAttributes(){return this.finalize(),this._$Eh&&[...this._$Eh.keys()]}static createProperty(t,e=zt){if(e.state&&(e.attribute=!1),this._$Ei(),this.prototype.hasOwnProperty(t)&&((e=Object.create(e)).wrapped=!0),this.elementProperties.set(t,e),!e.noAccessor){let s=Symbol(),i=this.getPropertyDescriptor(t,s,e);i!==void 0&&Vt(this.prototype,t,i)}}static getPropertyDescriptor(t,e,s){let{get:i,set:o}=Zt(this.prototype,t)??{get(){return this[e]},set(r){this[e]=r}};return{get:i,set(r){let d=i?.call(this);o?.call(this,r),this.requestUpdate(t,d,s)},configurable:!0,enumerable:!0}}static getPropertyOptions(t){return this.elementProperties.get(t)??zt}static _$Ei(){if(this.hasOwnProperty(J("elementProperties")))return;let t=Yt(this);t.finalize(),t.l!==void 0&&(this.l=[...t.l]),this.elementProperties=new Map(t.elementProperties)}static finalize(){if(this.hasOwnProperty(J("finalized")))return;if(this.finalized=!0,this._$Ei(),this.hasOwnProperty(J("properties"))){let e=this.properties,s=[...qt(e),...Jt(e)];for(let i of s)this.createProperty(i,e[i])}let t=this[Symbol.metadata];if(t!==null){let e=litPropertyMetadata.get(t);if(e!==void 0)for(let[s,i]of e)this.elementProperties.set(s,i)}this._$Eh=new Map;for(let[e,s]of this.elementProperties){let i=this._$Eu(e,s);i!==void 0&&this._$Eh.set(i,e)}this.elementStyles=this.finalizeStyles(this.styles)}static finalizeStyles(t){let e=[];if(Array.isArray(t)){let s=new Set(t.flat(1/0).reverse());for(let i of s)e.unshift(lt(i))}else t!==void 0&&e.push(lt(t));return e}static _$Eu(t,e){let s=e.attribute;return s===!1?void 0:typeof s=="string"?s:typeof t=="string"?t.toLowerCase():void 0}constructor(){super(),this._$Ep=void 0,this.isUpdatePending=!1,this.hasUpdated=!1,this._$Em=null,this._$Ev()}_$Ev(){this._$ES=new Promise(t=>this.enableUpdating=t),this._$AL=new Map,this._$E_(),this.requestUpdate(),this.constructor.l?.forEach(t=>t(this))}addController(t){(this._$EO??=new Set).add(t),this.renderRoot!==void 0&&this.isConnected&&t.hostConnected?.()}removeController(t){this._$EO?.delete(t)}_$E_(){let t=new Map,e=this.constructor.elementProperties;for(let s of e.keys())this.hasOwnProperty(s)&&(t.set(s,this[s]),delete this[s]);t.size>0&&(this._$Ep=t)}createRenderRoot(){let t=this.shadowRoot??this.attachShadow(this.constructor.shadowRootOptions);return kt(t,this.constructor.elementStyles),t}connectedCallback(){this.renderRoot??=this.createRenderRoot(),this.enableUpdating(!0),this._$EO?.forEach(t=>t.hostConnected?.())}enableUpdating(t){}disconnectedCallback(){this._$EO?.forEach(t=>t.hostDisconnected?.())}attributeChangedCallback(t,e,s){this._$AK(t,s)}_$ET(t,e){let s=this.constructor.elementProperties.get(t),i=this.constructor._$Eu(t,s);if(i!==void 0&&s.reflect===!0){let o=(s.converter?.toAttribute!==void 0?s.converter:ct).toAttribute(e,s.type);this._$Em=t,o==null?this.removeAttribute(i):this.setAttribute(i,o),this._$Em=null}}_$AK(t,e){let s=this.constructor,i=s._$Eh.get(t);if(i!==void 0&&this._$Em!==i){let o=s.getPropertyOptions(i),r=typeof o.converter=="function"?{fromAttribute:o.converter}:o.converter?.fromAttribute!==void 0?o.converter:ct;this._$Em=i;let d=r.fromAttribute(e,o.type);this[i]=d??this._$Ej?.get(i)??d,this._$Em=null}}requestUpdate(t,e,s,i=!1,o){if(t!==void 0){let r=this.constructor;if(i===!1&&(o=this[t]),s??=r.getPropertyOptions(t),!((s.hasChanged??Ht)(o,e)||s.useDefault&&s.reflect&&o===this._$Ej?.get(t)&&!this.hasAttribute(r._$Eu(t,s))))return;this.C(t,e,s)}this.isUpdatePending===!1&&(this._$ES=this._$EP())}C(t,e,{useDefault:s,reflect:i,wrapped:o},r){s&&!(this._$Ej??=new Map).has(t)&&(this._$Ej.set(t,r??e??this[t]),o!==!0||r!==void 0)||(this._$AL.has(t)||(this.hasUpdated||s||(e=void 0),this._$AL.set(t,e)),i===!0&&this._$Em!==t&&(this._$Eq??=new Set).add(t))}async _$EP(){this.isUpdatePending=!0;try{await this._$ES}catch(e){Promise.reject(e)}let t=this.scheduleUpdate();return t!=null&&await t,!this.isUpdatePending}scheduleUpdate(){return this.performUpdate()}performUpdate(){if(!this.isUpdatePending)return;if(!this.hasUpdated){if(this.renderRoot??=this.createRenderRoot(),this._$Ep){for(let[i,o]of this._$Ep)this[i]=o;this._$Ep=void 0}let s=this.constructor.elementProperties;if(s.size>0)for(let[i,o]of s){let{wrapped:r}=o,d=this[i];r!==!0||this._$AL.has(i)||d===void 0||this.C(i,void 0,o,d)}}let t=!1,e=this._$AL;try{t=this.shouldUpdate(e),t?(this.willUpdate(e),this._$EO?.forEach(s=>s.hostUpdate?.()),this.update(e)):this._$EM()}catch(s){throw t=!1,this._$EM(),s}t&&this._$AE(e)}willUpdate(t){}_$AE(t){this._$EO?.forEach(e=>e.hostUpdated?.()),this.hasUpdated||(this.hasUpdated=!0,this.firstUpdated(t)),this.updated(t)}_$EM(){this._$AL=new Map,this.isUpdatePending=!1}get updateComplete(){return this.getUpdateComplete()}getUpdateComplete(){return this._$ES}shouldUpdate(t){return!0}update(t){this._$Eq&&=this._$Eq.forEach(e=>this._$ET(e,this[e])),this._$EM()}updated(t){}firstUpdated(t){}};O.elementStyles=[],O.shadowRootOptions={mode:"open"},O[J("elementProperties")]=new Map,O[J("finalized")]=new Map,Kt?.({ReactiveElement:O}),(st.reactiveElementVersions??=[]).push("2.1.2");var vt=globalThis,Mt=l=>l,it=vt.trustedTypes,Ot=it?it.createPolicy("lit-html",{createHTML:l=>l}):void 0,It="$lit$",T=`lit$${Math.random().toFixed(9).slice(2)}$`,Lt="?"+T,Gt=`<${Lt}>`,N=document,X=()=>N.createComment(""),K=l=>l===null||typeof l!="object"&&typeof l!="function",_t=Array.isArray,Qt=l=>_t(l)||typeof l?.[Symbol.iterator]=="function",dt=`[ 	
-\f\r]`,Y=/<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g,Tt=/-->/g,Pt=/>/g,D=RegExp(`>|${dt}(?:([^\\s"'>=/]+)(${dt}*=${dt}*(?:[^ 	
-\f\r"'\`<>=]|("|')|))|$)`,"g"),Dt=/'/g,jt=/"/g,Ut=/^(?:script|style|textarea|title)$/i,gt=l=>(t,...e)=>({_$litType$:l,strings:t,values:e}),n=gt(1),pe=gt(2),he=gt(3),I=Symbol.for("lit-noChange"),p=Symbol.for("lit-nothing"),Nt=new WeakMap,j=N.createTreeWalker(N,129);function Rt(l,t){if(!_t(l)||!l.hasOwnProperty("raw"))throw Error("invalid template strings array");return Ot!==void 0?Ot.createHTML(t):t}var te=(l,t)=>{let e=l.length-1,s=[],i,o=t===2?"<svg>":t===3?"<math>":"",r=Y;for(let d=0;d<e;d++){let c=l[d],a,h,u=-1,f=0;for(;f<c.length&&(r.lastIndex=f,h=r.exec(c),h!==null);)f=r.lastIndex,r===Y?h[1]==="!--"?r=Tt:h[1]!==void 0?r=Pt:h[2]!==void 0?(Ut.test(h[2])&&(i=RegExp("</"+h[2],"g")),r=D):h[3]!==void 0&&(r=D):r===D?h[0]===">"?(r=i??Y,u=-1):h[1]===void 0?u=-2:(u=r.lastIndex-h[2].length,a=h[1],r=h[3]===void 0?D:h[3]==='"'?jt:Dt):r===jt||r===Dt?r=D:r===Tt||r===Pt?r=Y:(r=D,i=void 0);let _=r===D&&l[d+1].startsWith("/>")?" ":"";o+=r===Y?c+Gt:u>=0?(s.push(a),c.slice(0,u)+It+c.slice(u)+T+_):c+T+(u===-2?d:_)}return[Rt(l,o+(l[e]||"<?>")+(t===2?"</svg>":t===3?"</math>":"")),s]},G=class l{constructor({strings:t,_$litType$:e},s){let i;this.parts=[];let o=0,r=0,d=t.length-1,c=this.parts,[a,h]=te(t,e);if(this.el=l.createElement(a,s),j.currentNode=this.el.content,e===2||e===3){let u=this.el.content.firstChild;u.replaceWith(...u.childNodes)}for(;(i=j.nextNode())!==null&&c.length<d;){if(i.nodeType===1){if(i.hasAttributes())for(let u of i.getAttributeNames())if(u.endsWith(It)){let f=h[r++],_=i.getAttribute(u).split(T),b=/([.?@])?(.*)/.exec(f);c.push({type:1,index:o,name:b[2],strings:_,ctor:b[1]==="."?ht:b[1]==="?"?ut:b[1]==="@"?mt:R}),i.removeAttribute(u)}else u.startsWith(T)&&(c.push({type:6,index:o}),i.removeAttribute(u));if(Ut.test(i.tagName)){let u=i.textContent.split(T),f=u.length-1;if(f>0){i.textContent=it?it.emptyScript:"";for(let _=0;_<f;_++)i.append(u[_],X()),j.nextNode(),c.push({type:2,index:++o});i.append(u[f],X())}}}else if(i.nodeType===8)if(i.data===Lt)c.push({type:2,index:o});else{let u=-1;for(;(u=i.data.indexOf(T,u+1))!==-1;)c.push({type:7,index:o}),u+=T.length-1}o++}}static createElement(t,e){let s=N.createElement("template");return s.innerHTML=t,s}};function U(l,t,e=l,s){if(t===I)return t;let i=s!==void 0?e._$Co?.[s]:e._$Cl,o=K(t)?void 0:t._$litDirective$;return i?.constructor!==o&&(i?._$AO?.(!1),o===void 0?i=void 0:(i=new o(l),i._$AT(l,e,s)),s!==void 0?(e._$Co??=[])[s]=i:e._$Cl=i),i!==void 0&&(t=U(l,i._$AS(l,t.values),i,s)),t}var pt=class{constructor(t,e){this._$AV=[],this._$AN=void 0,this._$AD=t,this._$AM=e}get parentNode(){return this._$AM.parentNode}get _$AU(){return this._$AM._$AU}u(t){let{el:{content:e},parts:s}=this._$AD,i=(t?.creationScope??N).importNode(e,!0);j.currentNode=i;let o=j.nextNode(),r=0,d=0,c=s[0];for(;c!==void 0;){if(r===c.index){let a;c.type===2?a=new Q(o,o.nextSibling,this,t):c.type===1?a=new c.ctor(o,c.name,c.strings,this,t):c.type===6&&(a=new ft(o,this,t)),this._$AV.push(a),c=s[++d]}r!==c?.index&&(o=j.nextNode(),r++)}return j.currentNode=N,i}p(t){let e=0;for(let s of this._$AV)s!==void 0&&(s.strings!==void 0?(s._$AI(t,s,e),e+=s.strings.length-2):s._$AI(t[e])),e++}},Q=class l{get _$AU(){return this._$AM?._$AU??this._$Cv}constructor(t,e,s,i){this.type=2,this._$AH=p,this._$AN=void 0,this._$AA=t,this._$AB=e,this._$AM=s,this.options=i,this._$Cv=i?.isConnected??!0}get parentNode(){let t=this._$AA.parentNode,e=this._$AM;return e!==void 0&&t?.nodeType===11&&(t=e.parentNode),t}get startNode(){return this._$AA}get endNode(){return this._$AB}_$AI(t,e=this){t=U(this,t,e),K(t)?t===p||t==null||t===""?(this._$AH!==p&&this._$AR(),this._$AH=p):t!==this._$AH&&t!==I&&this._(t):t._$litType$!==void 0?this.$(t):t.nodeType!==void 0?this.T(t):Qt(t)?this.k(t):this._(t)}O(t){return this._$AA.parentNode.insertBefore(t,this._$AB)}T(t){this._$AH!==t&&(this._$AR(),this._$AH=this.O(t))}_(t){this._$AH!==p&&K(this._$AH)?this._$AA.nextSibling.data=t:this.T(N.createTextNode(t)),this._$AH=t}$(t){let{values:e,_$litType$:s}=t,i=typeof s=="number"?this._$AC(t):(s.el===void 0&&(s.el=G.createElement(Rt(s.h,s.h[0]),this.options)),s);if(this._$AH?._$AD===i)this._$AH.p(e);else{let o=new pt(i,this),r=o.u(this.options);o.p(e),this.T(r),this._$AH=o}}_$AC(t){let e=Nt.get(t.strings);return e===void 0&&Nt.set(t.strings,e=new G(t)),e}k(t){_t(this._$AH)||(this._$AH=[],this._$AR());let e=this._$AH,s,i=0;for(let o of t)i===e.length?e.push(s=new l(this.O(X()),this.O(X()),this,this.options)):s=e[i],s._$AI(o),i++;i<e.length&&(this._$AR(s&&s._$AB.nextSibling,i),e.length=i)}_$AR(t=this._$AA.nextSibling,e){for(this._$AP?.(!1,!0,e);t!==this._$AB;){let s=Mt(t).nextSibling;Mt(t).remove(),t=s}}setConnected(t){this._$AM===void 0&&(this._$Cv=t,this._$AP?.(t))}},R=class{get tagName(){return this.element.tagName}get _$AU(){return this._$AM._$AU}constructor(t,e,s,i,o){this.type=1,this._$AH=p,this._$AN=void 0,this.element=t,this.name=e,this._$AM=i,this.options=o,s.length>2||s[0]!==""||s[1]!==""?(this._$AH=Array(s.length-1).fill(new String),this.strings=s):this._$AH=p}_$AI(t,e=this,s,i){let o=this.strings,r=!1;if(o===void 0)t=U(this,t,e,0),r=!K(t)||t!==this._$AH&&t!==I,r&&(this._$AH=t);else{let d=t,c,a;for(t=o[0],c=0;c<o.length-1;c++)a=U(this,d[s+c],e,c),a===I&&(a=this._$AH[c]),r||=!K(a)||a!==this._$AH[c],a===p?t=p:t!==p&&(t+=(a??"")+o[c+1]),this._$AH[c]=a}r&&!i&&this.j(t)}j(t){t===p?this.element.removeAttribute(this.name):this.element.setAttribute(this.name,t??"")}},ht=class extends R{constructor(){super(...arguments),this.type=3}j(t){this.element[this.name]=t===p?void 0:t}},ut=class extends R{constructor(){super(...arguments),this.type=4}j(t){this.element.toggleAttribute(this.name,!!t&&t!==p)}},mt=class extends R{constructor(t,e,s,i,o){super(t,e,s,i,o),this.type=5}_$AI(t,e=this){if((t=U(this,t,e,0)??p)===I)return;let s=this._$AH,i=t===p&&s!==p||t.capture!==s.capture||t.once!==s.once||t.passive!==s.passive,o=t!==p&&(s===p||i);i&&this.element.removeEventListener(this.name,this,s),o&&this.element.addEventListener(this.name,this,t),this._$AH=t}handleEvent(t){typeof this._$AH=="function"?this._$AH.call(this.options?.host??this.element,t):this._$AH.handleEvent(t)}},ft=class{constructor(t,e,s){this.element=t,this.type=6,this._$AN=void 0,this._$AM=e,this.options=s}get _$AU(){return this._$AM._$AU}_$AI(t){U(this,t)}};var ee=vt.litHtmlPolyfillSupport;ee?.(G,Q),(vt.litHtmlVersions??=[]).push("3.3.2");var Ft=(l,t,e)=>{let s=e?.renderBefore??t,i=s._$litPart$;if(i===void 0){let o=e?.renderBefore??null;s._$litPart$=i=new Q(t.insertBefore(X(),o),o,void 0,e??{})}return i._$AI(l),i};var bt=globalThis,P=class extends O{constructor(){super(...arguments),this.renderOptions={host:this},this._$Do=void 0}createRenderRoot(){let t=super.createRenderRoot();return this.renderOptions.renderBefore??=t.firstChild,t}update(t){let e=this.render();this.hasUpdated||(this.renderOptions.isConnected=this.isConnected),super.update(t),this._$Do=Ft(e,this.renderRoot,this.renderOptions)}connectedCallback(){super.connectedCallback(),this._$Do?.setConnected(!0)}disconnectedCallback(){super.disconnectedCallback(),this._$Do?.setConnected(!1)}render(){return I}};P._$litElement$=!0,P.finalized=!0,bt.litElementHydrateSupport?.({LitElement:P});var se=bt.litElementPolyfillSupport;se?.({LitElement:P});(bt.litElementVersions??=[]).push("4.2.2");var ot="1.0.82",C=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"],Z=[6,0,1,2,3,4,5],z=["home","away","sleep","wake"],at=["home","away","sleep","wake","manual"],rt=["off","low","med","high"],L=[{v:"60",l:"1 hour"},{v:"120",l:"2 hours"},{v:"240",l:"4 hours"},{v:"forever",l:"Indefinite"},{v:"custom",l:"Custom time\u2026"}],H=["\u2460","\u2461","\u2462","\u2463","\u2464","\u2465","\u2466","\u2467"],ie=(()=>{let l=[];for(let t=0;t<24;t++)for(let e=0;e<60;e+=15){let s=`${String(t).padStart(2,"0")}:${String(e).padStart(2,"0")}`,i=t===0?`12:${String(e).padStart(2,"0")} AM`:t<12?`${t}:${String(e).padStart(2,"0")} AM`:t===12?`12:${String(e).padStart(2,"0")} PM`:`${t-12}:${String(e).padStart(2,"0")} PM`;l.push({v:s,l:i})}return l})(),F=50,W=90,B=60,V=99,x=68,$=76,oe=800,ae=400,re=2e3,Wt=500,w=class extends P{static get baseProperties(){return{hass:{attribute:!1},_config:{state:!0},_registryLoaded:{state:!0}}}constructor(){super(),this._config={},this._registryEntities=null,this._registryLoaded=!1,this._cachedEntities=null,this._cachedEntitiesHass=null}setConfig(t){this._config=t}shouldUpdate(t){if(!t.has("hass")||!this._registryLoaded)return!0;let e=t.get("hass");return e?(this._registryEntities||[]).some(i=>this.hass.states[i.entity_id]!==e.states[i.entity_id]):!0}updated(t){t.has("hass")&&this.hass&&!this._registryLoaded&&this._loadRegistry(),t.has("hass")&&(this._cachedEntities=null)}async _loadRegistry(){try{let t=await this.hass.connection.sendMessagePromise({type:"config/entity_registry/list"});this._registryEntities=Array.isArray(t)?t.filter(e=>e.platform==="infinitude_direct"):[]}catch(t){console.warn("Failed to load entity registry",t),this._registryEntities=[]}this._registryLoaded=!0,this._cachedEntities=null}_findEntities(){if(this._cachedEntities&&this._cachedEntitiesHass===this.hass)return this._cachedEntities;if(!this.hass)return{climates:[],sensors:{},selects:{},system:{}};let t=this._registryEntities||[],e=this.hass.states,s=[],i={damper:{},fan:{}},o={},r={};if(this._config.climate_entities)for(let c of this._config.climate_entities)e[c]&&s.push(c);for(let c of t){let a=c.entity_id;if(!e[a])continue;let h=a.split(".")[0],u=c.unique_id||"";h==="climate"?this._config.climate_entities||s.push(a):h==="select"?o.wholeHouse=a:h==="sensor"&&(u.includes("damper")?i.damper[a]=e[a]:u.includes("fan")?i.fan[a]=e[a]:u.includes("humidifier")?r.humidifier=a:u.includes("oat")?r.oat=a:u.includes("op_status")?r.opStatus=a:u.includes("system_info")&&(r.info=a))}s.sort();let d={climates:s,sensors:i,selects:o,system:r};return this._cachedEntities=d,this._cachedEntitiesHass=this.hass,d}_st(t){return t?this.hass?.states[t]??null:null}_at(t,e){return this._st(t)?.attributes?.[e]}_getScheduleData(){let{system:t}=this._findEntities();if(!t.info)return{};try{return JSON.parse(this._at(t.info,"schedule")||"{}")}catch(e){return console.warn("Failed to parse schedule data",e),{}}}_getProfilesData(){let{system:t}=this._findEntities();if(!t.info)return[];try{return JSON.parse(this._at(t.info,"profiles")||"[]")}catch(e){return console.warn("Failed to parse profiles data",e),[]}}async _svc(t,e,s){try{await this.hass.callService(t,e,s)}catch(i){console.error(`${t}.${e} failed`,i)}}_setHvacMode(t,e){this._svc("climate","set_hvac_mode",{entity_id:t,hvac_mode:e})}_setPreset(t,e){this._svc("climate","set_preset_mode",{entity_id:t,preset_mode:e})}_resolveUntil(t,e){if(t==="forever")return"forever";if(t==="custom")return e||null;let s=new Date;s.setMinutes(s.getMinutes()+parseInt(t));let i=Math.round(s.getMinutes()/15)*15;return s.setMinutes(i,0,0),i===60&&(s.setMinutes(0),s.setHours(s.getHours()+1)),`${String(s.getHours()).padStart(2,"0")}:${String(s.getMinutes()).padStart(2,"0")}`}_otmrRelative(t){if(!t)return"";let[e,s]=t.split(":").map(Number),i=new Date;return i.setHours(e,s,0,0),"until "+i.toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})}_zoneId(t){let e=(this._registryEntities||[]).find(s=>s.entity_id===t);return e?(e.unique_id||"").replace(/^infinitude_/,""):""}_renderLoading(){return n`<ha-card>
+var st=globalThis,ot=st.ShadowRoot&&(st.ShadyCSS===void 0||st.ShadyCSS.nativeShadow)&&"adoptedStyleSheets"in Document.prototype&&"replace"in CSSStyleSheet.prototype,dt=Symbol(),Ct=new WeakMap,Y=class{constructor(t,e,s){if(this._$cssResult$=!0,s!==dt)throw Error("CSSResult is not constructable. Use `unsafeCSS` or `css` instead.");this.cssText=t,this.t=e}get styleSheet(){let t=this.o,e=this.t;if(ot&&t===void 0){let s=e!==void 0&&e.length===1;s&&(t=Ct.get(e)),t===void 0&&((this.o=t=new CSSStyleSheet).replaceSync(this.cssText),s&&Ct.set(e,t))}return t}toString(){return this.cssText}},zt=l=>new Y(typeof l=="string"?l:l+"",void 0,dt),C=(l,...t)=>{let e=l.length===1?l[0]:t.reduce((s,o,i)=>s+(r=>{if(r._$cssResult$===!0)return r.cssText;if(typeof r=="number")return r;throw Error("Value passed to 'css' function must be a 'css' function result: "+r+". Use 'unsafeCSS' to pass non-literal values, but take care to ensure page security.")})(o)+l[i+1],l[0]);return new Y(e,l,dt)},Ht=(l,t)=>{if(ot)l.adoptedStyleSheets=t.map(e=>e instanceof CSSStyleSheet?e:e.styleSheet);else for(let e of t){let s=document.createElement("style"),o=st.litNonce;o!==void 0&&s.setAttribute("nonce",o),s.textContent=e.cssText,l.appendChild(s)}},pt=ot?l=>l:l=>l instanceof CSSStyleSheet?(t=>{let e="";for(let s of t.cssRules)e+=s.cssText;return zt(e)})(l):l;var{is:Zt,defineProperty:Jt,getOwnPropertyDescriptor:Yt,getOwnPropertyNames:Xt,getOwnPropertySymbols:Kt,getPrototypeOf:Gt}=Object,it=globalThis,Mt=it.trustedTypes,Qt=Mt?Mt.emptyScript:"",te=it.reactiveElementPolyfillSupport,X=(l,t)=>l,ht={toAttribute(l,t){switch(t){case Boolean:l=l?Qt:null;break;case Object:case Array:l=l==null?l:JSON.stringify(l)}return l},fromAttribute(l,t){let e=l;switch(t){case Boolean:e=l!==null;break;case Number:e=l===null?null:Number(l);break;case Object:case Array:try{e=JSON.parse(l)}catch{e=null}}return e}},Ot=(l,t)=>!Zt(l,t),Tt={attribute:!0,type:String,converter:ht,reflect:!1,useDefault:!1,hasChanged:Ot};Symbol.metadata??=Symbol("metadata"),it.litPropertyMetadata??=new WeakMap;var D=class extends HTMLElement{static addInitializer(t){this._$Ei(),(this.l??=[]).push(t)}static get observedAttributes(){return this.finalize(),this._$Eh&&[...this._$Eh.keys()]}static createProperty(t,e=Tt){if(e.state&&(e.attribute=!1),this._$Ei(),this.prototype.hasOwnProperty(t)&&((e=Object.create(e)).wrapped=!0),this.elementProperties.set(t,e),!e.noAccessor){let s=Symbol(),o=this.getPropertyDescriptor(t,s,e);o!==void 0&&Jt(this.prototype,t,o)}}static getPropertyDescriptor(t,e,s){let{get:o,set:i}=Yt(this.prototype,t)??{get(){return this[e]},set(r){this[e]=r}};return{get:o,set(r){let d=o?.call(this);i?.call(this,r),this.requestUpdate(t,d,s)},configurable:!0,enumerable:!0}}static getPropertyOptions(t){return this.elementProperties.get(t)??Tt}static _$Ei(){if(this.hasOwnProperty(X("elementProperties")))return;let t=Gt(this);t.finalize(),t.l!==void 0&&(this.l=[...t.l]),this.elementProperties=new Map(t.elementProperties)}static finalize(){if(this.hasOwnProperty(X("finalized")))return;if(this.finalized=!0,this._$Ei(),this.hasOwnProperty(X("properties"))){let e=this.properties,s=[...Xt(e),...Kt(e)];for(let o of s)this.createProperty(o,e[o])}let t=this[Symbol.metadata];if(t!==null){let e=litPropertyMetadata.get(t);if(e!==void 0)for(let[s,o]of e)this.elementProperties.set(s,o)}this._$Eh=new Map;for(let[e,s]of this.elementProperties){let o=this._$Eu(e,s);o!==void 0&&this._$Eh.set(o,e)}this.elementStyles=this.finalizeStyles(this.styles)}static finalizeStyles(t){let e=[];if(Array.isArray(t)){let s=new Set(t.flat(1/0).reverse());for(let o of s)e.unshift(pt(o))}else t!==void 0&&e.push(pt(t));return e}static _$Eu(t,e){let s=e.attribute;return s===!1?void 0:typeof s=="string"?s:typeof t=="string"?t.toLowerCase():void 0}constructor(){super(),this._$Ep=void 0,this.isUpdatePending=!1,this.hasUpdated=!1,this._$Em=null,this._$Ev()}_$Ev(){this._$ES=new Promise(t=>this.enableUpdating=t),this._$AL=new Map,this._$E_(),this.requestUpdate(),this.constructor.l?.forEach(t=>t(this))}addController(t){(this._$EO??=new Set).add(t),this.renderRoot!==void 0&&this.isConnected&&t.hostConnected?.()}removeController(t){this._$EO?.delete(t)}_$E_(){let t=new Map,e=this.constructor.elementProperties;for(let s of e.keys())this.hasOwnProperty(s)&&(t.set(s,this[s]),delete this[s]);t.size>0&&(this._$Ep=t)}createRenderRoot(){let t=this.shadowRoot??this.attachShadow(this.constructor.shadowRootOptions);return Ht(t,this.constructor.elementStyles),t}connectedCallback(){this.renderRoot??=this.createRenderRoot(),this.enableUpdating(!0),this._$EO?.forEach(t=>t.hostConnected?.())}enableUpdating(t){}disconnectedCallback(){this._$EO?.forEach(t=>t.hostDisconnected?.())}attributeChangedCallback(t,e,s){this._$AK(t,s)}_$ET(t,e){let s=this.constructor.elementProperties.get(t),o=this.constructor._$Eu(t,s);if(o!==void 0&&s.reflect===!0){let i=(s.converter?.toAttribute!==void 0?s.converter:ht).toAttribute(e,s.type);this._$Em=t,i==null?this.removeAttribute(o):this.setAttribute(o,i),this._$Em=null}}_$AK(t,e){let s=this.constructor,o=s._$Eh.get(t);if(o!==void 0&&this._$Em!==o){let i=s.getPropertyOptions(o),r=typeof i.converter=="function"?{fromAttribute:i.converter}:i.converter?.fromAttribute!==void 0?i.converter:ht;this._$Em=o;let d=r.fromAttribute(e,i.type);this[o]=d??this._$Ej?.get(o)??d,this._$Em=null}}requestUpdate(t,e,s,o=!1,i){if(t!==void 0){let r=this.constructor;if(o===!1&&(i=this[t]),s??=r.getPropertyOptions(t),!((s.hasChanged??Ot)(i,e)||s.useDefault&&s.reflect&&i===this._$Ej?.get(t)&&!this.hasAttribute(r._$Eu(t,s))))return;this.C(t,e,s)}this.isUpdatePending===!1&&(this._$ES=this._$EP())}C(t,e,{useDefault:s,reflect:o,wrapped:i},r){s&&!(this._$Ej??=new Map).has(t)&&(this._$Ej.set(t,r??e??this[t]),i!==!0||r!==void 0)||(this._$AL.has(t)||(this.hasUpdated||s||(e=void 0),this._$AL.set(t,e)),o===!0&&this._$Em!==t&&(this._$Eq??=new Set).add(t))}async _$EP(){this.isUpdatePending=!0;try{await this._$ES}catch(e){Promise.reject(e)}let t=this.scheduleUpdate();return t!=null&&await t,!this.isUpdatePending}scheduleUpdate(){return this.performUpdate()}performUpdate(){if(!this.isUpdatePending)return;if(!this.hasUpdated){if(this.renderRoot??=this.createRenderRoot(),this._$Ep){for(let[o,i]of this._$Ep)this[o]=i;this._$Ep=void 0}let s=this.constructor.elementProperties;if(s.size>0)for(let[o,i]of s){let{wrapped:r}=i,d=this[o];r!==!0||this._$AL.has(o)||d===void 0||this.C(o,void 0,i,d)}}let t=!1,e=this._$AL;try{t=this.shouldUpdate(e),t?(this.willUpdate(e),this._$EO?.forEach(s=>s.hostUpdate?.()),this.update(e)):this._$EM()}catch(s){throw t=!1,this._$EM(),s}t&&this._$AE(e)}willUpdate(t){}_$AE(t){this._$EO?.forEach(e=>e.hostUpdated?.()),this.hasUpdated||(this.hasUpdated=!0,this.firstUpdated(t)),this.updated(t)}_$EM(){this._$AL=new Map,this.isUpdatePending=!1}get updateComplete(){return this.getUpdateComplete()}getUpdateComplete(){return this._$ES}shouldUpdate(t){return!0}update(t){this._$Eq&&=this._$Eq.forEach(e=>this._$ET(e,this[e])),this._$EM()}updated(t){}firstUpdated(t){}};D.elementStyles=[],D.shadowRootOptions={mode:"open"},D[X("elementProperties")]=new Map,D[X("finalized")]=new Map,te?.({ReactiveElement:D}),(it.reactiveElementVersions??=[]).push("2.1.2");var bt=globalThis,Dt=l=>l,at=bt.trustedTypes,Pt=at?at.createPolicy("lit-html",{createHTML:l=>l}):void 0,Rt="$lit$",P=`lit$${Math.random().toFixed(9).slice(2)}$`,Ft="?"+P,ee=`<${Ft}>`,U=document,G=()=>U.createComment(""),Q=l=>l===null||typeof l!="object"&&typeof l!="function",yt=Array.isArray,se=l=>yt(l)||typeof l?.[Symbol.iterator]=="function",ut=`[ 	
+\f\r]`,K=/<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g,jt=/-->/g,Nt=/>/g,N=RegExp(`>|${ut}(?:([^\\s"'>=/]+)(${ut}*=${ut}*(?:[^ 	
+\f\r"'\`<>=]|("|')|))|$)`,"g"),It=/'/g,Ut=/"/g,Wt=/^(?:script|style|textarea|title)$/i,xt=l=>(t,...e)=>({_$litType$:l,strings:t,values:e}),n=xt(1),fe=xt(2),ve=xt(3),L=Symbol.for("lit-noChange"),p=Symbol.for("lit-nothing"),Lt=new WeakMap,I=U.createTreeWalker(U,129);function Bt(l,t){if(!yt(l)||!l.hasOwnProperty("raw"))throw Error("invalid template strings array");return Pt!==void 0?Pt.createHTML(t):t}var oe=(l,t)=>{let e=l.length-1,s=[],o,i=t===2?"<svg>":t===3?"<math>":"",r=K;for(let d=0;d<e;d++){let c=l[d],a,h,u=-1,m=0;for(;m<c.length&&(r.lastIndex=m,h=r.exec(c),h!==null);)m=r.lastIndex,r===K?h[1]==="!--"?r=jt:h[1]!==void 0?r=Nt:h[2]!==void 0?(Wt.test(h[2])&&(o=RegExp("</"+h[2],"g")),r=N):h[3]!==void 0&&(r=N):r===N?h[0]===">"?(r=o??K,u=-1):h[1]===void 0?u=-2:(u=r.lastIndex-h[2].length,a=h[1],r=h[3]===void 0?N:h[3]==='"'?Ut:It):r===Ut||r===It?r=N:r===jt||r===Nt?r=K:(r=N,o=void 0);let f=r===N&&l[d+1].startsWith("/>")?" ":"";i+=r===K?c+ee:u>=0?(s.push(a),c.slice(0,u)+Rt+c.slice(u)+P+f):c+P+(u===-2?d:f)}return[Bt(l,i+(l[e]||"<?>")+(t===2?"</svg>":t===3?"</math>":"")),s]},tt=class l{constructor({strings:t,_$litType$:e},s){let o;this.parts=[];let i=0,r=0,d=t.length-1,c=this.parts,[a,h]=oe(t,e);if(this.el=l.createElement(a,s),I.currentNode=this.el.content,e===2||e===3){let u=this.el.content.firstChild;u.replaceWith(...u.childNodes)}for(;(o=I.nextNode())!==null&&c.length<d;){if(o.nodeType===1){if(o.hasAttributes())for(let u of o.getAttributeNames())if(u.endsWith(Rt)){let m=h[r++],f=o.getAttribute(u).split(P),g=/([.?@])?(.*)/.exec(m);c.push({type:1,index:i,name:g[2],strings:f,ctor:g[1]==="."?ft:g[1]==="?"?vt:g[1]==="@"?gt:W}),o.removeAttribute(u)}else u.startsWith(P)&&(c.push({type:6,index:i}),o.removeAttribute(u));if(Wt.test(o.tagName)){let u=o.textContent.split(P),m=u.length-1;if(m>0){o.textContent=at?at.emptyScript:"";for(let f=0;f<m;f++)o.append(u[f],G()),I.nextNode(),c.push({type:2,index:++i});o.append(u[m],G())}}}else if(o.nodeType===8)if(o.data===Ft)c.push({type:2,index:i});else{let u=-1;for(;(u=o.data.indexOf(P,u+1))!==-1;)c.push({type:7,index:i}),u+=P.length-1}i++}}static createElement(t,e){let s=U.createElement("template");return s.innerHTML=t,s}};function F(l,t,e=l,s){if(t===L)return t;let o=s!==void 0?e._$Co?.[s]:e._$Cl,i=Q(t)?void 0:t._$litDirective$;return o?.constructor!==i&&(o?._$AO?.(!1),i===void 0?o=void 0:(o=new i(l),o._$AT(l,e,s)),s!==void 0?(e._$Co??=[])[s]=o:e._$Cl=o),o!==void 0&&(t=F(l,o._$AS(l,t.values),o,s)),t}var mt=class{constructor(t,e){this._$AV=[],this._$AN=void 0,this._$AD=t,this._$AM=e}get parentNode(){return this._$AM.parentNode}get _$AU(){return this._$AM._$AU}u(t){let{el:{content:e},parts:s}=this._$AD,o=(t?.creationScope??U).importNode(e,!0);I.currentNode=o;let i=I.nextNode(),r=0,d=0,c=s[0];for(;c!==void 0;){if(r===c.index){let a;c.type===2?a=new et(i,i.nextSibling,this,t):c.type===1?a=new c.ctor(i,c.name,c.strings,this,t):c.type===6&&(a=new _t(i,this,t)),this._$AV.push(a),c=s[++d]}r!==c?.index&&(i=I.nextNode(),r++)}return I.currentNode=U,o}p(t){let e=0;for(let s of this._$AV)s!==void 0&&(s.strings!==void 0?(s._$AI(t,s,e),e+=s.strings.length-2):s._$AI(t[e])),e++}},et=class l{get _$AU(){return this._$AM?._$AU??this._$Cv}constructor(t,e,s,o){this.type=2,this._$AH=p,this._$AN=void 0,this._$AA=t,this._$AB=e,this._$AM=s,this.options=o,this._$Cv=o?.isConnected??!0}get parentNode(){let t=this._$AA.parentNode,e=this._$AM;return e!==void 0&&t?.nodeType===11&&(t=e.parentNode),t}get startNode(){return this._$AA}get endNode(){return this._$AB}_$AI(t,e=this){t=F(this,t,e),Q(t)?t===p||t==null||t===""?(this._$AH!==p&&this._$AR(),this._$AH=p):t!==this._$AH&&t!==L&&this._(t):t._$litType$!==void 0?this.$(t):t.nodeType!==void 0?this.T(t):se(t)?this.k(t):this._(t)}O(t){return this._$AA.parentNode.insertBefore(t,this._$AB)}T(t){this._$AH!==t&&(this._$AR(),this._$AH=this.O(t))}_(t){this._$AH!==p&&Q(this._$AH)?this._$AA.nextSibling.data=t:this.T(U.createTextNode(t)),this._$AH=t}$(t){let{values:e,_$litType$:s}=t,o=typeof s=="number"?this._$AC(t):(s.el===void 0&&(s.el=tt.createElement(Bt(s.h,s.h[0]),this.options)),s);if(this._$AH?._$AD===o)this._$AH.p(e);else{let i=new mt(o,this),r=i.u(this.options);i.p(e),this.T(r),this._$AH=i}}_$AC(t){let e=Lt.get(t.strings);return e===void 0&&Lt.set(t.strings,e=new tt(t)),e}k(t){yt(this._$AH)||(this._$AH=[],this._$AR());let e=this._$AH,s,o=0;for(let i of t)o===e.length?e.push(s=new l(this.O(G()),this.O(G()),this,this.options)):s=e[o],s._$AI(i),o++;o<e.length&&(this._$AR(s&&s._$AB.nextSibling,o),e.length=o)}_$AR(t=this._$AA.nextSibling,e){for(this._$AP?.(!1,!0,e);t!==this._$AB;){let s=Dt(t).nextSibling;Dt(t).remove(),t=s}}setConnected(t){this._$AM===void 0&&(this._$Cv=t,this._$AP?.(t))}},W=class{get tagName(){return this.element.tagName}get _$AU(){return this._$AM._$AU}constructor(t,e,s,o,i){this.type=1,this._$AH=p,this._$AN=void 0,this.element=t,this.name=e,this._$AM=o,this.options=i,s.length>2||s[0]!==""||s[1]!==""?(this._$AH=Array(s.length-1).fill(new String),this.strings=s):this._$AH=p}_$AI(t,e=this,s,o){let i=this.strings,r=!1;if(i===void 0)t=F(this,t,e,0),r=!Q(t)||t!==this._$AH&&t!==L,r&&(this._$AH=t);else{let d=t,c,a;for(t=i[0],c=0;c<i.length-1;c++)a=F(this,d[s+c],e,c),a===L&&(a=this._$AH[c]),r||=!Q(a)||a!==this._$AH[c],a===p?t=p:t!==p&&(t+=(a??"")+i[c+1]),this._$AH[c]=a}r&&!o&&this.j(t)}j(t){t===p?this.element.removeAttribute(this.name):this.element.setAttribute(this.name,t??"")}},ft=class extends W{constructor(){super(...arguments),this.type=3}j(t){this.element[this.name]=t===p?void 0:t}},vt=class extends W{constructor(){super(...arguments),this.type=4}j(t){this.element.toggleAttribute(this.name,!!t&&t!==p)}},gt=class extends W{constructor(t,e,s,o,i){super(t,e,s,o,i),this.type=5}_$AI(t,e=this){if((t=F(this,t,e,0)??p)===L)return;let s=this._$AH,o=t===p&&s!==p||t.capture!==s.capture||t.once!==s.once||t.passive!==s.passive,i=t!==p&&(s===p||o);o&&this.element.removeEventListener(this.name,this,s),i&&this.element.addEventListener(this.name,this,t),this._$AH=t}handleEvent(t){typeof this._$AH=="function"?this._$AH.call(this.options?.host??this.element,t):this._$AH.handleEvent(t)}},_t=class{constructor(t,e,s){this.element=t,this.type=6,this._$AN=void 0,this._$AM=e,this.options=s}get _$AU(){return this._$AM._$AU}_$AI(t){F(this,t)}};var ie=bt.litHtmlPolyfillSupport;ie?.(tt,et),(bt.litHtmlVersions??=[]).push("3.3.2");var Vt=(l,t,e)=>{let s=e?.renderBefore??t,o=s._$litPart$;if(o===void 0){let i=e?.renderBefore??null;s._$litPart$=o=new et(t.insertBefore(G(),i),i,void 0,e??{})}return o._$AI(l),o};var $t=globalThis,j=class extends D{constructor(){super(...arguments),this.renderOptions={host:this},this._$Do=void 0}createRenderRoot(){let t=super.createRenderRoot();return this.renderOptions.renderBefore??=t.firstChild,t}update(t){let e=this.render();this.hasUpdated||(this.renderOptions.isConnected=this.isConnected),super.update(t),this._$Do=Vt(e,this.renderRoot,this.renderOptions)}connectedCallback(){super.connectedCallback(),this._$Do?.setConnected(!0)}disconnectedCallback(){super.disconnectedCallback(),this._$Do?.setConnected(!1)}render(){return L}};j._$litElement$=!0,j.finalized=!0,$t.litElementHydrateSupport?.({LitElement:j});var ae=$t.litElementPolyfillSupport;ae?.({LitElement:j});($t.litElementVersions??=[]).push("4.2.2");var rt="1.0.83",H=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"],J=[6,0,1,2,3,4,5],M=["home","away","sleep","wake"],nt=["home","away","sleep","wake","manual"],lt=["off","low","med","high"],R=[{v:"60",l:"1 hour"},{v:"120",l:"2 hours"},{v:"240",l:"4 hours"},{v:"forever",l:"Indefinite"},{v:"custom",l:"Custom time\u2026"}],T=["\u2460","\u2461","\u2462","\u2463","\u2464","\u2465","\u2466","\u2467"],re=(()=>{let l=[];for(let t=0;t<24;t++)for(let e=0;e<60;e+=15){let s=`${String(t).padStart(2,"0")}:${String(e).padStart(2,"0")}`,o=t===0?`12:${String(e).padStart(2,"0")} AM`:t<12?`${t}:${String(e).padStart(2,"0")} AM`:t===12?`12:${String(e).padStart(2,"0")} PM`:`${t-12}:${String(e).padStart(2,"0")} PM`;l.push({v:s,l:o})}return l})(),B=50,V=90,q=60,Z=99,$=68,w=76,ne=800,le=400,ce=2e3,qt=500,A=class extends j{static get baseProperties(){return{hass:{attribute:!1},_config:{state:!0},_registryLoaded:{state:!0}}}constructor(){super(),this._config={},this._registryEntities=null,this._registryLoaded=!1,this._cachedEntities=null,this._cachedEntitiesHass=null}setConfig(t){this._config=t}shouldUpdate(t){if(!t.has("hass")||!this._registryLoaded)return!0;let e=t.get("hass");return e?(this._registryEntities||[]).some(o=>this.hass.states[o.entity_id]!==e.states[o.entity_id]):!0}updated(t){t.has("hass")&&this.hass&&!this._registryLoaded&&this._loadRegistry(),t.has("hass")&&(this._cachedEntities=null)}async _loadRegistry(){try{let t=await this.hass.connection.sendMessagePromise({type:"config/entity_registry/list"});this._registryEntities=Array.isArray(t)?t.filter(e=>e.platform==="infinitude_direct"):[]}catch(t){console.warn("Failed to load entity registry",t),this._registryEntities=[]}this._registryLoaded=!0,this._cachedEntities=null}_findEntities(){if(this._cachedEntities&&this._cachedEntitiesHass===this.hass)return this._cachedEntities;if(!this.hass)return{climates:[],sensors:{},selects:{},system:{}};let t=this._registryEntities||[],e=this.hass.states,s=[],o={damper:{},fan:{}},i={},r={};if(this._config.climate_entities)for(let c of this._config.climate_entities)e[c]&&s.push(c);for(let c of t){let a=c.entity_id;if(!e[a])continue;let h=a.split(".")[0],u=c.unique_id||"";h==="climate"?this._config.climate_entities||s.push(a):h==="select"?i.wholeHouse=a:h==="sensor"&&(u.includes("damper")?o.damper[a]=e[a]:u.includes("fan")?o.fan[a]=e[a]:u.includes("humidifier")?r.humidifier=a:u.includes("oat")?r.oat=a:u.includes("op_status")?r.opStatus=a:u.includes("system_info")&&(r.info=a))}s.sort();let d={climates:s,sensors:o,selects:i,system:r};return this._cachedEntities=d,this._cachedEntitiesHass=this.hass,d}_st(t){return t?this.hass?.states[t]??null:null}_at(t,e){return this._st(t)?.attributes?.[e]}_getScheduleData(){let{system:t}=this._findEntities();if(!t.info)return{};try{return JSON.parse(this._at(t.info,"schedule")||"{}")}catch(e){return console.warn("Failed to parse schedule data",e),{}}}_getProfilesData(){let{system:t}=this._findEntities();if(!t.info)return[];try{return JSON.parse(this._at(t.info,"profiles")||"[]")}catch(e){return console.warn("Failed to parse profiles data",e),[]}}async _svc(t,e,s){try{await this.hass.callService(t,e,s)}catch(o){console.error(`${t}.${e} failed`,o)}}_setHvacMode(t,e){this._svc("climate","set_hvac_mode",{entity_id:t,hvac_mode:e})}_setPreset(t,e){this._svc("climate","set_preset_mode",{entity_id:t,preset_mode:e})}_resolveUntil(t,e){if(t==="forever")return"forever";if(t==="custom")return e||null;let s=new Date;s.setMinutes(s.getMinutes()+parseInt(t));let o=Math.round(s.getMinutes()/15)*15;return s.setMinutes(o,0,0),o===60&&(s.setMinutes(0),s.setHours(s.getHours()+1)),`${String(s.getHours()).padStart(2,"0")}:${String(s.getMinutes()).padStart(2,"0")}`}_otmrRelative(t){if(!t)return"";let[e,s]=t.split(":").map(Number),o=new Date;return o.setHours(e,s,0,0),"until "+o.toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})}_zoneId(t){let e=(this._registryEntities||[]).find(s=>s.entity_id===t);return e?(e.unique_id||"").replace(/^infinitude_/,""):""}_renderLoading(){return n`<ha-card>
       <div style="padding:24px;text-align:center;color:var(--secondary-text-color)">Loading…</div>
-    </ha-card>`}_adjustTemp(t,e,s){let i=this._st(t);if(!i)return;let o=i.attributes||{};this._tempAdj||(this._tempAdj={});let r=this._tempAdj[t]||(this._tempAdj[t]={}),d=r.heat??o.target_temp_low??o.temperature??x,c=r.cool??o.target_temp_high??(i.state==="cool"?o.temperature:null)??$;s==="heat"?r.heat=Math.max(F,Math.min(W,Math.round(d)+e)):r.cool=Math.max(B,Math.min(V,Math.round(c)+e)),this._pendingTemps={...this._pendingTemps,[t]:{heat:r.heat,cool:r.cool}},r.committing||(clearTimeout(r.timer),r.timer=setTimeout(()=>this._commitAdj(t),oe))}async _commitAdj(t){if(!this._tempAdj)return;let e=this._tempAdj[t];if(!e||e.committing)return;e.committing=!0;let s=this._st(t),i=s?.attributes||{},o=e.heat,r=e.cool,d=o??Math.round(i.target_temp_low??i.temperature??x),c=r??Math.round(i.target_temp_high??(s?.state==="cool"?i.temperature:null)??$),a=s?.state||"off",h={entity_id:t};a==="heat_cool"?(h.target_temp_low=d,h.target_temp_high=c):a==="heat"?h.temperature=d:a==="cool"?h.temperature=c:(h.target_temp_low=d,h.target_temp_high=c);try{await this.hass.callService("climate","set_temperature",h)}catch(u){console.error("set_temperature failed",u)}if(e.committing=!1,e.heat!==o||e.cool!==r){e.timer=setTimeout(()=>this._commitAdj(t),ae);return}e.heat=null,e.cool=null,e.timer=null,setTimeout(()=>{if(!this._tempAdj[t]?.heat&&!this._tempAdj[t]?.cool){let{[t]:u,...f}=this._pendingTemps;this._pendingTemps=f}},re)}_hasPending(t){let e=this._tempAdj?.[t];return e&&(e.heat!=null||e.cool!=null||e.committing)}_cancelHold(t){let e=this._zoneId(t);e&&this._svc("infinitude_direct","cancel_hold",{zone_id:e})}_setZoneHold(t){let e=this._zoneId(t);if(!e)return;let s=this._resolveUntil(this._holdDuration,this._holdCustom);s!==null&&(this._holdActivity==="manual"&&this._svc("infinitude_direct","set_profile",{zone_id:e,activity:"manual",htsp:this._holdHtsp,clsp:this._holdClsp,fan:this._holdFan}),this._svc("infinitude_direct","set_hold",{zone_id:e,activity:this._holdActivity,...s!==void 0&&{until:s}}),this._holdOpen=null)}_initHoldManual(t){let e=this._zoneId(t),s=this._getProfilesData().find(i=>i.id===e)?.activities?.manual||{};this._holdHtsp=s.htsp?Math.round(Number(s.htsp)||x):x,this._holdClsp=s.clsp?Math.round(Number(s.clsp)||$):$,this._holdFan=s.fan||"auto"}_setWholeHouseHold(){let t=this._resolveUntil(this._whHoldDuration,this._whHoldCustom);t!==null&&(this._svc("infinitude_direct","set_whole_house_hold",{activity:this._whHoldActivity,...t!==void 0&&{until:t}}),this._whHoldOpen=!1)}_cancelWholeHouseHold(){this._svc("infinitude_direct","cancel_whole_house_hold",{})}_periodCard(t,e,s,i,o,r){let d=e.length>1;return n`
+    </ha-card>`}_adjustTemp(t,e,s){let o=this._st(t);if(!o)return;let i=o.attributes||{};this._tempAdj||(this._tempAdj={});let r=this._tempAdj[t]||(this._tempAdj[t]={}),d=r.heat??i.target_temp_low??i.temperature??$,c=r.cool??i.target_temp_high??(o.state==="cool"?i.temperature:null)??w;s==="heat"?r.heat=Math.max(B,Math.min(V,Math.round(d)+e)):r.cool=Math.max(q,Math.min(Z,Math.round(c)+e)),this._pendingTemps={...this._pendingTemps,[t]:{heat:r.heat,cool:r.cool}},r.committing||(clearTimeout(r.timer),r.timer=setTimeout(()=>this._commitAdj(t),ne))}async _commitAdj(t){if(!this._tempAdj)return;let e=this._tempAdj[t];if(!e||e.committing)return;e.committing=!0;let s=this._st(t),o=s?.attributes||{},i=e.heat,r=e.cool,d=i??Math.round(o.target_temp_low??o.temperature??$),c=r??Math.round(o.target_temp_high??(s?.state==="cool"?o.temperature:null)??w),a=s?.state||"off",h={entity_id:t};a==="heat_cool"?(h.target_temp_low=d,h.target_temp_high=c):a==="heat"?h.temperature=d:a==="cool"?h.temperature=c:(h.target_temp_low=d,h.target_temp_high=c);try{await this.hass.callService("climate","set_temperature",h)}catch(u){console.error("set_temperature failed",u)}if(e.committing=!1,e.heat!==i||e.cool!==r){e.timer=setTimeout(()=>this._commitAdj(t),le);return}e.heat=null,e.cool=null,e.timer=null,setTimeout(()=>{if(!this._tempAdj[t]?.heat&&!this._tempAdj[t]?.cool){let{[t]:u,...m}=this._pendingTemps;this._pendingTemps=m}},ce)}_hasPending(t){let e=this._tempAdj?.[t];return e&&(e.heat!=null||e.cool!=null||e.committing)}_cancelHold(t){let e=this._zoneId(t);e&&this._svc("infinitude_direct","cancel_hold",{zone_id:e})}_setZoneHold(t){let e=this._zoneId(t);if(!e)return;let s=this._resolveUntil(this._holdDuration,this._holdCustom);s!==null&&(this._holdActivity==="manual"&&this._svc("infinitude_direct","set_profile",{zone_id:e,activity:"manual",htsp:this._holdHtsp,clsp:this._holdClsp,fan:this._holdFan}),this._svc("infinitude_direct","set_hold",{zone_id:e,activity:this._holdActivity,...s!==void 0&&{until:s}}),this._holdOpen=null)}_initHoldManual(t){let e=this._zoneId(t),s=this._getProfilesData().find(o=>o.id===e)?.activities?.manual||{};this._holdHtsp=s.htsp?Math.round(Number(s.htsp)||$):$,this._holdClsp=s.clsp?Math.round(Number(s.clsp)||w):w,this._holdFan=s.fan||"auto"}_setWholeHouseHold(){let t=this._resolveUntil(this._whHoldDuration,this._whHoldCustom);t!==null&&(this._svc("infinitude_direct","set_whole_house_hold",{activity:this._whHoldActivity,...t!==void 0&&{until:t}}),this._whHoldOpen=!1)}_cancelWholeHouseHold(){this._svc("infinitude_direct","cancel_whole_house_hold",{})}_periodCard(t,e,s,o,i,r){let d=e.length>1;return n`
       <div class="period-card">
         <div class="period-header">Period ${t+1}</div>
-        ${e.map(c=>{let a=(s[c]?.[this._schedDay]||[])[t];if(!a)return p;let h=`${c}_${this._schedDay}_${t}`,u=this._schedEdits[h],f=u?.act??a.activity,_=u?.time??a.time,b=u?.enabled??a.enabled,A=i.find(m=>m.id===c)?.activities?.[f],v=A?.htsp?Math.round(Number(A.htsp)||0):"\u2013",E=A?.clsp?Math.round(Number(A.clsp)||0):"\u2013",g=d?H[r[c]]??c:o[c]||`Zone ${c}`;return n`
-            <div class="sched-line ${b?"":"disabled"}">
-              <span class="sched-name ${d?"sched-name-compact":""}">${g}</span>
-              <select class="sched-select" .value=${f} @change=${m=>this._schedEdit(c,t,"act",m.target.value)}>
-                ${z.map(m=>n`<option value=${m} ?selected=${m===f}>${m}</option>`)}
+        ${e.map(c=>{let a=(s[c]?.[this._schedDay]||[])[t];if(!a)return p;let h=`${c}_${this._schedDay}_${t}`,u=this._schedEdits[h],m=u?.act??a.activity,f=u?.time??a.time,g=u?.enabled??a.enabled,E=o.find(b=>b.id===c)?.activities?.[m],S=E?.htsp?Math.round(Number(E.htsp)||0):"\u2013",k=E?.clsp?Math.round(Number(E.clsp)||0):"\u2013",v=d?T[r[c]]??c:i[c]||`Zone ${c}`;return n`
+            <div class="sched-line ${g?"":"disabled"}">
+              <span class="sched-name ${d?"sched-name-compact":""}">${v}</span>
+              <select class="sched-select" .value=${m} @change=${b=>this._schedEdit(c,t,"act",b.target.value)}>
+                ${M.map(b=>n`<option value=${b} ?selected=${b===m}>${b}</option>`)}
               </select>
-              <select class="sched-select" .value=${_} @change=${m=>this._schedEdit(c,t,"time",m.target.value)}>
-                ${ie.map(m=>n`<option value=${m.v} ?selected=${m.v===_}>${m.l}</option>`)}
+              <select class="sched-select" .value=${f} @change=${b=>this._schedEdit(c,t,"time",b.target.value)}>
+                ${re.map(b=>n`<option value=${b.v} ?selected=${b.v===f}>${b.l}</option>`)}
               </select>
               <label class="sched-toggle">
-                <input type="checkbox" .checked=${b}
-                       @change=${m=>this._schedEdit(c,t,"enabled",m.target.checked)}>
+                <input type="checkbox" .checked=${g}
+                       @change=${b=>this._schedEdit(c,t,"enabled",b.target.checked)}>
                 <span>on</span>
               </label>
               <div class="sched-temps">
-                <span class="sp-heat">${v}°</span>
-                <span class="sp-cool">${E}°</span>
+                <span class="sp-heat">${S}°</span>
+                <span class="sp-cool">${k}°</span>
               </div>
             </div>`})}
-      </div>`}_schedEdit(t,e,s,i){let o=`${t}_${this._schedDay}_${e}`,r=this._schedEdits[o]||{},d=(this._getScheduleData()[t]?.[this._schedDay]||[])[e]||{};this._schedEdits={...this._schedEdits,[o]:{act:s==="act"?i:r.act??d.activity,time:s==="time"?i:r.time??d.time,enabled:s==="enabled"?i:r.enabled??d.enabled}}}_copySched(t){let e=t.target.value;if(!e)return;t.target.value="";let s=this._getScheduleData(),i=e==="__all__"?C.filter(r=>r!==this._schedDay):[e],o={...this._schedEdits};for(let r of Object.keys(s)){let d=s[r]?.[this._schedDay]||[];for(let c of i)d.forEach((a,h)=>{let u=this._schedEdits[`${r}_${this._schedDay}_${h}`];o[`${r}_${c}_${h}`]={act:u?.act??a.activity,time:u?.time??a.time,enabled:u?.enabled??a.enabled}})}this._schedEdits=o}async _saveSched(){if(this._saving)return;this._saving=!0;let t={...this._schedEdits};try{let e=this._getScheduleData();for(let s of Object.keys(e)){let i=C.map(o=>({id:o,period:(e[s]?.[o]||[]).map((r,d)=>{let c=t[`${s}_${o}_${d}`];return{id:r.id||String(d+1),activity:c?.act??r.activity,time:c?.time??r.time,enabled:c?.enabled??r.enabled?"on":"off"}})}));await this._svc("infinitude_direct","save_schedule",{zone_id:s,schedule:JSON.stringify(i)})}}finally{setTimeout(()=>{let e=this._schedEdits,s={};for(let i of Object.keys(e))(!(i in t)||e[i]!==t[i])&&(s[i]=e[i]);this._schedEdits=s,this._saving=!1},Wt)}}_profAdj(t,e,s,i){let o=`${t}_${e}`,r=this._getProfilesData().find(_=>_.id===t)?.activities?.[e]||{},d=this._profileEdits[o]||{},c=d.htsp??(r.htsp?Math.round(Number(r.htsp)||x):x),a=d.clsp??(r.clsp?Math.round(Number(r.clsp)||$):$),h=s==="htsp"?F:B,u=s==="htsp"?W:V,f=s==="htsp"?c:a;this._profileEdits={...this._profileEdits,[o]:{zone_id:t,activity:e,htsp:s==="htsp"?Math.max(h,Math.min(u,f+i)):c,clsp:s==="clsp"?Math.max(h,Math.min(u,f+i)):a,fan:d.fan??r.fan??"low"}}}_profFan(t,e,s){let i=`${t}_${e}`,o=this._getProfilesData().find(d=>d.id===t)?.activities?.[e]||{},r=this._profileEdits[i]||{};this._profileEdits={...this._profileEdits,[i]:{zone_id:t,activity:e,htsp:r.htsp??(o.htsp?Math.round(Number(o.htsp)||x):x),clsp:r.clsp??(o.clsp?Math.round(Number(o.clsp)||$):$),fan:s}}}async _saveProfs(){if(this._savingProfs)return;this._savingProfs=!0;let t={...this._profileEdits};try{for(let e of Object.values(t)){let s={zone_id:e.zone_id,activity:e.activity,htsp:e.htsp,clsp:e.clsp};e.fan&&(s.fan=e.fan),await this._svc("infinitude_direct","set_profile",s)}}finally{setTimeout(()=>{let e=this._profileEdits,s={};for(let i of Object.keys(e))(!(i in t)||e[i]!==t[i])&&(s[i]=e[i]);this._profileEdits=s,this._savingProfs=!1},Wt)}}},M=S`
+      </div>`}_schedEdit(t,e,s,o){let i=`${t}_${this._schedDay}_${e}`,r=this._schedEdits[i]||{},d=(this._getScheduleData()[t]?.[this._schedDay]||[])[e]||{};this._schedEdits={...this._schedEdits,[i]:{act:s==="act"?o:r.act??d.activity,time:s==="time"?o:r.time??d.time,enabled:s==="enabled"?o:r.enabled??d.enabled}}}_copySched(t){let e=t.target.value;if(!e)return;t.target.value="";let s=this._getScheduleData(),o=e==="__all__"?H.filter(r=>r!==this._schedDay):[e],i={...this._schedEdits};for(let r of Object.keys(s)){let d=s[r]?.[this._schedDay]||[];for(let c of o)d.forEach((a,h)=>{let u=this._schedEdits[`${r}_${this._schedDay}_${h}`];i[`${r}_${c}_${h}`]={act:u?.act??a.activity,time:u?.time??a.time,enabled:u?.enabled??a.enabled}})}this._schedEdits=i}async _saveSched(){if(this._saving)return;this._saving=!0;let t={...this._schedEdits};try{let e=this._getScheduleData();for(let s of Object.keys(e)){let o=H.map(i=>({id:i,period:(e[s]?.[i]||[]).map((r,d)=>{let c=t[`${s}_${i}_${d}`];return{id:r.id||String(d+1),activity:c?.act??r.activity,time:c?.time??r.time,enabled:c?.enabled??r.enabled?"on":"off"}})}));await this._svc("infinitude_direct","save_schedule",{zone_id:s,schedule:JSON.stringify(o)})}}finally{setTimeout(()=>{let e=this._schedEdits,s={};for(let o of Object.keys(e))(!(o in t)||e[o]!==t[o])&&(s[o]=e[o]);this._schedEdits=s,this._saving=!1},qt)}}_profAdj(t,e,s,o){let i=`${t}_${e}`,r=this._getProfilesData().find(f=>f.id===t)?.activities?.[e]||{},d=this._profileEdits[i]||{},c=d.htsp??(r.htsp?Math.round(Number(r.htsp)||$):$),a=d.clsp??(r.clsp?Math.round(Number(r.clsp)||w):w),h=s==="htsp"?B:q,u=s==="htsp"?V:Z,m=s==="htsp"?c:a;this._profileEdits={...this._profileEdits,[i]:{zone_id:t,activity:e,htsp:s==="htsp"?Math.max(h,Math.min(u,m+o)):c,clsp:s==="clsp"?Math.max(h,Math.min(u,m+o)):a,fan:d.fan??r.fan??"low"}}}_profFan(t,e,s){let o=`${t}_${e}`,i=this._getProfilesData().find(d=>d.id===t)?.activities?.[e]||{},r=this._profileEdits[o]||{};this._profileEdits={...this._profileEdits,[o]:{zone_id:t,activity:e,htsp:r.htsp??(i.htsp?Math.round(Number(i.htsp)||$):$),clsp:r.clsp??(i.clsp?Math.round(Number(i.clsp)||w):w),fan:s}}}async _saveProfs(){if(this._savingProfs)return;this._savingProfs=!0;let t={...this._profileEdits};try{for(let e of Object.values(t)){let s={zone_id:e.zone_id,activity:e.activity,htsp:e.htsp,clsp:e.clsp};e.fan&&(s.fan=e.fan),await this._svc("infinitude_direct","set_profile",s)}}finally{setTimeout(()=>{let e=this._profileEdits,s={};for(let o of Object.keys(e))(!(o in t)||e[o]!==t[o])&&(s[o]=e[o]);this._profileEdits=s,this._savingProfs=!1},qt)}}},O=C`
   :host { display: block; }
   ha-card { overflow: hidden; }
   .conn-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
@@ -33,18 +33,14 @@ var tt=globalThis,et=tt.ShadowRoot&&(tt.ShadyCSS===void 0||tt.ShadyCSS.nativeSha
   .conn-dot.unk { background: var(--secondary-text-color); opacity: 0.4; }
   @keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
   .summary-stats {
-    display: flex; align-items: center; gap: 0; margin-bottom: 14px;
-    border: 1px solid var(--divider-color); border-radius: 8px; overflow: hidden;
+    display: flex; align-items: center; gap: 20px; flex-wrap: wrap; margin-bottom: 14px;
   }
-  .summary-stat {
-    display: flex; flex-direction: column; align-items: center; gap: 2px;
-    padding: 8px 14px; flex: 1; min-width: 0;
-  }
+  .summary-stat { display: flex; align-items: baseline; gap: 6px; }
   .summary-stat-label { font-size: 10px; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.5px; }
-  .summary-stat-val { font-size: 14px; font-weight: 700; color: var(--primary-text-color); }
+  .summary-stat-val { font-size: 16px; font-weight: 500; color: var(--primary-text-color); }
   .summary-stat-val.heat { color: var(--label-badge-red, #f97316); }
   .summary-stat-val.cool { color: var(--label-badge-blue, #38bdf8); }
-  .summary-divider { width: 1px; align-self: stretch; background: var(--divider-color); }
+  .summary-divider { width: 1px; height: 18px; background: var(--divider-color); flex-shrink: 0; }
   .wh-hold {
     display: flex; align-items: center; gap: 6px; width: 100%;
     padding: 8px 12px; margin-bottom: 14px;
@@ -130,26 +126,26 @@ var tt=globalThis,et=tt.ShadowRoot&&(tt.ShadyCSS===void 0||tt.ShadyCSS.nativeSha
     border-radius: 4px; color: var(--primary-text-color); font-size: 11px; padding: 3px 6px; outline: none;
   }
   .sched-select:focus { border-color: var(--primary-color); }
-`;var yt=class extends w{static properties={...w.baseProperties,_whHoldOpen:{state:!0},_whHoldActivity:{state:!0},_whHoldDuration:{state:!0},_whHoldCustom:{state:!0}};constructor(){super(),this._whHoldOpen=!1,this._whHoldActivity="home",this._whHoldDuration="120",this._whHoldCustom=""}static getConfigElement(){return document.createElement("div")}static getStubConfig(){return{}}getCardSize(){return 3}static styles=[M,S`
+`;var wt=class extends A{static properties={...A.baseProperties,_whHoldOpen:{state:!0},_whHoldActivity:{state:!0},_whHoldDuration:{state:!0},_whHoldCustom:{state:!0}};constructor(){super(),this._whHoldOpen=!1,this._whHoldActivity="home",this._whHoldDuration="120",this._whHoldCustom=""}static getConfigElement(){return document.createElement("div")}static getStubConfig(){return{}}getCardSize(){return 3}static styles=[O,C`
     .card-pad { padding: 16px; }
     .header {
       display: flex; align-items: center; gap: 8px; margin-bottom: 14px;
     }
     .header-title { font-size: 18px; font-weight: 500; color: var(--primary-text-color); }
-  `];render(){if(!this.hass)return p;if(!this._registryLoaded)return this._renderLoading();let t=this._findEntities(),{system:e,selects:s,climates:i}=t,o=i.length&&this._st(i[0])?.state||"off",r=["off","heat","cool","heat_cool"],d={off:"Off",heat:"Heat",cool:"Cool",heat_cool:"Auto"},c=this._st(e.oat),a="\u2013";if(c?.state&&c.state!=="unavailable")a=`${Math.round(Number(c.state))}\xB0`;else if(i.length){let g=this._at(i[0],"outdoor_temperature");g!=null&&(a=`${Math.round(Number(g))}\xB0`)}let h=this._st(e.opStatus),u=h?.state&&h.state!=="unavailable"?h.state:"",f=this._st(e.humidifier)?.state==="on",_=this._st(s.wholeHouse),b=_&&_.state!=="off",k=i.length?this._at(i[0],"whole_house_hold_until"):null,A=i.length?this._at(i[0],"current_humidity"):null,v=e.info?this._st(e.info)?.state!=="unavailable":!1,E=e.info?this._at(e.info,"carrier_ok"):null;return n`
+  `];render(){if(!this.hass)return p;if(!this._registryLoaded)return this._renderLoading();let t=this._findEntities(),{system:e,selects:s,climates:o}=t,i=o.length&&this._st(o[0])?.state||"off",r=["off","heat","cool","heat_cool"],d={off:"Off",heat:"Heat",cool:"Cool",heat_cool:"Auto"},c=this._st(e.oat),a="\u2013";if(c?.state&&c.state!=="unavailable")a=`${Math.round(Number(c.state))}\xB0`;else if(o.length){let v=this._at(o[0],"outdoor_temperature");v!=null&&(a=`${Math.round(Number(v))}\xB0`)}let h=this._st(e.opStatus),u=h?.state&&h.state!=="unavailable"?h.state:"",m=this._st(e.humidifier)?.state==="on",f=this._st(s.wholeHouse),g=f&&f.state!=="off",z=o.length?this._at(o[0],"whole_house_hold_until"):null,E=o.length?this._at(o[0],"current_humidity"):null,S=e.info?this._st(e.info)?.state!=="unavailable":!1,k=e.info?this._at(e.info,"carrier_ok"):null;return n`
       <ha-card>
         <div class="card-pad">
           <div class="header">
             <span class="header-title">infinitude</span>
-            <span class="conn-dot ${v?"ok":"err"}" title="${v?"Infinitude: connected":"Infinitude: unavailable"}"></span>
-            <span class="conn-dot ${E===!0?"ok":E===!1?"err":"unk"}" title="${E===!0?"Carrier cloud: connected":E===!1?"Carrier cloud: unreachable":"Carrier cloud: checking\u2026"}"></span>
-            <span style="font-size:10px;color:var(--secondary-text-color);opacity:0.5">v${ot}</span>
+            <span class="conn-dot ${S?"ok":"err"}" title="${S?"Infinitude: connected":"Infinitude: unavailable"}"></span>
+            <span class="conn-dot ${k===!0?"ok":k===!1?"err":"unk"}" title="${k===!0?"Carrier cloud: connected":k===!1?"Carrier cloud: unreachable":"Carrier cloud: checking\u2026"}"></span>
+            <span style="font-size:10px;color:var(--secondary-text-color);opacity:0.5">v${rt}</span>
           </div>
           <div class="mode-row">
             <span class="mode-label">Mode</span>
             <div class="mode-pills">
-              ${r.map(g=>n`<div class="mode-pill ${g===o?"active":""} ${g==="heat"?"heat":g==="cool"?"cool":g==="heat_cool"?"auto":""}"
-                  @click=${()=>this._setHvacMode(i[0],g)}>${d[g]}</div>`)}
+              ${r.map(v=>n`<div class="mode-pill ${v===i?"active":""} ${v==="heat"?"heat":v==="cool"?"cool":v==="heat_cool"?"auto":""}"
+                  @click=${()=>this._setHvacMode(o[0],v)}>${d[v]}</div>`)}
             </div>
           </div>
           <div class="summary-stats">
@@ -165,35 +161,35 @@ var tt=globalThis,et=tt.ShadowRoot&&(tt.ShadyCSS===void 0||tt.ShadyCSS.nativeSha
             <div class="summary-divider"></div>
             <div class="summary-stat">
               <span class="summary-stat-label">Humidity</span>
-              <span class="summary-stat-val">${A!=null?`${A}%`:"\u2013"}</span>
+              <span class="summary-stat-val">${E!=null?`${E}%`:"\u2013"}</span>
             </div>
-            ${f?n`
+            ${m?n`
               <div class="summary-divider"></div>
               <div class="summary-stat">
                 <span class="summary-stat-label">Humidifier</span>
                 <span class="summary-stat-val" style="color:var(--label-badge-blue,#38bdf8)">💧 On</span>
               </div>`:p}
           </div>
-          ${b?n`
+          ${g?n`
             <div class="wh-hold" @click=${()=>this._cancelWholeHouseHold()}>
               <ha-icon icon="mdi:home-lock" style="--mdc-icon-size:16px"></ha-icon>
-              <span>Whole house: <strong>${_.state}</strong>${k?n` · <span style="opacity:0.85">${this._otmrRelative(k)}</span>`:p}</span>
+              <span>Whole house: <strong>${f.state}</strong>${z?n` · <span style="opacity:0.85">${this._otmrRelative(z)}</span>`:p}</span>
               <span style="margin-left:auto;opacity:0.7">Tap to cancel</span>
             </div>`:n`
             ${this._whHoldOpen?n`
               <div class="wh-set">
                 <span class="wh-set-label">WH Hold</span>
                 <div class="wh-pills">
-                  ${z.map(g=>n`
-                    <div class="wh-pill ${this._whHoldActivity===g?"active":""}"
-                         @click=${()=>{this._whHoldActivity=g}}>${g}</div>`)}
+                  ${M.map(v=>n`
+                    <div class="wh-pill ${this._whHoldActivity===v?"active":""}"
+                         @click=${()=>{this._whHoldActivity=v}}>${v}</div>`)}
                 </div>
-                <select class="hold-dur-select" @change=${g=>{this._whHoldDuration=g.target.value}}>
-                  ${L.map(g=>n`<option value=${g.v} ?selected=${g.v===this._whHoldDuration}>${g.l}</option>`)}
+                <select class="hold-dur-select" @change=${v=>{this._whHoldDuration=v.target.value}}>
+                  ${R.map(v=>n`<option value=${v.v} ?selected=${v.v===this._whHoldDuration}>${v.l}</option>`)}
                 </select>
                 ${this._whHoldDuration==="custom"?n`
                   <input type="time" class="hold-time-input" step="900" .value=${this._whHoldCustom}
-                         @change=${g=>{this._whHoldCustom=g.target.value}}>`:p}
+                         @change=${v=>{this._whHoldCustom=v.target.value}}>`:p}
                 <button class="btn btn-primary" style="font-size:11px;padding:4px 12px" @click=${()=>this._setWholeHouseHold()}>Apply</button>
                 <button class="btn" style="font-size:11px;padding:4px 10px" @click=${()=>{this._whHoldOpen=!1}}>Cancel</button>
               </div>`:n`
@@ -204,7 +200,7 @@ var tt=globalThis,et=tt.ShadowRoot&&(tt.ShadyCSS===void 0||tt.ShadyCSS.nativeSha
               </div>`}
           `}
         </div>
-      </ha-card>`}};customElements.get("infinitude-status-card")||customElements.define("infinitude-status-card",yt);window.customCards=window.customCards||[];window.customCards.some(l=>l.type==="infinitude-status-card")||window.customCards.push({type:"infinitude-status-card",name:"Infinitude Status",description:"System mode, stats, and whole-house hold for Carrier/Bryant Infinity",preview:!1});var xt=class extends w{static properties={...w.baseProperties,_pendingTemps:{state:!0},_holdOpen:{state:!0},_holdActivity:{state:!0},_holdDuration:{state:!0},_holdCustom:{state:!0},_holdHtsp:{state:!0},_holdClsp:{state:!0},_holdFan:{state:!0}};constructor(){super(),this._pendingTemps={},this._tempAdj={},this._holdOpen=!1,this._holdActivity="home",this._holdDuration="120",this._holdCustom="",this._holdHtsp=x,this._holdClsp=$,this._holdFan="auto"}static getConfigElement(){return document.createElement("div")}static getStubConfig(){return{entity:""}}getCardSize(){return 4}static styles=[M,S`
+      </ha-card>`}};customElements.get("infinitude-status-card")||customElements.define("infinitude-status-card",wt);window.customCards=window.customCards||[];window.customCards.some(l=>l.type==="infinitude-status-card")||window.customCards.push({type:"infinitude-status-card",name:"Infinitude Status",description:"System mode, stats, and whole-house hold for Carrier/Bryant Infinity",preview:!1});var At=class extends A{static properties={...A.baseProperties,_pendingTemps:{state:!0},_holdOpen:{state:!0},_holdActivity:{state:!0},_holdDuration:{state:!0},_holdCustom:{state:!0},_holdHtsp:{state:!0},_holdClsp:{state:!0},_holdFan:{state:!0}};constructor(){super(),this._pendingTemps={},this._tempAdj={},this._holdOpen=!1,this._holdActivity="home",this._holdDuration="120",this._holdCustom="",this._holdHtsp=$,this._holdClsp=w,this._holdFan="auto"}static getConfigElement(){return document.createElement("div")}static getStubConfig(){return{entity:""}}getCardSize(){return 4}static styles=[O,C`
     .card-pad { padding: 14px; }
     .zone-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
     .zone-name { font-size: 14px; font-weight: 600; color: var(--primary-text-color); }
@@ -249,72 +245,83 @@ var tt=globalThis,et=tt.ShadowRoot&&(tt.ShadyCSS===void 0||tt.ShadyCSS.nativeSha
     ha-card.heating { border-left: 3px solid var(--label-badge-red, #f97316); }
     ha-card.cooling { border-left: 3px solid var(--label-badge-blue, #38bdf8); }
     ha-card.drying  { border-left: 3px solid var(--accent-color, #a78bfa); }
-  `];render(){if(!this.hass)return p;if(!this._registryLoaded)return this._renderLoading();let t=this._config.entity;if(!t)return n`<ha-card><div class="card-pad" style="color:var(--secondary-text-color)">No entity configured</div></ha-card>`;let e=this._st(t);if(!e)return n`<ha-card><div class="card-pad" style="color:var(--secondary-text-color)">Entity unavailable</div></ha-card>`;let s=e.attributes||{},i=(s.friendly_name||t).replace(/^Infinitude\s+/i,"").replace(/^infinitude_direct\s+/i,""),o=s.current_temperature!=null?Math.round(s.current_temperature):"\u2013",r=s.current_humidity,d=e.state||"off",c=s.hvac_action||"idle",a=s.preset_mode||"\u2013",h=c==="heating"?"heating":c==="cooling"?"cooling":c==="drying"?"drying":"",u=c==="idle"?"Idle":c.charAt(0).toUpperCase()+c.slice(1),f=d==="heat_cool",_=!!s.hold_active,b=s.hold_activity||a,k=s.hold_until,A=this._pendingTemps[t],v=this._hasPending(t),E=A?.heat??s.target_temp_low??s.temperature??null,g=A?.cool??s.target_temp_high??(d==="cool"?s.temperature:null)??null;return n`
+    .zone-cond-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .zone-cond-dot.heating { background: var(--label-badge-red, #f97316); }
+    .zone-cond-dot.cooling { background: var(--label-badge-blue, #38bdf8); }
+    .zone-cond-dot.drying  { background: var(--accent-color, #a78bfa); }
+    .zone-cond-dot.idle    { background: var(--secondary-text-color); opacity: 0.4; }
+    .zone-activity-pill {
+      font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 20px;
+      background: var(--secondary-background-color); color: var(--secondary-text-color);
+    }
+  `];render(){if(!this.hass)return p;if(!this._registryLoaded)return this._renderLoading();let t=this._config.entity;if(!t)return n`<ha-card><div class="card-pad" style="color:var(--secondary-text-color)">No entity configured</div></ha-card>`;let e=this._st(t);if(!e)return n`<ha-card><div class="card-pad" style="color:var(--secondary-text-color)">Entity unavailable</div></ha-card>`;let s=e.attributes||{},o=(s.friendly_name||t).replace(/^Infinitude\s+/i,"").replace(/^infinitude_direct\s+/i,""),i=s.current_temperature!=null?Math.round(s.current_temperature):"\u2013",r=s.current_humidity,d=e.state||"off",c=s.hvac_action||"idle",a=s.preset_mode||"\u2013",h=c==="heating"?"heating":c==="cooling"?"cooling":c==="drying"?"drying":"",u=c==="idle"?"Idle":c.charAt(0).toUpperCase()+c.slice(1),m=d==="heat_cool",f=!!s.hold_active,g=s.hold_activity||a,z=s.hold_until,E=this._pendingTemps[t],S=this._hasPending(t),k=E?.heat??s.target_temp_low??s.temperature??null,v=E?.cool??s.target_temp_high??(d==="cool"?s.temperature:null)??null;return n`
       <ha-card class="${h}">
         <div class="card-pad">
           <div class="zone-top">
-            <span class="zone-name">${i}</span>
-            <span class="zone-badge ${h}">${u}</span>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span class="zone-cond-dot ${h||"idle"}"></span>
+              <span class="zone-name">${o}</span>
+            </div>
+            <span class="zone-activity-pill">${a}</span>
           </div>
           <div class="zone-body">
             <div>
-              <span class="temp-hero">${o}</span><span class="temp-unit">°F</span>
-              ${r!=null?n`<div style="font-size:11px;color:var(--secondary-text-color);margin-top:2px">${r}% RH</div>`:p}
+              <span class="temp-hero">${i}</span><span class="temp-unit">°F</span>
             </div>
             <div class="zone-sp">
-              ${E!=null?n`
+              ${k!=null?n`
                 <div class="sp-row">
                   <button class="btn-adj" @click=${()=>this._adjustTemp(t,-1,"heat")}>−</button>
-                  <span class="sp-val sp-heat ${v?"sp-pending":""}">${Math.round(E)}°</span>
+                  <span class="sp-val sp-heat ${S?"sp-pending":""}">${Math.round(k)}°</span>
                   <button class="btn-adj" @click=${()=>this._adjustTemp(t,1,"heat")}>+</button>
                 </div>`:p}
-              ${f&&g!=null?n`
+              ${m&&v!=null?n`
                 <div class="sp-row">
                   <button class="btn-adj" @click=${()=>this._adjustTemp(t,-1,"cool")}>−</button>
-                  <span class="sp-val sp-cool ${v?"sp-pending":""}">${Math.round(g)}°</span>
+                  <span class="sp-val sp-cool ${S?"sp-pending":""}">${Math.round(v)}°</span>
                   <button class="btn-adj" @click=${()=>this._adjustTemp(t,1,"cool")}>+</button>
                 </div>`:p}
             </div>
           </div>
           <div class="zone-meta">
-            <span class="meta-item">Activity <span class="meta-val">${a}</span></span>
+            ${r!=null?n`<span class="meta-item">RH <span class="meta-val">${r}%</span></span>`:p}
             ${s.fan_mode?n`<span class="meta-item">Fan <span class="meta-val">${s.fan_mode}</span></span>`:p}
             ${s.damper_position!=null?n`<span class="meta-item">Damper <span class="meta-val">${s.damper_position}%</span></span>`:p}
           </div>
           <div class="zone-preset-row">
-            ${z.map(m=>n`
-              <div class="preset-btn ${a===m?"active":""}"
-                   @click=${()=>this._setPreset(t,m)}>${m}</div>`)}
+            ${M.map(y=>n`
+              <div class="preset-btn ${a===y?"active":""}"
+                   @click=${()=>this._setPreset(t,y)}>${y}</div>`)}
           </div>
-          ${_?n`
+          ${f?n`
             <div class="zone-hold">
-              <span class="hold-label">Hold: ${b}${k?` \xB7 ${this._otmrRelative(k)}`:""}</span>
+              <span class="hold-label">Hold: ${g}${z?` \xB7 ${this._otmrRelative(z)}`:""}</span>
               <button class="btn" style="font-size:11px;padding:3px 10px;color:var(--error-color,#f87171)" @click=${()=>this._cancelHold(t)}>Cancel</button>
             </div>`:p}
           ${this._holdOpen?n`
             <div class="zone-hold-picker">
               <div class="hold-picker-row">
                 <div class="wh-pills">
-                  ${at.map(m=>n`
-                    <div class="wh-pill ${this._holdActivity===m?"active":""}"
-                         @click=${()=>{this._holdActivity=m,m==="manual"&&this._initHoldManual(t)}}>${m}</div>`)}
+                  ${nt.map(y=>n`
+                    <div class="wh-pill ${this._holdActivity===y?"active":""}"
+                         @click=${()=>{this._holdActivity=y,y==="manual"&&this._initHoldManual(t)}}>${y}</div>`)}
                 </div>
               </div>
               ${this._holdActivity==="manual"?n`
                 <div class="hold-picker-row" style="gap:10px;flex-wrap:wrap">
                   <div class="sp-row">
-                  <button class="btn-adj" @click=${()=>{this._holdHtsp=Math.max(F,this._holdHtsp-1)}}>−</button>
+                  <button class="btn-adj" @click=${()=>{this._holdHtsp=Math.max(B,this._holdHtsp-1)}}>−</button>
                   <span class="sp-val sp-heat">${this._holdHtsp}°</span>
-                  <button class="btn-adj" @click=${()=>{this._holdHtsp=Math.min(W,this._holdHtsp+1)}}>+</button>
+                  <button class="btn-adj" @click=${()=>{this._holdHtsp=Math.min(V,this._holdHtsp+1)}}>+</button>
                 </div>
                 <div class="sp-row">
-                  <button class="btn-adj" @click=${()=>{this._holdClsp=Math.max(B,this._holdClsp-1)}}>−</button>
+                  <button class="btn-adj" @click=${()=>{this._holdClsp=Math.max(q,this._holdClsp-1)}}>−</button>
                   <span class="sp-val sp-cool">${this._holdClsp}°</span>
-                  <button class="btn-adj" @click=${()=>{this._holdClsp=Math.min(V,this._holdClsp+1)}}>+</button>
+                  <button class="btn-adj" @click=${()=>{this._holdClsp=Math.min(Z,this._holdClsp+1)}}>+</button>
                   </div>
                   <div style="display:flex;align-items:center;gap:4px">
                     <span style="font-size:10px;color:var(--secondary-text-color)">Fan</span>
-                    <select class="hold-dur-select" style="width:auto" .value=${this._holdFan} @change=${m=>{this._holdFan=m.target.value}}>
+                    <select class="hold-dur-select" style="width:auto" .value=${this._holdFan} @change=${y=>{this._holdFan=y.target.value}}>
                       <option value="auto">Auto</option>
                       <option value="low">Low</option>
                       <option value="med">Med</option>
@@ -323,23 +330,23 @@ var tt=globalThis,et=tt.ShadowRoot&&(tt.ShadyCSS===void 0||tt.ShadyCSS.nativeSha
                   </div>
                 </div>`:p}
               <div class="hold-picker-row">
-                <select class="hold-dur-select" @change=${m=>{this._holdDuration=m.target.value}}>
-                  ${L.map(m=>n`<option value=${m.v} ?selected=${m.v===this._holdDuration}>${m.l}</option>`)}
+                <select class="hold-dur-select" @change=${y=>{this._holdDuration=y.target.value}}>
+                  ${R.map(y=>n`<option value=${y.v} ?selected=${y.v===this._holdDuration}>${y.l}</option>`)}
                 </select>
                 ${this._holdDuration==="custom"?n`
                   <input type="time" class="hold-time-input" step="900" .value=${this._holdCustom}
-                         @change=${m=>{this._holdCustom=m.target.value}}>`:p}
+                         @change=${y=>{this._holdCustom=y.target.value}}>`:p}
               </div>
               <div class="hold-picker-row">
                 <button class="btn btn-primary" style="font-size:11px;padding:4px 12px" @click=${()=>this._setZoneHold(t)}>Apply</button>
                 <button class="btn" style="font-size:11px;padding:4px 10px" @click=${()=>{this._holdOpen=!1}}>Cancel</button>
               </div>
-            </div>`:_?p:n`
+            </div>`:f?p:n`
             <div class="zone-actions">
               <button class="btn" style="font-size:11px;padding:4px 12px" @click=${()=>{this._holdActivity=a!=="\u2013"?a:"home",this._holdDuration="120",this._holdCustom="",this._holdActivity==="manual"&&this._initHoldManual(t),this._holdOpen=!0}}>Set hold</button>
             </div>`}
         </div>
-      </ha-card>`}};customElements.get("infinitude-zone-card")||customElements.define("infinitude-zone-card",xt);window.customCards=window.customCards||[];window.customCards.some(l=>l.type==="infinitude-zone-card")||window.customCards.push({type:"infinitude-zone-card",name:"Infinitude Zone",description:"Single zone control for Carrier/Bryant Infinity thermostat",preview:!1});var $t=class extends w{static properties={...w.baseProperties,_schedDay:{state:!0},_schedEdits:{state:!0}};constructor(){super(),this._schedDay=C[Z[new Date().getDay()]],this._schedEdits={},this._saving=!1}static getConfigElement(){return document.createElement("div")}static getStubConfig(){return{}}getCardSize(){return 6}static styles=[M,S`
+      </ha-card>`}};customElements.get("infinitude-zone-card")||customElements.define("infinitude-zone-card",At);window.customCards=window.customCards||[];window.customCards.some(l=>l.type==="infinitude-zone-card")||window.customCards.push({type:"infinitude-zone-card",name:"Infinitude Zone",description:"Single zone control for Carrier/Bryant Infinity thermostat",preview:!1});var Et=class extends A{static properties={...A.baseProperties,_schedDay:{state:!0},_schedEdits:{state:!0}};constructor(){super(),this._schedDay=H[J[new Date().getDay()]],this._schedEdits={},this._saving=!1}static getConfigElement(){return document.createElement("div")}static getStubConfig(){return{}}getCardSize(){return 6}static styles=[O,C`
     .card-pad { padding: 16px; }
     .sched-day-tabs { display: flex; gap: 4px; margin-bottom: 12px; flex-wrap: wrap; }
     .day-tab {
@@ -376,22 +383,22 @@ var tt=globalThis,et=tt.ShadowRoot&&(tt.ShadyCSS===void 0||tt.ShadyCSS.nativeSha
       <div class="card-pad" style="text-align:center;color:var(--secondary-text-color)">
         <ha-icon icon="mdi:calendar-clock" style="--mdc-icon-size:48px;opacity:0.3;margin-bottom:12px;display:block"></ha-icon>
         No schedule data available.
-      </div></ha-card>`;let i=C[Z[new Date().getDay()]],o={},r={};for(let a=0;a<e.length;a++)o[e[a].id]=e[a].name,r[e[a].id]=a;let d=0;for(let a of s)d=Math.max(d,(t[a]?.[this._schedDay]||[]).length);d||(d=5);let c=Object.keys(this._schedEdits).length>0;return n`
+      </div></ha-card>`;let o=H[J[new Date().getDay()]],i={},r={};for(let a=0;a<e.length;a++)i[e[a].id]=e[a].name,r[e[a].id]=a;let d=0;for(let a of s)d=Math.max(d,(t[a]?.[this._schedDay]||[]).length);d||(d=5);let c=Object.keys(this._schedEdits).length>0;return n`
       <ha-card>
         <div class="card-pad">
           <div class="section-title">Schedule</div>
-          ${s.length>1?n`<div class="zone-legend">${s.map((a,h)=>n`<span class="legend-item"><span class="legend-num">${H[h]||h+1}</span> ${o[a]||`Zone ${a}`}</span>`)}</div>`:p}
+          ${s.length>1?n`<div class="zone-legend">${s.map((a,h)=>n`<span class="legend-item"><span class="legend-num">${T[h]||h+1}</span> ${i[a]||`Zone ${a}`}</span>`)}</div>`:p}
           <div class="sched-day-tabs">
-            ${C.map(a=>n`
-              <div class="day-tab ${a===this._schedDay?"active":""} ${a===i&&a!==this._schedDay?"today":""}"
+            ${H.map(a=>n`
+              <div class="day-tab ${a===this._schedDay?"active":""} ${a===o&&a!==this._schedDay?"today":""}"
                    @click=${()=>{this._schedDay=a}}>${a.slice(0,3)}</div>`)}
           </div>
-          ${Array.from({length:d},(a,h)=>this._periodCard(h,s,t,e,o,r))}
+          ${Array.from({length:d},(a,h)=>this._periodCard(h,s,t,e,i,r))}
           <div class="copy-bar">
             <span>Copy ${this._schedDay.slice(0,3)} →</span>
             <select class="sched-select" @change=${a=>this._copySched(a)}>
               <option value="">select day…</option>
-              ${C.filter(a=>a!==this._schedDay).map(a=>n`<option value=${a}>${a.slice(0,3)}</option>`)}
+              ${H.filter(a=>a!==this._schedDay).map(a=>n`<option value=${a}>${a.slice(0,3)}</option>`)}
               <option value="__all__">All other days</option>
             </select>
           </div>
@@ -402,7 +409,7 @@ var tt=globalThis,et=tt.ShadowRoot&&(tt.ShadyCSS===void 0||tt.ShadyCSS.nativeSha
               <button class="btn btn-primary" @click=${()=>this._saveSched()}>Save schedule</button>
             </div>`:p}
         </div>
-      </ha-card>`}};customElements.get("infinitude-schedule-card")||customElements.define("infinitude-schedule-card",$t);window.customCards=window.customCards||[];window.customCards.some(l=>l.type==="infinitude-schedule-card")||window.customCards.push({type:"infinitude-schedule-card",name:"Infinitude Schedule",description:"Weekly schedule editing for Carrier/Bryant Infinity thermostat",preview:!1});var wt=class extends w{static properties={...w.baseProperties,_profileEdits:{state:!0}};constructor(){super(),this._profileEdits={},this._savingProfs=!1}static getConfigElement(){return document.createElement("div")}static getStubConfig(){return{}}getCardSize(){return 6}static styles=[M,S`
+      </ha-card>`}};customElements.get("infinitude-schedule-card")||customElements.define("infinitude-schedule-card",Et);window.customCards=window.customCards||[];window.customCards.some(l=>l.type==="infinitude-schedule-card")||window.customCards.push({type:"infinitude-schedule-card",name:"Infinitude Schedule",description:"Weekly schedule editing for Carrier/Bryant Infinity thermostat",preview:!1});var kt=class extends A{static properties={...A.baseProperties,_profileEdits:{state:!0}};constructor(){super(),this._profileEdits={},this._savingProfs=!1}static getConfigElement(){return document.createElement("div")}static getStubConfig(){return{}}getCardSize(){return 6}static styles=[O,C`
     .card-pad { padding: 16px; }
     .prof-card {
       background: var(--secondary-background-color); border: 1px solid var(--divider-color);
@@ -429,27 +436,27 @@ var tt=globalThis,et=tt.ShadowRoot&&(tt.ShadyCSS===void 0||tt.ShadyCSS.nativeSha
       <ha-card>
         <div class="card-pad">
           <div class="section-title">Comfort Profiles</div>
-          ${e?n`<div class="zone-legend">${t.map((i,o)=>n`<span class="legend-item"><span class="legend-num">${H[o]||o+1}</span> ${i.name}</span>`)}</div>`:p}
-          ${z.map(i=>n`
+          ${e?n`<div class="zone-legend">${t.map((o,i)=>n`<span class="legend-item"><span class="legend-num">${T[i]||i+1}</span> ${o.name}</span>`)}</div>`:p}
+          ${M.map(o=>n`
             <div class="prof-card">
-              <div class="prof-header">${i}</div>
-              ${t.map((o,r)=>{let d=o.activities?.[i]||{},c=`${o.id}_${i}`,a=this._profileEdits[c],h=a?.htsp??(d.htsp?Math.round(Number(d.htsp)||x):x),u=a?.clsp??(d.clsp?Math.round(Number(d.clsp)||$):$),f=a?.fan??d.fan??"low",_=e?H[r]||r+1:o.name;return n`
+              <div class="prof-header">${o}</div>
+              ${t.map((i,r)=>{let d=i.activities?.[o]||{},c=`${i.id}_${o}`,a=this._profileEdits[c],h=a?.htsp??(d.htsp?Math.round(Number(d.htsp)||$):$),u=a?.clsp??(d.clsp?Math.round(Number(d.clsp)||w):w),m=a?.fan??d.fan??"low",f=e?T[r]||r+1:i.name;return n`
                   <div class="prof-line">
-                    <span class="prof-name ${e?"prof-name-compact":""}">${_}</span>
+                    <span class="prof-name ${e?"prof-name-compact":""}">${f}</span>
                     <div class="sp-row">
-                      <button class="btn-adj" @click=${()=>this._profAdj(o.id,i,"htsp",-1)}>−</button>
+                      <button class="btn-adj" @click=${()=>this._profAdj(i.id,o,"htsp",-1)}>−</button>
                       <span class="sp-val sp-heat">${h}°</span>
-                      <button class="btn-adj" @click=${()=>this._profAdj(o.id,i,"htsp",1)}>+</button>
+                      <button class="btn-adj" @click=${()=>this._profAdj(i.id,o,"htsp",1)}>+</button>
                     </div>
                     <div class="sp-row">
-                      <button class="btn-adj" @click=${()=>this._profAdj(o.id,i,"clsp",-1)}>−</button>
+                      <button class="btn-adj" @click=${()=>this._profAdj(i.id,o,"clsp",-1)}>−</button>
                       <span class="sp-val sp-cool">${u}°</span>
-                      <button class="btn-adj" @click=${()=>this._profAdj(o.id,i,"clsp",1)}>+</button>
+                      <button class="btn-adj" @click=${()=>this._profAdj(i.id,o,"clsp",1)}>+</button>
                     </div>
                     <div class="prof-fan">
                       <span class="prof-fan-label">Fan</span>
-                      <select class="sched-select" .value=${f} @change=${b=>this._profFan(o.id,i,b.target.value)}>
-                        ${rt.map(b=>n`<option value=${b} ?selected=${b===f}>${b}</option>`)}
+                      <select class="sched-select" .value=${m} @change=${g=>this._profFan(i.id,o,g.target.value)}>
+                        ${lt.map(g=>n`<option value=${g} ?selected=${g===m}>${g}</option>`)}
                       </select>
                     </div>
                   </div>`})}
@@ -461,7 +468,7 @@ var tt=globalThis,et=tt.ShadowRoot&&(tt.ShadyCSS===void 0||tt.ShadyCSS.nativeSha
               <button class="btn btn-primary" @click=${()=>this._saveProfs()}>Save profiles</button>
             </div>`:p}
         </div>
-      </ha-card>`}};customElements.get("infinitude-profiles-card")||customElements.define("infinitude-profiles-card",wt);window.customCards=window.customCards||[];window.customCards.some(l=>l.type==="infinitude-profiles-card")||window.customCards.push({type:"infinitude-profiles-card",name:"Infinitude Profiles",description:"Comfort profile editing for Carrier/Bryant Infinity thermostat",preview:!1});var At=class extends w{static properties={...w.baseProperties,_tab:{state:!0},_schedDay:{state:!0},_schedEdits:{state:!0},_profileEdits:{state:!0},_pendingTemps:{state:!0},_whHoldOpen:{state:!0},_whHoldActivity:{state:!0},_whHoldDuration:{state:!0},_whHoldCustom:{state:!0},_holdOpen:{state:!0},_holdActivity:{state:!0},_holdDuration:{state:!0},_holdCustom:{state:!0},_holdHtsp:{state:!0},_holdClsp:{state:!0},_holdFan:{state:!0}};constructor(){super(),this._tab="status",this._schedDay=C[Z[new Date().getDay()]],this._schedEdits={},this._profileEdits={},this._tempAdj={},this._pendingTemps={},this._whHoldOpen=!1,this._whHoldActivity="home",this._whHoldDuration="120",this._whHoldCustom="",this._holdOpen=null,this._holdActivity="home",this._holdDuration="120",this._holdCustom="",this._holdHtsp=x,this._holdClsp=$,this._holdFan="auto",this._saving=!1,this._savingProfs=!1}static getConfigElement(){return document.createElement("div")}static getStubConfig(){return{}}getCardSize(){return 8}static styles=[M,S`
+      </ha-card>`}};customElements.get("infinitude-profiles-card")||customElements.define("infinitude-profiles-card",kt);window.customCards=window.customCards||[];window.customCards.some(l=>l.type==="infinitude-profiles-card")||window.customCards.push({type:"infinitude-profiles-card",name:"Infinitude Profiles",description:"Comfort profile editing for Carrier/Bryant Infinity thermostat",preview:!1});var St=class extends A{static properties={...A.baseProperties,_tab:{state:!0},_schedDay:{state:!0},_schedEdits:{state:!0},_profileEdits:{state:!0},_pendingTemps:{state:!0},_whHoldOpen:{state:!0},_whHoldActivity:{state:!0},_whHoldDuration:{state:!0},_whHoldCustom:{state:!0},_holdOpen:{state:!0},_holdActivity:{state:!0},_holdDuration:{state:!0},_holdCustom:{state:!0},_holdHtsp:{state:!0},_holdClsp:{state:!0},_holdFan:{state:!0}};constructor(){super(),this._tab="status",this._schedDay=H[J[new Date().getDay()]],this._schedEdits={},this._profileEdits={},this._tempAdj={},this._pendingTemps={},this._whHoldOpen=!1,this._whHoldActivity="home",this._whHoldDuration="120",this._whHoldCustom="",this._holdOpen=null,this._holdActivity="home",this._holdDuration="120",this._holdCustom="",this._holdHtsp=$,this._holdClsp=w,this._holdFan="auto",this._saving=!1,this._savingProfs=!1}connectedCallback(){super.connectedCallback(),this._staleTimer=setInterval(()=>this.requestUpdate(),3e4)}disconnectedCallback(){super.disconnectedCallback(),clearInterval(this._staleTimer)}static getConfigElement(){return document.createElement("div")}static getStubConfig(){return{}}getCardSize(){return 8}static styles=[O,C`
     .card-header {
       display: flex; align-items: center;
       padding: 12px 16px 8px; gap: 8px;
@@ -576,6 +583,20 @@ var tt=globalThis,et=tt.ShadowRoot&&(tt.ShadyCSS===void 0||tt.ShadyCSS.nativeSha
     .prof-name-compact { width: 28px; min-width: 28px; font-size: 14px; text-align: center; }
     .prof-fan { display: flex; align-items: center; gap: 4px; }
     .prof-fan-label { font-size: 10px; color: var(--secondary-text-color); }
+    .zone-cond-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .zone-cond-dot.heating { background: var(--label-badge-red, #f97316); }
+    .zone-cond-dot.cooling { background: var(--label-badge-blue, #38bdf8); }
+    .zone-cond-dot.drying  { background: var(--accent-color, #a78bfa); }
+    .zone-cond-dot.idle    { background: var(--secondary-text-color); opacity: 0.4; }
+    .zone-activity-pill {
+      font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 20px;
+      background: var(--secondary-background-color); color: var(--secondary-text-color);
+    }
+    .stale-warn {
+      margin-top: 8px; padding: 6px 12px; margin-bottom: 8px;
+      background: rgba(251,191,36,0.10); border: 1px solid rgba(251,191,36,0.28);
+      border-radius: 8px; font-size: 12px; color: var(--warning-color, #fbbf24);
+    }
   `];render(){if(!this.hass)return p;if(!this._registryLoaded)return n`<ha-card>
         <div style="padding:24px;text-align:center;color:var(--secondary-text-color)">Loading…</div>
       </ha-card>`;let t=this._findEntities();return!t.climates.length&&!this._config.show_empty?n`<ha-card>
@@ -593,28 +614,28 @@ var tt=globalThis,et=tt.ShadowRoot&&(tt.ShadyCSS===void 0||tt.ShadyCSS.nativeSha
           ${this._tab==="schedule"?this._sched():p}
           ${this._tab==="profiles"?this._profs():p}
         </div>
-      </ha-card>`}_hdr(t){let{system:e}=t,s=e.info?this._st(e.info)?.state!=="unavailable":!1,i=e.info?this._at(e.info,"carrier_ok"):null;return n`
+      </ha-card>`}_hdr(t){let{system:e}=t,s=e.info?this._st(e.info)?.state!=="unavailable":!1,o=e.info?this._at(e.info,"carrier_ok"):null;return n`
       <div class="header-left">
         <span class="header-title">infinitude</span>
         <span class="conn-dot ${s?"ok":"err"}" title="${s?"Infinitude: connected":"Infinitude: unavailable"}"></span>
-        <span class="conn-dot ${i===!0?"ok":i===!1?"err":"unk"}" title="${i===!0?"Carrier cloud: connected":i===!1?"Carrier cloud: unreachable":"Carrier cloud: checking\u2026"}"></span>
-        <span style="font-size:10px;color:var(--secondary-text-color);opacity:0.5">v${ot}</span>
+        <span class="conn-dot ${o===!0?"ok":o===!1?"err":"unk"}" title="${o===!0?"Carrier cloud: connected":o===!1?"Carrier cloud: unreachable":"Carrier cloud: checking\u2026"}"></span>
+        <span style="font-size:10px;color:var(--secondary-text-color);opacity:0.5">v${rt}</span>
       </div>`}_tabs(){return n`${["status","schedule","profiles"].map(e=>n`
       <div class="tab ${this._tab===e?"active":""}"
            @click=${()=>{this._tab=e}}>${e.charAt(0).toUpperCase()+e.slice(1)}</div>`)}`}_status(t){let{climates:e}=t;return e.length?n`
       ${this._summaryStrip(t)}
-      <div class="zone-grid">${e.map(s=>this._zoneCard(s))}</div>`:n`<div style="padding:20px;text-align:center;color:var(--secondary-text-color)">No zone entities found</div>`}_summaryStrip(t){let{system:e,selects:s,climates:i}=t,o=i.length&&this._st(i[0])?.state||"off",r=["off","heat","cool","heat_cool"],d={off:"Off",heat:"Heat",cool:"Cool",heat_cool:"Auto"},c=this._st(e.oat),a="\u2013";if(c?.state&&c.state!=="unavailable")a=`${Math.round(Number(c.state))}\xB0`;else if(i.length){let v=this._at(i[0],"outdoor_temperature");v!=null&&(a=`${Math.round(Number(v))}\xB0`)}let h=this._st(e.opStatus),u=h?.state&&h.state!=="unavailable"?h.state:"",f=this._st(e.humidifier)?.state==="on",_=this._st(s.wholeHouse),b=_&&_.state!=="off",k=i.length?this._at(i[0],"whole_house_hold_until"):null,A=i.length?this._at(i[0],"current_humidity"):null;return n`
+      <div class="zone-grid">${e.map(s=>this._zoneCard(s))}</div>`:n`<div style="padding:20px;text-align:center;color:var(--secondary-text-color)">No zone entities found</div>`}_summaryStrip(t){let{system:e,selects:s,climates:o}=t,i=o.length&&this._st(o[0])?.state||"off",r=["off","heat","cool","heat_cool"],d={off:"Off",heat:"Heat",cool:"Cool",heat_cool:"Auto"},c=this._st(e.oat),a="\u2013";if(c?.state&&c.state!=="unavailable")a=`${Math.round(Number(c.state))}\xB0`;else if(o.length){let _=this._at(o[0],"outdoor_temperature");_!=null&&(a=`${Math.round(Number(_))}\xB0`)}let h=this._st(e.opStatus),u=h?.state&&h.state!=="unavailable"?h.state:"",m=this._st(e.humidifier)?.state==="on",f=this._st(s.wholeHouse),g=f&&f.state!=="off",z=o.length?this._at(o[0],"whole_house_hold_until"):null,E=o.length?this._at(o[0],"current_humidity"):null,S=o.some(_=>this._at(_,"hvac_action")==="heating"),k=o.some(_=>this._at(_,"hvac_action")==="cooling"),v=o.some(_=>this._at(_,"hvac_action")==="drying"),b=S?"Heating":k?"Cooling":v?"Dehumidifying":u||"Idle",y=S?"heat":k?"cool":"",ct=this._st(e.info),x=ct?.last_updated?Date.now()-new Date(ct.last_updated).getTime()>9e4:!1;return n`
       <div class="mode-row">
         <span class="mode-label">Mode</span>
         <div class="mode-pills">
-          ${r.map(v=>n`<div class="mode-pill ${v===o?"active":""} ${v==="heat"?"heat":v==="cool"?"cool":v==="heat_cool"?"auto":""}"
-              @click=${()=>this._setHvacMode(i[0],v)}>${d[v]}</div>`)}
+          ${r.map(_=>n`<div class="mode-pill ${_===i?"active":""} ${_==="heat"?"heat":_==="cool"?"cool":_==="heat_cool"?"auto":""}"
+              @click=${()=>this._setHvacMode(o[0],_)}>${d[_]}</div>`)}
         </div>
       </div>
       <div class="summary-stats">
         <div class="summary-stat">
           <span class="summary-stat-label">Status</span>
-          <span class="summary-stat-val ${u.toLowerCase().includes("heat")?"heat":u.toLowerCase().includes("cool")?"cool":""}">${u||"Idle"}</span>
+          <span class="summary-stat-val ${y}">${b}</span>
         </div>
         <div class="summary-divider"></div>
         <div class="summary-stat">
@@ -624,35 +645,36 @@ var tt=globalThis,et=tt.ShadowRoot&&(tt.ShadyCSS===void 0||tt.ShadyCSS.nativeSha
         <div class="summary-divider"></div>
         <div class="summary-stat">
           <span class="summary-stat-label">Humidity</span>
-          <span class="summary-stat-val">${A!=null?`${A}%`:"\u2013"}</span>
+          <span class="summary-stat-val">${E!=null?`${E}%`:"\u2013"}</span>
         </div>
-        ${f?n`
+        ${m?n`
           <div class="summary-divider"></div>
           <div class="summary-stat">
             <span class="summary-stat-label">Humidifier</span>
             <span class="summary-stat-val" style="color:var(--label-badge-blue,#38bdf8)">💧 On</span>
           </div>`:p}
       </div>
-      ${b?n`
+      ${x?n`<div class="stale-warn">⚠ Thermostat data is stale — system may be offline</div>`:p}
+      ${g?n`
         <div class="wh-hold" @click=${()=>this._cancelWholeHouseHold()}>
           <ha-icon icon="mdi:home-lock" style="--mdc-icon-size:16px"></ha-icon>
-          <span>Whole house: <strong>${_.state}</strong>${k?n` · <span style="opacity:0.85">${this._otmrRelative(k)}</span>`:p}</span>
+          <span>Whole house: <strong>${f.state}</strong>${z?n` · <span style="opacity:0.85">${this._otmrRelative(z)}</span>`:p}</span>
           <span style="margin-left:auto;opacity:0.7">Tap to cancel</span>
         </div>`:n`
         ${this._whHoldOpen?n`
           <div class="wh-set">
             <span class="wh-set-label">WH Hold</span>
             <div class="wh-pills">
-              ${z.map(v=>n`
-                <div class="wh-pill ${this._whHoldActivity===v?"active":""}"
-                     @click=${()=>{this._whHoldActivity=v}}>${v}</div>`)}
+              ${M.map(_=>n`
+                <div class="wh-pill ${this._whHoldActivity===_?"active":""}"
+                     @click=${()=>{this._whHoldActivity=_}}>${_}</div>`)}
             </div>
-            <select class="hold-dur-select" @change=${v=>{this._whHoldDuration=v.target.value}}>
-              ${L.map(v=>n`<option value=${v.v} ?selected=${v.v===this._whHoldDuration}>${v.l}</option>`)}
+            <select class="hold-dur-select" @change=${_=>{this._whHoldDuration=_.target.value}}>
+              ${R.map(_=>n`<option value=${_.v} ?selected=${_.v===this._whHoldDuration}>${_.l}</option>`)}
             </select>
             ${this._whHoldDuration==="custom"?n`
               <input type="time" class="hold-time-input" step="900" .value=${this._whHoldCustom}
-                     @change=${v=>{this._whHoldCustom=v.target.value}}>`:p}
+                     @change=${_=>{this._whHoldCustom=_.target.value}}>`:p}
             <button class="btn btn-primary" style="font-size:11px;padding:4px 12px" @click=${()=>this._setWholeHouseHold()}>Apply</button>
             <button class="btn" style="font-size:11px;padding:4px 10px" @click=${()=>{this._whHoldOpen=!1}}>Cancel</button>
           </div>`:n`
@@ -661,71 +683,73 @@ var tt=globalThis,et=tt.ShadowRoot&&(tt.ShadyCSS===void 0||tt.ShadyCSS.nativeSha
               <ha-icon icon="mdi:home-lock" style="--mdc-icon-size:14px;vertical-align:middle;margin-right:4px"></ha-icon>Set WH hold
             </button>
           </div>`}
-      `}`}_zoneCard(t){let e=this._st(t);if(!e)return p;let s=e.attributes||{},i=(s.friendly_name||t).replace(/^Infinitude\s+/i,"").replace(/^infinitude_direct\s+/i,""),o=s.current_temperature!=null?Math.round(s.current_temperature):"\u2013",r=s.current_humidity,d=e.state||"off",c=s.hvac_action||"idle",a=s.preset_mode||"\u2013",h=c==="heating"?"heating":c==="cooling"?"cooling":c==="drying"?"drying":"",u=c==="idle"?"Idle":c.charAt(0).toUpperCase()+c.slice(1),f=d==="heat_cool",_=!!s.hold_active,b=s.hold_activity||a,k=s.hold_until,A=this._holdOpen===t,v=this._pendingTemps[t],E=this._hasPending(t),g=v?.heat??s.target_temp_low??s.temperature??null,m=v?.cool??s.target_temp_high??(d==="cool"?s.temperature:null)??null;return n`
+      `}`}_zoneCard(t){let e=this._st(t);if(!e)return p;let s=e.attributes||{},o=(s.friendly_name||t).replace(/^Infinitude\s+/i,"").replace(/^infinitude_direct\s+/i,""),i=s.current_temperature!=null?Math.round(s.current_temperature):"\u2013",r=s.current_humidity,d=e.state||"off",c=s.hvac_action||"idle",a=s.preset_mode||"\u2013",h=c==="heating"?"heating":c==="cooling"?"cooling":c==="drying"?"drying":"",u=c==="idle"?"Idle":c.charAt(0).toUpperCase()+c.slice(1),m=d==="heat_cool",f=!!s.hold_active,g=s.hold_activity||a,z=s.hold_until,E=this._holdOpen===t,S=this._pendingTemps[t],k=this._hasPending(t),v=S?.heat??s.target_temp_low??s.temperature??null,b=S?.cool??s.target_temp_high??(d==="cool"?s.temperature:null)??null,y=h||"idle",ct=c==="drying"?"Dehumidifying":u;return n`
       <div class="zone-card ${h}">
         <div class="zone-top">
-          <span class="zone-name">${i}</span>
-          <span class="zone-badge ${h}">${u}</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="zone-cond-dot ${y}"></span>
+            <span class="zone-name">${o}</span>
+          </div>
+          <span class="zone-activity-pill">${a}</span>
         </div>
         <div class="zone-body">
           <div>
-            <span class="temp-hero">${o}</span><span class="temp-unit">°F</span>
-            ${r!=null?n`<div style="font-size:11px;color:var(--secondary-text-color);margin-top:2px">${r}% RH</div>`:p}
+            <span class="temp-hero">${i}</span><span class="temp-unit">°F</span>
           </div>
           <div class="zone-sp">
-            ${g!=null?n`
+            ${v!=null?n`
               <div class="sp-row">
                 <button class="btn-adj" @click=${()=>this._adjustTemp(t,-1,"heat")}>−</button>
-                <span class="sp-val sp-heat ${E?"sp-pending":""}">${Math.round(g)}°</span>
+                <span class="sp-val sp-heat ${k?"sp-pending":""}">${Math.round(v)}°</span>
                 <button class="btn-adj" @click=${()=>this._adjustTemp(t,1,"heat")}>+</button>
               </div>`:p}
-            ${f&&m!=null?n`
+            ${m&&b!=null?n`
               <div class="sp-row">
                 <button class="btn-adj" @click=${()=>this._adjustTemp(t,-1,"cool")}>−</button>
-                <span class="sp-val sp-cool ${E?"sp-pending":""}">${Math.round(m)}°</span>
+                <span class="sp-val sp-cool ${k?"sp-pending":""}">${Math.round(b)}°</span>
                 <button class="btn-adj" @click=${()=>this._adjustTemp(t,1,"cool")}>+</button>
               </div>`:p}
           </div>
         </div>
         <div class="zone-meta">
-          <span class="meta-item">Activity <span class="meta-val">${a}</span></span>
+          ${r!=null?n`<span class="meta-item">RH <span class="meta-val">${r}%</span></span>`:p}
           ${s.fan_mode?n`<span class="meta-item">Fan <span class="meta-val">${s.fan_mode}</span></span>`:p}
           ${s.damper_position!=null?n`<span class="meta-item">Damper <span class="meta-val">${s.damper_position}%</span></span>`:p}
         </div>
         <div class="zone-preset-row">
-          ${z.map(y=>n`
-            <div class="preset-btn ${a===y?"active":""}"
-                 @click=${()=>this._setPreset(t,y)}>${y}</div>`)}
+          ${M.map(x=>n`
+            <div class="preset-btn ${a===x?"active":""}"
+                 @click=${()=>this._setPreset(t,x)}>${x}</div>`)}
         </div>
-        ${_?n`
+        ${f?n`
           <div class="zone-hold">
-            <span class="hold-label">Hold: ${b}${k?` \xB7 ${this._otmrRelative(k)}`:""}</span>
+            <span class="hold-label">Hold: ${g}${z?` \xB7 ${this._otmrRelative(z)}`:""}</span>
             <button class="btn" style="font-size:11px;padding:3px 10px;color:var(--error-color,#f87171)" @click=${()=>this._cancelHold(t)}>Cancel</button>
           </div>`:p}
-        ${A?n`
+        ${E?n`
           <div class="zone-hold-picker">
             <div class="hold-picker-row">
               <div class="wh-pills">
-                ${at.map(y=>n`
-                  <div class="wh-pill ${this._holdActivity===y?"active":""}"
-                       @click=${()=>{this._holdActivity=y,y==="manual"&&this._initHoldManual(t)}}>${y}</div>`)}
+                ${nt.map(x=>n`
+                  <div class="wh-pill ${this._holdActivity===x?"active":""}"
+                       @click=${()=>{this._holdActivity=x,x==="manual"&&this._initHoldManual(t)}}>${x}</div>`)}
               </div>
             </div>
             ${this._holdActivity==="manual"?n`
               <div class="hold-picker-row" style="gap:10px;flex-wrap:wrap">
                 <div class="sp-row">
-                  <button class="btn-adj" @click=${()=>{this._holdHtsp=Math.max(F,this._holdHtsp-1)}}>−</button>
+                  <button class="btn-adj" @click=${()=>{this._holdHtsp=Math.max(B,this._holdHtsp-1)}}>−</button>
                   <span class="sp-val sp-heat">${this._holdHtsp}°</span>
-                  <button class="btn-adj" @click=${()=>{this._holdHtsp=Math.min(W,this._holdHtsp+1)}}>+</button>
+                  <button class="btn-adj" @click=${()=>{this._holdHtsp=Math.min(V,this._holdHtsp+1)}}>+</button>
                 </div>
                 <div class="sp-row">
-                  <button class="btn-adj" @click=${()=>{this._holdClsp=Math.max(B,this._holdClsp-1)}}>−</button>
+                  <button class="btn-adj" @click=${()=>{this._holdClsp=Math.max(q,this._holdClsp-1)}}>−</button>
                   <span class="sp-val sp-cool">${this._holdClsp}°</span>
-                  <button class="btn-adj" @click=${()=>{this._holdClsp=Math.min(V,this._holdClsp+1)}}>+</button>
+                  <button class="btn-adj" @click=${()=>{this._holdClsp=Math.min(Z,this._holdClsp+1)}}>+</button>
                 </div>
                 <div style="display:flex;align-items:center;gap:4px">
                   <span style="font-size:10px;color:var(--secondary-text-color)">Fan</span>
-                  <select class="hold-dur-select" style="width:auto" .value=${this._holdFan} @change=${y=>{this._holdFan=y.target.value}}>
+                  <select class="hold-dur-select" style="width:auto" .value=${this._holdFan} @change=${x=>{this._holdFan=x.target.value}}>
                     <option value="auto">Auto</option>
                     <option value="low">Low</option>
                     <option value="med">Med</option>
@@ -734,18 +758,18 @@ var tt=globalThis,et=tt.ShadowRoot&&(tt.ShadyCSS===void 0||tt.ShadyCSS.nativeSha
                 </div>
               </div>`:p}
             <div class="hold-picker-row">
-              <select class="hold-dur-select" @change=${y=>{this._holdDuration=y.target.value}}>
-                ${L.map(y=>n`<option value=${y.v} ?selected=${y.v===this._holdDuration}>${y.l}</option>`)}
+              <select class="hold-dur-select" @change=${x=>{this._holdDuration=x.target.value}}>
+                ${R.map(x=>n`<option value=${x.v} ?selected=${x.v===this._holdDuration}>${x.l}</option>`)}
               </select>
               ${this._holdDuration==="custom"?n`
                 <input type="time" class="hold-time-input" step="900" .value=${this._holdCustom}
-                       @change=${y=>{this._holdCustom=y.target.value}}>`:p}
+                       @change=${x=>{this._holdCustom=x.target.value}}>`:p}
             </div>
             <div class="hold-picker-row">
               <button class="btn btn-primary" style="font-size:11px;padding:4px 12px" @click=${()=>this._setZoneHold(t)}>Apply</button>
               <button class="btn" style="font-size:11px;padding:4px 10px" @click=${()=>{this._holdOpen=null}}>Cancel</button>
             </div>
-          </div>`:_?p:n`
+          </div>`:f?p:n`
           <div class="zone-actions">
             <button class="btn" style="font-size:11px;padding:4px 12px" @click=${()=>{this._holdActivity=a!=="\u2013"?a:"home",this._holdDuration="120",this._holdCustom="",this._holdActivity==="manual"&&this._initHoldManual(t),this._holdOpen=t}}>Set hold</button>
           </div>`}
@@ -753,20 +777,20 @@ var tt=globalThis,et=tt.ShadowRoot&&(tt.ShadyCSS===void 0||tt.ShadyCSS.nativeSha
       <div style="padding:20px;text-align:center;color:var(--secondary-text-color)">
         <ha-icon icon="mdi:calendar-clock" style="--mdc-icon-size:48px;opacity:0.3;margin-bottom:12px;display:block"></ha-icon>
         No schedule data available. Waiting for thermostat data…
-      </div>`;let i=C[Z[new Date().getDay()]],o={},r={};for(let a=0;a<e.length;a++)o[e[a].id]=e[a].name,r[e[a].id]=a;let d=0;for(let a of s)d=Math.max(d,(t[a]?.[this._schedDay]||[]).length);d||(d=5);let c=Object.keys(this._schedEdits).length>0;return n`
+      </div>`;let o=H[J[new Date().getDay()]],i={},r={};for(let a=0;a<e.length;a++)i[e[a].id]=e[a].name,r[e[a].id]=a;let d=0;for(let a of s)d=Math.max(d,(t[a]?.[this._schedDay]||[]).length);d||(d=5);let c=Object.keys(this._schedEdits).length>0;return n`
       <div class="section-title">Schedule</div>
-      ${s.length>1?n`<div class="zone-legend">${s.map((a,h)=>n`<span class="legend-item"><span class="legend-num">${H[h]||h+1}</span> ${o[a]||`Zone ${a}`}</span>`)}</div>`:p}
+      ${s.length>1?n`<div class="zone-legend">${s.map((a,h)=>n`<span class="legend-item"><span class="legend-num">${T[h]||h+1}</span> ${i[a]||`Zone ${a}`}</span>`)}</div>`:p}
       <div class="sched-day-tabs">
-        ${C.map(a=>n`
-          <div class="day-tab ${a===this._schedDay?"active":""} ${a===i&&a!==this._schedDay?"today":""}"
+        ${H.map(a=>n`
+          <div class="day-tab ${a===this._schedDay?"active":""} ${a===o&&a!==this._schedDay?"today":""}"
                @click=${()=>{this._schedDay=a}}>${a.slice(0,3)}</div>`)}
       </div>
-      ${Array.from({length:d},(a,h)=>this._periodCard(h,s,t,e,o,r))}
+      ${Array.from({length:d},(a,h)=>this._periodCard(h,s,t,e,i,r))}
       <div class="copy-bar">
         <span>Copy ${this._schedDay.slice(0,3)} →</span>
         <select class="sched-select" @change=${a=>this._copySched(a)}>
           <option value="">select day…</option>
-          ${C.filter(a=>a!==this._schedDay).map(a=>n`<option value=${a}>${a.slice(0,3)}</option>`)}
+          ${H.filter(a=>a!==this._schedDay).map(a=>n`<option value=${a}>${a.slice(0,3)}</option>`)}
           <option value="__all__">All other days</option>
         </select>
       </div>
@@ -781,27 +805,27 @@ var tt=globalThis,et=tt.ShadowRoot&&(tt.ShadyCSS===void 0||tt.ShadyCSS.nativeSha
         No profile data available. Waiting for thermostat data…
       </div>`;let e=t.length>1,s=Object.keys(this._profileEdits).length>0;return n`
       <div class="section-title">Comfort Profiles</div>
-      ${e?n`<div class="zone-legend">${t.map((i,o)=>n`<span class="legend-item"><span class="legend-num">${H[o]||o+1}</span> ${i.name}</span>`)}</div>`:p}
-      ${z.map(i=>n`
+      ${e?n`<div class="zone-legend">${t.map((o,i)=>n`<span class="legend-item"><span class="legend-num">${T[i]||i+1}</span> ${o.name}</span>`)}</div>`:p}
+      ${M.map(o=>n`
         <div class="prof-card">
-          <div class="prof-header">${i}</div>
-          ${t.map((o,r)=>{let d=o.activities?.[i]||{},c=`${o.id}_${i}`,a=this._profileEdits[c],h=a?.htsp??(d.htsp?Math.round(Number(d.htsp)||x):x),u=a?.clsp??(d.clsp?Math.round(Number(d.clsp)||$):$),f=a?.fan??d.fan??"low",_=e?H[r]||r+1:o.name;return n`
+          <div class="prof-header">${o}</div>
+          ${t.map((i,r)=>{let d=i.activities?.[o]||{},c=`${i.id}_${o}`,a=this._profileEdits[c],h=a?.htsp??(d.htsp?Math.round(Number(d.htsp)||$):$),u=a?.clsp??(d.clsp?Math.round(Number(d.clsp)||w):w),m=a?.fan??d.fan??"low",f=e?T[r]||r+1:i.name;return n`
               <div class="prof-line">
-                <span class="prof-name ${e?"prof-name-compact":""}">${_}</span>
+                <span class="prof-name ${e?"prof-name-compact":""}">${f}</span>
                 <div class="sp-row">
-                  <button class="btn-adj" @click=${()=>this._profAdj(o.id,i,"htsp",-1)}>−</button>
+                  <button class="btn-adj" @click=${()=>this._profAdj(i.id,o,"htsp",-1)}>−</button>
                   <span class="sp-val sp-heat">${h}°</span>
-                  <button class="btn-adj" @click=${()=>this._profAdj(o.id,i,"htsp",1)}>+</button>
+                  <button class="btn-adj" @click=${()=>this._profAdj(i.id,o,"htsp",1)}>+</button>
                 </div>
                 <div class="sp-row">
-                  <button class="btn-adj" @click=${()=>this._profAdj(o.id,i,"clsp",-1)}>−</button>
+                  <button class="btn-adj" @click=${()=>this._profAdj(i.id,o,"clsp",-1)}>−</button>
                   <span class="sp-val sp-cool">${u}°</span>
-                  <button class="btn-adj" @click=${()=>this._profAdj(o.id,i,"clsp",1)}>+</button>
+                  <button class="btn-adj" @click=${()=>this._profAdj(i.id,o,"clsp",1)}>+</button>
                 </div>
                 <div class="prof-fan">
                   <span class="prof-fan-label">Fan</span>
-                  <select class="sched-select" .value=${f} @change=${b=>this._profFan(o.id,i,b.target.value)}>
-                    ${rt.map(b=>n`<option value=${b} ?selected=${b===f}>${b}</option>`)}
+                  <select class="sched-select" .value=${m} @change=${g=>this._profFan(i.id,o,g.target.value)}>
+                    ${lt.map(g=>n`<option value=${g} ?selected=${g===m}>${g}</option>`)}
                   </select>
                 </div>
               </div>`})}
@@ -811,7 +835,7 @@ var tt=globalThis,et=tt.ShadowRoot&&(tt.ShadyCSS===void 0||tt.ShadyCSS.nativeSha
           <span class="action-bar-label">● Unsaved changes</span>
           <button class="btn" @click=${()=>{this._profileEdits={}}}>Discard</button>
           <button class="btn btn-primary" @click=${()=>this._saveProfs()}>Save profiles</button>
-        </div>`:p}`}};customElements.get("infinitude-hvac-card")||customElements.define("infinitude-hvac-card",At);window.customCards=window.customCards||[];window.customCards.some(l=>l.type==="infinitude-hvac-card")||window.customCards.push({type:"infinitude-hvac-card",name:"Infinitude HVAC Card",description:"Full HVAC dashboard for Carrier/Bryant Infinity thermostats",preview:!1});
+        </div>`:p}`}};customElements.get("infinitude-hvac-card")||customElements.define("infinitude-hvac-card",St);window.customCards=window.customCards||[];window.customCards.some(l=>l.type==="infinitude-hvac-card")||window.customCards.push({type:"infinitude-hvac-card",name:"Infinitude HVAC Card",description:"Full HVAC dashboard for Carrier/Bryant Infinity thermostats",preview:!1});
 /*! Bundled license information:
 
 @lit/reactive-element/css-tag.js:

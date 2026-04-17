@@ -86,6 +86,15 @@ class InfinitudeZoneCard extends InfinitudeBase {
     ha-card.heating { border-left: 3px solid var(--label-badge-red, #f97316); }
     ha-card.cooling { border-left: 3px solid var(--label-badge-blue, #38bdf8); }
     ha-card.drying  { border-left: 3px solid var(--accent-color, #a78bfa); }
+    .zone-cond-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .zone-cond-dot.heating { background: var(--label-badge-red, #f97316); }
+    .zone-cond-dot.cooling { background: var(--label-badge-blue, #38bdf8); }
+    .zone-cond-dot.drying  { background: var(--accent-color, #a78bfa); }
+    .zone-cond-dot.idle    { background: var(--secondary-text-color); opacity: 0.4; }
+    .zone-activity-pill {
+      font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 20px;
+      background: var(--secondary-background-color); color: var(--secondary-text-color);
+    }
   `];
 
   render() {
@@ -115,17 +124,21 @@ class InfinitudeZoneCard extends InfinitudeBase {
     const htsp = pending?.heat ?? a.target_temp_low ?? a.temperature ?? null;
     const clsp = pending?.cool ?? a.target_temp_high ?? (mode === 'cool' ? a.temperature : null) ?? null;
 
+    const dotCls = ac || 'idle';
+
     return html`
       <ha-card class="${ac}">
         <div class="card-pad">
           <div class="zone-top">
-            <span class="zone-name">${name}</span>
-            <span class="zone-badge ${ac}">${al}</span>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span class="zone-cond-dot ${dotCls}"></span>
+              <span class="zone-name">${name}</span>
+            </div>
+            <span class="zone-activity-pill">${preset}</span>
           </div>
           <div class="zone-body">
             <div>
               <span class="temp-hero">${temp}</span><span class="temp-unit">°F</span>
-              ${rh != null ? html`<div style="font-size:11px;color:var(--secondary-text-color);margin-top:2px">${rh}% RH</div>` : nothing}
             </div>
             <div class="zone-sp">
               ${htsp != null ? html`
@@ -143,7 +156,7 @@ class InfinitudeZoneCard extends InfinitudeBase {
             </div>
           </div>
           <div class="zone-meta">
-            <span class="meta-item">Activity <span class="meta-val">${preset}</span></span>
+            ${rh != null ? html`<span class="meta-item">RH <span class="meta-val">${rh}%</span></span>` : nothing}
             ${a.fan_mode ? html`<span class="meta-item">Fan <span class="meta-val">${a.fan_mode}</span></span>` : nothing}
             ${a.damper_position != null ? html`<span class="meta-item">Damper <span class="meta-val">${a.damper_position}%</span></span>` : nothing}
           </div>

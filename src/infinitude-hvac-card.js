@@ -69,6 +69,16 @@ class InfinitudeHVACCard extends InfinitudeBase {
     this._savingProfs = false;
   }
 
+  connectedCallback() {
+    super.connectedCallback();
+    this._staleTimer = setInterval(() => this.requestUpdate(), 30000);
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    clearInterval(this._staleTimer);
+  }
+
   static getConfigElement() { return document.createElement('div'); }
   static getStubConfig() { return {}; }
   getCardSize() { return 8; }
@@ -188,6 +198,20 @@ class InfinitudeHVACCard extends InfinitudeBase {
     .prof-name-compact { width: 28px; min-width: 28px; font-size: 14px; text-align: center; }
     .prof-fan { display: flex; align-items: center; gap: 4px; }
     .prof-fan-label { font-size: 10px; color: var(--secondary-text-color); }
+    .zone-cond-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .zone-cond-dot.heating { background: var(--label-badge-red, #f97316); }
+    .zone-cond-dot.cooling { background: var(--label-badge-blue, #38bdf8); }
+    .zone-cond-dot.drying  { background: var(--accent-color, #a78bfa); }
+    .zone-cond-dot.idle    { background: var(--secondary-text-color); opacity: 0.4; }
+    .zone-activity-pill {
+      font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 20px;
+      background: var(--secondary-background-color); color: var(--secondary-text-color);
+    }
+    .stale-warn {
+      margin-top: 8px; padding: 6px 12px; margin-bottom: 8px;
+      background: rgba(251,191,36,0.10); border: 1px solid rgba(251,191,36,0.28);
+      border-radius: 8px; font-size: 12px; color: var(--warning-color, #fbbf24);
+    }
   `];
 
   // ── Render ─────────────────────────────────────────────────────────────
@@ -271,6 +295,17 @@ class InfinitudeHVACCard extends InfinitudeBase {
     const whOtmr = climates.length ? this._at(climates[0], 'whole_house_hold_until') : null;
     const rh = climates.length ? this._at(climates[0], 'current_humidity') : null;
 
+    const anyHeating = climates.some(eid => this._at(eid, 'hvac_action') === 'heating');
+    const anyCooling = climates.some(eid => this._at(eid, 'hvac_action') === 'cooling');
+    const anyDrying  = climates.some(eid => this._at(eid, 'hvac_action') === 'drying');
+    const effectiveStatus = anyHeating ? 'Heating' : anyCooling ? 'Cooling' : anyDrying ? 'Dehumidifying' : (opStatus || 'Idle');
+    const statusCls = anyHeating ? 'heat' : anyCooling ? 'cool' : '';
+
+    const infoState = this._st(system.info);
+    const stale = infoState?.last_updated
+      ? (Date.now() - new Date(infoState.last_updated).getTime()) > 90000
+      : false;
+
     return html`
       <div class="mode-row">
         <span class="mode-label">Mode</span>
@@ -285,7 +320,7 @@ class InfinitudeHVACCard extends InfinitudeBase {
       <div class="summary-stats">
         <div class="summary-stat">
           <span class="summary-stat-label">Status</span>
-          <span class="summary-stat-val ${opStatus.toLowerCase().includes('heat') ? 'heat' : opStatus.toLowerCase().includes('cool') ? 'cool' : ''}">${opStatus || 'Idle'}</span>
+          <span class="summary-stat-val ${statusCls}">${effectiveStatus}</span>
         </div>
         <div class="summary-divider"></div>
         <div class="summary-stat">
@@ -304,6 +339,7 @@ class InfinitudeHVACCard extends InfinitudeBase {
             <span class="summary-stat-val" style="color:var(--label-badge-blue,#38bdf8)">💧 On</span>
           </div>` : nothing}
       </div>
+      ${stale ? html`<div class="stale-warn">⚠ Thermostat data is stale — system may be offline</div>` : nothing}
       ${whHold ? html`
         <div class="wh-hold" @click=${() => this._cancelWholeHouseHold()}>
           <ha-icon icon="mdi:home-lock" style="--mdc-icon-size:16px"></ha-icon>
@@ -359,16 +395,21 @@ class InfinitudeHVACCard extends InfinitudeBase {
     const htsp = pending?.heat ?? a.target_temp_low ?? a.temperature ?? null;
     const clsp = pending?.cool ?? a.target_temp_high ?? (mode === 'cool' ? a.temperature : null) ?? null;
 
+    const dotCls = ac || 'idle';
+    const badgeLabel = action === 'drying' ? 'Dehumidifying' : al;
+
     return html`
       <div class="zone-card ${ac}">
         <div class="zone-top">
-          <span class="zone-name">${name}</span>
-          <span class="zone-badge ${ac}">${al}</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="zone-cond-dot ${dotCls}"></span>
+            <span class="zone-name">${name}</span>
+          </div>
+          <span class="zone-activity-pill">${preset}</span>
         </div>
         <div class="zone-body">
           <div>
             <span class="temp-hero">${temp}</span><span class="temp-unit">°F</span>
-            ${rh != null ? html`<div style="font-size:11px;color:var(--secondary-text-color);margin-top:2px">${rh}% RH</div>` : nothing}
           </div>
           <div class="zone-sp">
             ${htsp != null ? html`
@@ -386,7 +427,7 @@ class InfinitudeHVACCard extends InfinitudeBase {
           </div>
         </div>
         <div class="zone-meta">
-          <span class="meta-item">Activity <span class="meta-val">${preset}</span></span>
+          ${rh != null ? html`<span class="meta-item">RH <span class="meta-val">${rh}%</span></span>` : nothing}
           ${a.fan_mode ? html`<span class="meta-item">Fan <span class="meta-val">${a.fan_mode}</span></span>` : nothing}
           ${a.damper_position != null ? html`<span class="meta-item">Damper <span class="meta-val">${a.damper_position}%</span></span>` : nothing}
         </div>
