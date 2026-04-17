@@ -157,9 +157,14 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
         if not z:
             return HVACAction.OFF
         cond = z.get("conditioning", "idle")
+        op_mode = self.coordinator.data.get("op_mode", "")
         if cond == "active_heat":
             return HVACAction.HEATING
         if cond == "active_cool":
+            # Carrier reports active_cool for both cooling and dehum (compressor
+            # runs for both). The system's status-level mode distinguishes intent.
+            if op_mode == "dehumidify":
+                return HVACAction.DRYING
             return HVACAction.COOLING
         if "dehum" in cond:
             return HVACAction.DRYING

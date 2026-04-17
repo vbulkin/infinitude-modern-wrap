@@ -91,6 +91,7 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
 
         raw_mode = self._v(cfg.get("mode")) or "off"
         mode = "auto" if raw_mode == "heatcool" else raw_mode
+        op_mode = self._v(st.get("mode")) or ""
         oat = self._v(st.get("oat"))
 
         cfg_zones = self._force_array(
@@ -172,6 +173,7 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
 
         return {
             "mode": mode,
+            "op_mode": op_mode,
             "oat": oat,
             "op_status": op_status,
             "humid": humid,

@@ -498,7 +498,7 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.85';
+const APP_VERSION = '1.0.86';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const JS_DAY_MAP = [6,0,1,2,3,4,5]; // JS getDay() (0=Sun) -> DAYS index
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
@@ -656,6 +656,7 @@ function processData(sysData, statusData) {
   // System summary — mode lives in systems.json config, live stats in status.json
   state.summary = {
     mode: v(cfg.mode) || '–',
+    opMode: v(st.mode) || '',
     oat: v(st.oat) || '–',
     opStatus: v(st.oprstsmsg) || '–',
     localTime: v(st.localTime),
@@ -718,6 +719,7 @@ function mergeStatus(statusData) {
   const st = statusData.status[0];
   state.summary.oat = v(st.oat) || '–';
   state.summary.opStatus = v(st.oprstsmsg) || '–';
+  state.summary.opMode = v(st.mode) || '';
   state.summary.humid = v(st.humid) || 'off';
   state.summary.localTime = v(st.localTime);
 
@@ -765,15 +767,19 @@ function renderStatus() {
   const s = state.summary;
   const modeColors = { heat: 'heat', cool: 'cool', auto: 'auto', heatcool: 'auto' };
 
-  // Derive effective status from zone conditioning states
+  // Derive effective status from zone conditioning states.
+  // active_cool runs the compressor for both cooling and dehum; the status-level
+  // mode distinguishes intent.
+  const isDehum = s.opMode === 'dehumidify';
   const activeHeat = state.zones.some(z => z.conditioning === 'active_heat');
   const activeCool = state.zones.some(z => z.conditioning === 'active_cool');
-  const activeDehum = state.zones.some(z => z.conditioning && z.conditioning.includes('dehum'));
+  const activeDehum = isDehum && activeCool
+    || state.zones.some(z => z.conditioning && z.conditioning.includes('dehum'));
   const effectiveStatus = activeHeat ? 'Heating'
-    : activeCool ? 'Cooling'
     : activeDehum ? 'Dehumidifying'
+    : activeCool ? 'Cooling'
     : capitalize(s.opStatus);
-  const statusCls = activeHeat ? 'heat' : activeCool ? 'cool' : '';
+  const statusCls = activeHeat ? 'heat' : (activeCool && !isDehum) ? 'cool' : '';
 
   const wh = state.wholeHouse || {};
   const whHtml = wh.hold
@@ -834,17 +840,19 @@ function renderStatus() {
 }
 
 function zoneCard(z) {
-  const cc = condClass(z.conditioning);
+  const isDehum = state.summary.opMode === 'dehumidify';
+  const effCond = (isDehum && z.conditioning === 'active_cool') ? 'active_dehum' : z.conditioning;
+  const cc = condClass(effCond);
   const temp = z.temp ? Math.round(parseFloat(z.temp)) : '–';
   const hasHold = z.hold && z.holdActivity;
 
-  const condDotCls = z.conditioning === 'active_heat' ? 'heat'
-                   : z.conditioning === 'active_cool' ? 'cool'
-                   : z.conditioning.includes('dehum') ? 'dehum'
+  const condDotCls = effCond === 'active_heat' ? 'heat'
+                   : effCond === 'active_cool' ? 'cool'
+                   : effCond.includes('dehum') ? 'dehum'
                    : 'idle';
-  const condStr = z.conditioning === 'active_heat' ? 'Heating'
-                : z.conditioning === 'active_cool' ? 'Cooling'
-                : z.conditioning.includes('dehum') ? 'Dehumidifying'
+  const condStr = effCond === 'active_heat' ? 'Heating'
+                : effCond === 'active_cool' ? 'Cooling'
+                : effCond.includes('dehum') ? 'Dehumidifying'
                 : 'Idle';
 
   const holdStrip = hasHold
