@@ -498,7 +498,7 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.86';
+const APP_VERSION = '1.0.87';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const JS_DAY_MAP = [6,0,1,2,3,4,5]; // JS getDay() (0=Sun) -> DAYS index
 const ACTIVITIES = ['home','away','sleep','wake','manual'];
@@ -619,12 +619,40 @@ async function loadAll() {
 
 async function refreshStatus() {
   try {
-    const statusData = await apiFetch('/status.json');
+    // Fetch both endpoints — cfg.mode (systems.json) and WH hold can change
+    // externally (e.g., from HA), and a status-only poll would miss them.
+    const [sysData, statusData] = await Promise.all([
+      apiFetch('/systems.json'),
+      apiFetch('/status.json'),
+    ]);
+    mergeConfig(sysData);
     mergeStatus(statusData);
     _checkStaleness();
     renderStatus();
     document.getElementById('lastUpdated').textContent = new Date().toLocaleTimeString();
   } catch(e) { /* silent on poll failures */ }
+}
+
+function mergeConfig(sysData) {
+  const cfg = sysData.system[0].config[0];
+  state.summary.mode = v(cfg.mode) || '–';
+  const wh = cfg.wholeHouse ? cfg.wholeHouse[0] : {};
+  state.wholeHouse = {
+    hold: v(wh.hold) === 'on',
+    holdActivity: v(wh.holdActivity),
+    otmr: v(wh.otmr),
+  };
+  // Refresh per-zone hold fields — they come from config, not status
+  const cfgZones = forceArray(cfg.zones[0].zone);
+  const zoneMap = {};
+  cfgZones.forEach(z => { zoneMap[z.id] = z; });
+  state.zones.forEach(z => {
+    const cz = zoneMap[z.id];
+    if (!cz) return;
+    z.hold = v(cz.hold) === 'on';
+    z.holdActivity = v(cz.holdActivity);
+    z.otmr = v(cz.otmr);
+  });
 }
 
 function _checkStaleness() {
