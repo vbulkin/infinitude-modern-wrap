@@ -5,7 +5,7 @@
  */
 import {
   InfinitudeBase, sharedStyles, html, css, nothing,
-  ACTIVITIES, HOLD_ACTIVITIES, DURATION_OPTIONS,
+  ACTIVITIES, HOLD_ACTIVITIES, DURATION_OPTIONS, CIRCLED,
   MIN_HEAT_TEMP, MAX_HEAT_TEMP, MIN_COOL_TEMP, MAX_COOL_TEMP,
   DEFAULT_HEAT_SP, DEFAULT_COOL_SP,
 } from './shared.js';
@@ -94,7 +94,10 @@ class InfinitudeZoneCard extends InfinitudeBase {
     if (!s) return html`<ha-card><div class="card-pad" style="color:var(--secondary-text-color)">Entity unavailable</div></ha-card>`;
 
     const a = s.attributes || {};
-    const name = (a.friendly_name || eid).replace(/^Infinitude\s+/i, '').replace(/^infinitude_direct\s+/i, '');
+    const zid = this._zoneId(eid);
+    const prefix = CIRCLED[parseInt(zid) - 1] || zid;
+    const rawName = (a.friendly_name || eid).replace(/^Infinitude\s+/i, '').replace(/^infinitude_direct\s+/i, '');
+    const name = prefix ? `${prefix} ${rawName}` : rawName;
     const temp = a.current_temperature != null ? Math.round(a.current_temperature) : '–';
     const rh = a.current_humidity;
     const mode = s.state || 'off';

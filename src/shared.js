@@ -5,7 +5,7 @@ import { LitElement, html, css, nothing } from 'lit';
 
 export { html, css, nothing };
 
-export const CARD_VERSION = '1.0.88';
+export const CARD_VERSION = '1.0.89';
 export const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 export const JS_DAY_MAP = [6,0,1,2,3,4,5];
 export const ACTIVITIES = ['home','away','sleep','wake'];
@@ -139,7 +139,11 @@ export class InfinitudeBase extends LitElement {
         else if (uid.includes('system_info')) system.info = eid;
       }
     }
-    climates.sort();
+    const zidOf = eid => {
+      const r = reg.find(e => e.entity_id === eid);
+      return parseInt((r?.unique_id || '').replace(/^infinitude_/, '')) || 0;
+    };
+    climates.sort((a, b) => zidOf(a) - zidOf(b));
     const result = { climates, sensors, selects, system };
     this._cachedEntities = result;
     this._cachedEntitiesHass = this.hass;

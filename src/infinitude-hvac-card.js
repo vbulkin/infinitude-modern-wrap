@@ -356,7 +356,7 @@ class InfinitudeHVACCard extends InfinitudeBase {
             <button class="btn btn-primary" style="font-size:11px;padding:4px 12px" @click=${() => this._setWholeHouseHold()}>Apply</button>
             <button class="btn" style="font-size:11px;padding:4px 10px" @click=${() => { this._whHoldOpen = false; }}>Cancel</button>
           </div>` : html`
-          <div>
+          <div style="margin-bottom:12px">
             <button class="btn" style="font-size:11px;padding:4px 12px" @click=${() => { this._whHoldOpen = true; }}>
               <ha-icon icon="mdi:home-lock" style="--mdc-icon-size:14px;vertical-align:middle;margin-right:4px"></ha-icon>Set WH hold
             </button>
@@ -369,7 +369,10 @@ class InfinitudeHVACCard extends InfinitudeBase {
     const s = this._st(eid);
     if (!s) return nothing;
     const a = s.attributes || {};
-    const name = (a.friendly_name || eid).replace(/^Infinitude\s+/i, '').replace(/^infinitude_direct\s+/i, '');
+    const zid = this._zoneId(eid);
+    const prefix = CIRCLED[parseInt(zid) - 1] || zid;
+    const rawName = (a.friendly_name || eid).replace(/^Infinitude\s+/i, '').replace(/^infinitude_direct\s+/i, '');
+    const name = prefix ? `${prefix} ${rawName}` : rawName;
     const temp = a.current_temperature != null ? Math.round(a.current_temperature) : '–';
     const rh = a.current_humidity;
     const mode = s.state || 'off';
