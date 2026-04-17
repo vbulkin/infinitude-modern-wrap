@@ -317,6 +317,22 @@
   .sched-action-bar-label { font-size: 12px; color: var(--warn); margin-right: auto; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--bg4); border-radius: 3px; }
+
+  @media (max-width: 520px) {
+    .sched-period-header { padding: 6px 8px; gap: 6px; }
+    .sched-zone-line { padding: 6px 8px; gap: 6px; }
+    .sched-zone-name { width: 72px; min-width: 56px; font-size: 11px; }
+    .sched-inline-select { font-size: 10px; padding: 2px 4px; padding-right: 14px; background-position: right 3px center; }
+    .sched-inline-temps { gap: 4px; font-size: 11px; }
+    .sched-inline-toggle { transform: scale(0.85); }
+    .prof-card-header { padding: 6px 8px; }
+    .prof-zone-line { padding: 6px 8px; gap: 6px; }
+    .prof-zone-line select { font-size: 10px; padding: 2px 4px; padding-right: 14px; background-position: right 3px center; }
+    .prof-field-label { display: none; }
+    .btn-adj { width: 22px; height: 22px; font-size: 13px; }
+    .sp-val { min-width: 22px; }
+    .sp-row { gap: 2px; }
+  }
 </style>
 </head>
 <body>
@@ -498,7 +514,7 @@
 
 <script>
 // ── Constants ─────────────────────────────────────────────────────────────────
-const APP_VERSION = '1.0.89';
+const APP_VERSION = '1.0.90';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const JS_DAY_MAP = [6,0,1,2,3,4,5]; // JS getDay() (0=Sun) -> DAYS index
 const ACTIVITIES = ['home','away','sleep','wake','manual'];

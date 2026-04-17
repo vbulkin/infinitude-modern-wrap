@@ -5,7 +5,7 @@ import { LitElement, html, css, nothing } from 'lit';
 
 export { html, css, nothing };
 
-export const CARD_VERSION = '1.0.89';
+export const CARD_VERSION = '1.0.90';
 export const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 export const JS_DAY_MAP = [6,0,1,2,3,4,5];
 export const ACTIVITIES = ['home','away','sleep','wake'];
@@ -571,4 +571,20 @@ export const sharedStyles = css`
     border-radius: 4px; color: var(--primary-text-color); font-size: 11px; padding: 3px 6px; outline: none;
   }
   .sched-select:focus { border-color: var(--primary-color); }
+
+  @media (max-width: 520px) {
+    .sched-line { padding: 6px 8px !important; gap: 4px !important; }
+    .sched-name { width: 68px !important; min-width: 52px !important; font-size: 11px !important; }
+    .sched-name-compact { width: 24px !important; min-width: 24px !important; font-size: 13px !important; }
+    .sched-select { padding: 2px 4px; font-size: 10px; }
+    .sched-toggle span { display: none; }
+    .sched-temps { gap: 4px !important; font-size: 11px !important; }
+    .prof-line { padding: 8px 8px !important; gap: 6px !important; }
+    .prof-name { width: 68px !important; min-width: 52px !important; font-size: 11px !important; }
+    .prof-name-compact { width: 24px !important; min-width: 24px !important; font-size: 13px !important; }
+    .prof-fan-label { display: none; }
+    .btn-adj { width: 22px; height: 22px; font-size: 13px; border-radius: 6px; }
+    .sp-val { min-width: 22px; }
+    .sp-row { gap: 2px; }
+  }
 `;
