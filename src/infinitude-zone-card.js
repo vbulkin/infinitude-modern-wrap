@@ -4,7 +4,7 @@
  * config: { entity: "climate.infinitude_zone_1" }
  */
 import {
-  InfinitudeBase, sharedStyles, html, css, nothing,
+  LitElement, InfinitudeBase, sharedStyles, html, css, nothing,
   ACTIVITIES, HOLD_ACTIVITIES, DURATION_OPTIONS, CIRCLED,
   MIN_HEAT_TEMP, MAX_HEAT_TEMP, MIN_COOL_TEMP, MAX_COOL_TEMP,
   DEFAULT_HEAT_SP, DEFAULT_COOL_SP,
@@ -37,8 +37,13 @@ class InfinitudeZoneCard extends InfinitudeBase {
     this._holdFan = 'auto';
   }
 
-  static getConfigElement() { return document.createElement('div'); }
-  static getStubConfig() { return { entity: '' }; }
+  static getConfigElement() { return document.createElement('infinitude-zone-card-editor'); }
+  static getStubConfig(hass) {
+    const entity = Object.keys(hass?.states || {}).find(
+      e => e.startsWith('climate.infinitude')
+    );
+    return { entity: entity || '' };
+  }
   getCardSize() { return 4; }
 
   static styles = [sharedStyles, css`
@@ -209,6 +214,47 @@ class InfinitudeZoneCard extends InfinitudeBase {
 
 }
 
+class InfinitudeZoneCardEditor extends LitElement {
+  static properties = {
+    hass: { attribute: false },
+    _config: { state: true },
+  };
+
+  setConfig(config) { this._config = config || {}; }
+
+  _entityChanged(ev) {
+    ev.stopPropagation();
+    if (!this._config) return;
+    const value = ev.detail?.value ?? '';
+    if (value === this._config.entity) return;
+    const newConfig = { ...this._config, entity: value };
+    this.dispatchEvent(new CustomEvent('config-changed', {
+      detail: { config: newConfig },
+      bubbles: true, composed: true,
+    }));
+  }
+
+  render() {
+    if (!this.hass) return html``;
+    return html`
+      <div style="padding:8px 0">
+        <ha-entity-picker
+          .hass=${this.hass}
+          .value=${this._config?.entity || ''}
+          .includeDomains=${['climate']}
+          .entityFilter=${(s) => s.entity_id.startsWith('climate.infinitude')}
+          label="Zone entity"
+          allow-custom-entity
+          @value-changed=${this._entityChanged}
+        ></ha-entity-picker>
+      </div>
+    `;
+  }
+}
+
+if (!customElements.get('infinitude-zone-card-editor')) {
+  customElements.define('infinitude-zone-card-editor', InfinitudeZoneCardEditor);
+}
 if (!customElements.get('infinitude-zone-card')) {
   customElements.define('infinitude-zone-card', InfinitudeZoneCard);
 }

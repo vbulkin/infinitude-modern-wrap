@@ -79,7 +79,6 @@ class InfinitudeHVACCard extends InfinitudeBase {
     clearInterval(this._staleTimer);
   }
 
-  static getConfigElement() { return document.createElement('div'); }
   static getStubConfig() { return {}; }
   getCardSize() { return 8; }
 

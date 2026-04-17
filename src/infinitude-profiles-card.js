@@ -21,7 +21,6 @@ class InfinitudeProfilesCard extends InfinitudeBase {
     this._savingProfs = false;
   }
 
-  static getConfigElement() { return document.createElement('div'); }
   static getStubConfig() { return {}; }
   getCardSize() { return 6; }
 

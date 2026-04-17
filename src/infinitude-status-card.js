@@ -25,7 +25,6 @@ class InfinitudeStatusCard extends InfinitudeBase {
     this._whHoldCustom = '';
   }
 
-  static getConfigElement() { return document.createElement('div'); }
   static getStubConfig() { return {}; }
   getCardSize() { return 3; }
 

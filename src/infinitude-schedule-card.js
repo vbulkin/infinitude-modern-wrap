@@ -22,7 +22,6 @@ class InfinitudeScheduleCard extends InfinitudeBase {
     this._saving = false;
   }
 
-  static getConfigElement() { return document.createElement('div'); }
   static getStubConfig() { return {}; }
   getCardSize() { return 6; }
 
