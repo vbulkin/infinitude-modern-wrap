@@ -267,8 +267,8 @@ class InfinitudeHVACCard extends InfinitudeBase {
   _summaryStrip(ent) {
     const { system, selects, climates } = ent;
     const mode = climates.length ? (this._st(climates[0])?.state || 'off') : 'off';
-    const modes = ['off','heat','cool','heat_cool'];
-    const lbl = { off:'Off', heat:'Heat', cool:'Cool', heat_cool:'Auto' };
+    const modes = ['off','heat','cool','heat_cool','fan_only'];
+    const lbl = { off:'Off', heat:'Heat', cool:'Cool', heat_cool:'Auto', fan_only:'Fan' };
 
     const os = this._st(system.oat);
     let oat = '–';

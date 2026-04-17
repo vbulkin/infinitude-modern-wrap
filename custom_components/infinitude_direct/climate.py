@@ -60,6 +60,7 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
         HVACMode.HEAT,
         HVACMode.COOL,
         HVACMode.HEAT_COOL,
+        HVACMode.FAN_ONLY,
     ]
     _attr_preset_modes = PRESET_MODES
     _attr_min_temp = MIN_HEAT_TEMP
