@@ -1,6 +1,6 @@
 # Infinitude Direct
 
-This repository contains two components for controlling Carrier/Bryant Infinity thermostats through Home Assistant.
+This repository contains two components for controlling Carrier Infinity/Bryant Evolution thermostats through Home Assistant.
 
 ## What's Included
 
@@ -19,7 +19,7 @@ A HACS-installable Home Assistant integration that provides a native HA dashboar
 | Component | Description |
 |---|---|
 | **Climate, Select & Sensor Platforms** | Per-zone climate entities, whole-house hold select, damper/fan/OAT/status sensors |
-| **Custom Lovelace Card** (`src/infinitude-hvac-card.js`) | LitElement card with three tabs: Zones, Schedule, and Profiles. Bundled with esbuild. |
+| **Custom Lovelace Cards** (`src/*.js`) | LitElement-based cards bundled with esbuild. Composite tabbed card plus standalone per-feature cards (zone, status, schedule, profiles). |
 
 > **Dependency:** The HACS integration requires the Infinitude proxy to be running and accessible. Install the add-on above first (or run Infinitude separately), then point the integration to the proxy URL during setup.
 
@@ -27,18 +27,30 @@ A HACS-installable Home Assistant integration that provides a native HA dashboar
 
 ### Climate Entities (per zone)
 - Current temperature and humidity
-- HVAC modes: Off, Heat, Cool, Heat/Cool (Auto)
-- Preset modes: Home, Away, Sleep, Wake
+- HVAC modes: Off, Heat, Cool, Heat/Cool (Auto), Fan Only
+- HVAC actions: Heating, Cooling, Dehumidifying, Idle, Off
+- Preset modes: Home, Away, Sleep, Wake, Manual
 - Target temperature and temperature range support
 - Per-zone hold with activity selection and timer
 - Extra attributes: damper position, fan mode, outdoor temperature, hold status
 
-### Custom Lovelace Card
-- **Zones tab** — Live zone cards with temps, humidity, conditioning status, and inline hold set/cancel with optimistic temperature display (debounced 800ms commits, pulsing amber indicator)
-- **Schedule tab** — Visual weekly schedule editor per zone with drag-to-reorder periods, activity/time selectors, and save-to-thermostat
-- **Profiles tab** — Edit heat/cool setpoints and fan speed per activity per zone
-- **Whole-house hold** — Inline header picker for home/away/sleep/wake with apply/cancel
-- Auto-discovers entities via the HA entity registry (no manual entity configuration)
+### Custom Lovelace Cards
+
+All cards extend a shared base with registry-driven auto-discovery, so no manual entity wiring is required (except for the single-zone card, which takes one entity).
+
+| Card type | Description |
+|---|---|
+| `custom:infinitude-hvac-card` | **Composite tabbed dashboard** — Status, Zones, Schedule, Profiles in a single card. |
+| `custom:infinitude-status-card` | System mode, outdoor temp, humidifier, connectivity, and whole-house hold row. |
+| `custom:infinitude-zone-card` | Single zone (takes `entity: climate.xxx` in config). **Visual editor** with a dropdown filtered to Infinitude climate entities. |
+| `custom:infinitude-schedule-card` | Weekly schedule editor per zone with activity/time selectors and save. |
+| `custom:infinitude-profiles-card` | Heat/cool setpoints and fan speed per activity per zone. |
+
+Features across cards:
+- **Zone cards** — Live temp, humidity, conditioning status, inline hold set/cancel with optimistic temperature display (debounced 800ms commits, pulsing amber indicator)
+- **Whole-house hold** — Header picker for home/away/sleep/wake with duration options
+- **Circled zone numbering** (①②③…) matches the HTML UI so zones are visually consistent
+- **Mobile-friendly** — schedule and profile rows tighten automatically below 520px viewport width
 
 ### Sensors
 - Outdoor air temperature (OAT)
