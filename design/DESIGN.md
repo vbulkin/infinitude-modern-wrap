@@ -96,6 +96,128 @@ The rewrite is primarily a **northbound API modernization** plus a **language mi
 
 This matches how upstream Infinitude operates — we inherit Carrier's "thermostat pulls changes" model rather than trying to push.
 
+### 4.4 Event flows per initiation source
+
+Three distinct scenarios drive state change in the system. The proxy treats them differently on the way in but converges them on the way out — every confirmed change ends the same way: a telemetry POST from the thermostat, a state-store update, and an SSE event for subscribers.
+
+**Key insight:** scenarios 1 (wall panel) and 3 (Carrier app) are indistinguishable from the proxy's perspective — both manifest as "thermostat reports new state via the next telemetry POST". Only scenario 2 (NB API) exercises the pending-push write path.
+
+#### 4.4.1 Change initiated at the thermostat (wall panel)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as User at wall panel
+    participant T as Thermostat
+    participant SB as Proxy —<br/>Southbound
+    participant ST as State Store
+    participant SSE as SSE Channel
+    participant HA as HA / Web UI
+    participant CC as Carrier Cloud
+
+    User->>T: Adjust setpoint / hold on panel
+    T-->>T: Apply locally
+    Note over T: Next telemetry cadence (~90s,<br/>often sooner after user action)
+    T->>SB: POST telemetry (XML)
+    SB->>ST: Update zone state
+    SB-->>T: 200 OK (no pending writes)
+    ST->>SSE: state.update diff
+    SSE-->>HA: event: state.update
+
+    Note over SB,CC: Decoupled passthrough
+    SB->>CC: Replay POST on pass_reqs tick
+    CC-->>SB: ACK (ignored for state)
+```
+
+#### 4.4.2 Change initiated via NB API (HA or Web UI)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as HA / Web UI user
+    participant HA as HA / Web UI
+    participant NB as Proxy —<br/>Northbound (FastAPI)
+    participant ST as State Store
+    participant SB as Proxy —<br/>Southbound
+    participant T as Thermostat
+    participant SSE as SSE Channel
+    participant CC as Carrier Cloud
+
+    User->>HA: Change setpoint / hold
+    HA->>NB: PATCH /v1/zones/{id}
+    NB->>NB: Validate (Pydantic)
+    NB->>ST: Write desired value,<br/>mark pending-push
+    NB-->>HA: 200 OK (optimistic)
+    ST->>SSE: state.update (pending=true)
+    SSE-->>HA: event: state.update
+
+    Note over T,SB: Thermostat polls on its own cadence
+    T->>SB: POST telemetry / fetch
+    SB->>ST: Read pending-push
+    ST-->>SB: Yes — include in response
+    SB-->>T: 200 OK + pending change
+    T-->>T: Apply locally
+
+    Note over T: Next telemetry tick
+    T->>SB: POST telemetry (reflects applied value)
+    SB->>ST: Clear pending-push,<br/>update confirmed state
+    ST->>SSE: state.update (pending=false)
+    SSE-->>HA: event: state.update
+
+    SB->>CC: Replay on pass_reqs tick
+    CC-->>SB: ACK
+```
+
+#### 4.4.3 Change initiated at Carrier website / MyInfinity app
+
+The thermostat is always the client — it sits behind residential NAT and Carrier has no way to push to it. Every Carrier-originated change sits in Carrier's queue until the thermostat's next poll retrieves it. In an Infinitude setup the thermostat only talks to the proxy; the proxy forwards polls upstream on its `pass_reqs` cadence, and Carrier's response to *those* forwarded polls is what carries the pending change back down.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as User in Carrier app
+    participant CC as Carrier Cloud
+    participant SB as Proxy —<br/>Southbound (passthrough)
+    participant T as Thermostat
+    participant ST as State Store
+    participant SSE as SSE Channel
+    participant HA as HA / Web UI
+
+    User->>CC: Adjust setpoint in MyInfinity app
+    CC-->>CC: Queue change for device
+
+    Note over T,CC: Thermostat always initiates; NAT blocks push.
+    T->>SB: GET /systems/{serial}/... (periodic poll)
+    alt pass_reqs tick — forward upstream
+        SB->>CC: Forward GET
+        CC-->>SB: 200 with pending change in body
+        SB->>ST: Merge upstream change<br/>into local state
+        SB-->>T: 200 with change
+    else cadence not due — answer locally
+        SB-->>T: 200 from local state
+    end
+    T-->>T: Apply locally (if change received)
+
+    Note over T: Next telemetry tick
+    T->>SB: POST telemetry (reflects applied value)
+    SB->>ST: Update confirmed state
+    ST->>SSE: state.update
+    SSE-->>HA: event: state.update
+```
+
+Consequence: a change made in the MyInfinity app can take up to one `pass_reqs` interval (default 60s) plus one telemetry tick (~90s) to propagate through to NB API subscribers. This matches upstream Infinitude's behavior — it's a property of Carrier's polling protocol, not the proxy.
+
+### 4.5 Passthrough rationale — why `pass_reqs` vs. always-forward
+
+The proxy could, in principle, forward every thermostat request straight to Carrier and relay the response verbatim. It deliberately does not. Rate-limited passthrough (`pass_reqs`, default 60s) is an architectural choice, not a performance optimization:
+
+1. **Local authority for writes.** The thermostat can't distinguish "response from Infinitude" from "response from Carrier" — it just consumes whatever the HTTP response body says. If every poll were forwarded verbatim, Carrier's cached view of config would overwrite any NB-initiated change the proxy is trying to push. By answering most polls from its own state store, the proxy gets to inject pending writes into the response stream; Carrier's slower snapshot-driven view can't race it.
+2. **Outage tolerance.** The thermostat polls constantly. If Carrier is unreachable and every poll forwarded, the thermostat sees a stream of failures. With `pass_reqs`, only the cadence-gated requests depend on Carrier; local control keeps working through a cloud outage.
+3. **Rate limiting Carrier.** A thermostat polls far more frequently than Carrier's cloud expects from a single device. Forwarding every request risks throttling or account flags upstream.
+4. **Bandwidth and privacy.** Fewer upstream requests means less traffic and less of the user's HVAC data leaving the LAN.
+
+**The deliberate tradeoff** is latency on Carrier-originated changes (see §4.4.3): a change from the MyInfinity app takes up to one `pass_reqs` interval plus one telemetry tick to reach NB subscribers. This is accepted as the cost of local-first operation. `pass_reqs` is exposed as a user-tunable option precisely so operators can shift that tradeoff if they weight freshness over local authority.
+
 ---
 
 ## 5. Technology choices
