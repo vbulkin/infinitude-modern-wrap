@@ -244,7 +244,7 @@ class InfinitudeZoneCardEditor extends LitElement {
   _entityChanged(ev) {
     ev.stopPropagation();
     if (!this._config) return;
-    const value = ev.detail?.value ?? '';
+    const value = ev.target?.value ?? '';
     if (value === this._config.entity) return;
     const newConfig = { ...this._config, entity: value };
     this.dispatchEvent(new CustomEvent('config-changed', {
@@ -253,24 +253,30 @@ class InfinitudeZoneCardEditor extends LitElement {
     }));
   }
 
+  _label(eid) {
+    const st = this.hass.states[eid];
+    const fn = st?.attributes?.friendly_name;
+    return fn ? `${fn}  —  ${eid}` : eid;
+  }
+
   render() {
     if (!this.hass) return html``;
-    const filter = this._infEntities && this._infEntities.size > 0
-      ? (s) => this._infEntities.has(s.entity_id)
-      : undefined;
+    const entities = this._infEntities ? [...this._infEntities].sort() : [];
+    const current = this._config?.entity || '';
     return html`
       <div style="padding:8px 0">
-        <ha-entity-picker
-          .hass=${this.hass}
-          .value=${this._config?.entity || ''}
-          .includeDomains=${['climate']}
-          .entityFilter=${filter}
-          label="Zone entity"
-          allow-custom-entity
-          @value-changed=${this._entityChanged}
-        ></ha-entity-picker>
+        <label style="display:block;font-size:12px;color:var(--secondary-text-color);margin-bottom:6px">Zone entity</label>
+        <select
+          style="width:100%;padding:8px 10px;background:var(--card-background-color);border:1px solid var(--divider-color);border-radius:4px;color:var(--primary-text-color);font-size:14px"
+          .value=${current}
+          @change=${this._entityChanged}>
+          <option value="" ?selected=${!current}>— select a zone —</option>
+          ${entities.map(e => html`<option value=${e} ?selected=${e === current}>${this._label(e)}</option>`)}
+        </select>
         <div style="font-size:11px;color:var(--secondary-text-color);margin-top:6px">
-          Showing climate entities from the Infinitude Direct integration.
+          ${entities.length
+            ? html`${entities.length} climate entit${entities.length === 1 ? 'y' : 'ies'} from the Infinitude Direct integration.`
+            : html`No Infinitude Direct climate entities found.`}
         </div>
       </div>
     `;
