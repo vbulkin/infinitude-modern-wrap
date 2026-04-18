@@ -186,8 +186,8 @@ sequenceDiagram
     User->>CC: Adjust setpoint in MyInfinity app
     CC-->>CC: Queue change for device
 
-    Note over T,CC: Thermostat always initiates; NAT blocks push.
-    T->>SB: GET /systems/{serial}/... (periodic poll)
+    Note over T,CC: Thermostat always initiates — NAT blocks push.
+    T->>SB: GET /systems/serial/... (periodic poll)
     alt pass_reqs tick — forward upstream
         SB->>CC: Forward GET
         CC-->>SB: 200 with pending change in body
@@ -206,6 +206,44 @@ sequenceDiagram
 ```
 
 Consequence: a change made in the MyInfinity app can take up to one `pass_reqs` interval (default 60s) plus one telemetry tick (~90s) to propagate through to NB API subscribers. This matches upstream Infinitude's behavior — it's a property of Carrier's polling protocol, not the proxy.
+
+#### 4.4.4 Steady-state polling (no user action anywhere)
+
+Most of the time, nothing is changing — the thermostat still polls on its protocol-defined cadence, and the proxy still has to answer. This is the base case that keeps `lastReportAt` fresh, feeds the `/v1/healthz` staleness probe, and catches sensor-driven drift (room temp, outdoor temp, humidity) that arrives without any user action.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant T as Thermostat
+    participant SB as Proxy —<br/>Southbound
+    participant ST as State Store
+    participant SSE as SSE Channel
+    participant HA as HA / Web UI
+    participant CC as Carrier Cloud
+
+    Note over T: Telemetry tick (~90s)
+    T->>SB: POST telemetry (XML)
+    SB->>ST: Update lastReportAt,<br/>merge any sensor drift
+    SB-->>T: 200 OK (no pending writes)
+    alt any field actually changed
+        ST->>SSE: state.update diff
+        SSE-->>HA: event: state.update
+    else nothing changed
+        Note over ST,SSE: No SSE traffic<br/>(diff is empty)
+    end
+
+    Note over T: Config poll (independent cadence)
+    T->>SB: GET /systems/serial/...
+    alt pass_reqs tick — forward upstream
+        SB->>CC: Forward GET
+        CC-->>SB: 200 (no queued change)
+        SB-->>T: 200 from local state
+    else cadence not due
+        SB-->>T: 200 from local state
+    end
+```
+
+Two independent cadences are at play: the thermostat's telemetry POST (~90s, Carrier-fixed) and its config GET (shorter, also protocol-driven). The `pass_reqs` tick gates only the upstream forwarding, not the reply to the thermostat — the thermostat always gets an answer promptly.
 
 ### 4.5 Passthrough rationale — why `pass_reqs` vs. always-forward
 
