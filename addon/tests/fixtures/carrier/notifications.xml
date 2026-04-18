@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<notifications version="1.7"><notification><code>200</code><dealerConfirmed>false</dealerConfirmed><dealerDeleted>false</dealerDeleted><etags/><message>System settings updated</message><timestamp>2026-01-01T12:00:00Z</timestamp><type>confirmation</type><userConfirmed>false</userConfirmed><userDeleted>false</userDeleted><changes><change id="OP_MODE"/></changes></notification></notifications>

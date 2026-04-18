@@ -24,18 +24,19 @@ also want Carrier-side captures you need a second interception point on
 Infinitude's upstream (a mitmproxy instance that Infinitude is configured to
 route `api.ing.carrier.com` through, for example). That is a follow-up tool.
 
-### Shortcut: reading Carrier responses from Infinitude's disk cache
+### Carrier-side response fixtures — already captured
 
-Before running this proxy, check the existing Infinitude add-on's persisted
-state. Upstream Infinitude caches Carrier's passthrough responses verbatim to
-`/data/infinitude/state/*.xml` inside the container (`$store->set("$nk.xml", $tx->res->body)`
-in the Perl source). On the HA host that maps to
-`/usr/share/hassio/addons/data/<slug>/infinitude/state/*.xml`.
+Carrier's passthrough responses are cached verbatim by upstream Infinitude
+(`$store->set("$nk.xml", $tx->res->body)` in the Perl source) and are reachable
+via its own HTTP catchall — no proxy or filesystem access required. A curated
+set has already been pulled from a live Infinitude, scrubbed, and committed
+under [`../../addon/tests/fixtures/carrier/`](../../addon/tests/fixtures/carrier/):
+`Alive.xml`, `api-config.json`, `energy.xml`, `manifest.xml`,
+`notifications.xml`, `status.xml`, `systems.xml`, `time.xml`.
 
-Those files are **free Carrier-side response fixtures** — no proxy, no capture
-session needed. `systems.xml` in particular is the full current config snapshot.
-Grab them first; the capture proxy is only needed for the *request* bodies the
-thermostat sends, which Infinitude parses and discards.
+To refresh them, `curl http://<infinitude-host>:3000/<name>.xml` and re-scrub.
+This capture proxy is only needed for the *request* bodies the thermostat
+sends, which Infinitude parses and discards.
 
 ## Prerequisites
 
@@ -94,7 +95,17 @@ And `./captures/` filling up with paired `.request.xml` / `.response.xml` files.
 ## What to do with the captures
 
 1. Eyeball a couple of `.response.xml` files — they should be well-formed XML.
-2. Commit a curated subset under `addon/tests/fixtures/` (Phase 3).
-3. The replay test harness will load meta + request body, call the southbound
+2. **Scrub before committing.** Run [`../scrub/scrub_fixtures.py`](../scrub/scrub_fixtures.py)
+   over the files to replace zone names with `Zone <id>`, absolute timestamps
+   with a sentinel UTC, and serials with `0000TEST0000`:
+
+   ```bash
+   python tools/scrub/scrub_fixtures.py --dir addon/tests/fixtures/carrier
+   ```
+
+   Idempotent — running twice is a no-op. Structural XML is preserved so the
+   fixtures remain representative.
+3. Commit a curated subset under `addon/tests/fixtures/` (Phase 3).
+4. The replay test harness will load meta + request body, call the southbound
    handler, and assert the produced response matches the captured one
    modulo timestamps.
