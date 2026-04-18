@@ -1,0 +1,29 @@
+name: "Infinitude Modern Proxy"
+description: "Python/FastAPI rewrite of the Infinitude proxy with a typed OpenAPI northbound API"
+version: "2.0.0-alpha.1"
+slug: "infinitude_modern"
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+
+ingress: true
+ingress_port: 3000
+panel_icon: mdi:thermostat
+panel_title: Infinitude Modern
+
+ports:
+  3000/tcp: 3000
+ports_description:
+  3000/tcp: "Thermostat proxy + northbound API"
+
+host_network: false
+
+options:
+  pass_reqs: 60
+  log_level: info
+
+schema:
+  pass_reqs: int(10,3600)
+  log_level: list(debug|info|warning|error)
