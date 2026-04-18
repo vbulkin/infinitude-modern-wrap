@@ -540,10 +540,24 @@ components:
       maximum: 99
       description: Integer degrees Fahrenheit.
 
-    TimeOfDay:
+    IsoDateTime:
+      type: string
+      format: date-time
+      description: |
+        ISO 8601 timestamp with an explicit `Z` suffix (UTC).
+        The API always emits and accepts `Z`-suffixed UTC timestamps;
+        clients render local time for the user.
+      pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z$"
+      examples: ["2026-04-17T22:30:00Z"]
+
+    LocalWallTime:
       type: string
       pattern: "^(?:[01][0-9]|2[0-3]):(?:[0-5][0-9])$"
-      description: 24-hour `HH:MM` local time.
+      description: |
+        24-hour `HH:MM` **wall-clock time local to the thermostat**.
+        Used only for recurring schedule periods where the semantic is
+        "every day at this wall-clock time" — not a specific moment.
+        All other time fields use `IsoDateTime`.
       examples: ["06:00", "17:30"]
 
     # ── Core resources ────────────────────────────────────────────────
@@ -554,7 +568,7 @@ components:
         - mode
         - outdoorTemperature
         - humidifierOn
-        - localTime
+        - lastReportAt
         - operatingStatusMessage
         - hold
         - serial
@@ -567,15 +581,22 @@ components:
           example: 72
         humidifierOn:
           type: boolean
-        localTime:
-          type: string
-          description: Thermostat's local time, `HH:MM`. Used for freshness detection.
+        lastReportAt:
+          allOf:
+            - $ref: "#/components/schemas/IsoDateTime"
+          description: |
+            Server-side timestamp (UTC) of the most recent telemetry POST
+            from the thermostat. Used for freshness / staleness detection.
         operatingStatusMessage:
           type: string
           description: Free-form status string from the thermostat ("", "idle", error text).
         serial:
           type: string
-          description: Thermostat serial number.
+          description: |
+            Thermostat serial number as reported by the device in its
+            telemetry POSTs. Stable per physical unit; used by clients
+            as the canonical device identifier.
+          example: "1234A56789"
         hold:
           $ref: "#/components/schemas/WholeHouseHold"
 
@@ -626,6 +647,11 @@ components:
           type: integer
           minimum: 0
           maximum: 100
+          description: |
+            Zone damper position as a 0–100 percentage. The thermostat
+            natively reports 0–15 (where 15 = fully open); the add-on
+            normalizes to 0–100 at the API boundary so clients don't
+            have to know the Carrier-internal scale.
         conditioning:
           $ref: "#/components/schemas/HvacAction"
         currentActivity:
@@ -685,7 +711,7 @@ components:
         activity:
           $ref: "#/components/schemas/ActivityId"
         time:
-          $ref: "#/components/schemas/TimeOfDay"
+          $ref: "#/components/schemas/LocalWallTime"
         enabled:
           type: boolean
 
@@ -729,11 +755,13 @@ components:
           $ref: "#/components/schemas/ActivityId"
         until:
           oneOf:
-            - $ref: "#/components/schemas/TimeOfDay"
+            - $ref: "#/components/schemas/IsoDateTime"
             - type: "null"
           description: |
-            End time of the hold (local `HH:MM`), or `null` for indefinite.
-            Only present when `active = true`.
+            End of the hold as a UTC `IsoDateTime` (`Z`-suffixed), or `null`
+            for indefinite. Only present when `active = true`.
+            The add-on translates to the thermostat's wall-clock `HH:MM`
+            when writing to the device.
 
     WholeHouseHold:
       type: object
@@ -745,7 +773,7 @@ components:
           $ref: "#/components/schemas/SystemHoldActivity"
         until:
           oneOf:
-            - $ref: "#/components/schemas/TimeOfDay"
+            - $ref: "#/components/schemas/IsoDateTime"
             - type: "null"
 
     ZoneHoldRequest:
@@ -756,9 +784,11 @@ components:
           $ref: "#/components/schemas/ActivityId"
         until:
           oneOf:
-            - $ref: "#/components/schemas/TimeOfDay"
+            - $ref: "#/components/schemas/IsoDateTime"
             - type: "null"
-          description: Omit or pass `null` for indefinite.
+          description: |
+            UTC `IsoDateTime` at which the hold should end. Omit or pass
+            `null` for an indefinite hold.
       additionalProperties: false
 
     WholeHouseHoldRequest:
@@ -769,7 +799,7 @@ components:
           $ref: "#/components/schemas/SystemHoldActivity"
         until:
           oneOf:
-            - $ref: "#/components/schemas/TimeOfDay"
+            - $ref: "#/components/schemas/IsoDateTime"
             - type: "null"
       additionalProperties: false
 

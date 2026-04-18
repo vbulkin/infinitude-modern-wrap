@@ -121,15 +121,16 @@ Not chosen: Go and Rust — the northbound/southbound code is I/O bound, and Pyt
 Key design decisions relative to the current upstream:
 
 1. **No array-wrapped scalars.** `mode: "cool"` not `mode: ["cool"]`.
-2. **Explicit types.** Temperatures are numbers, booleans are booleans, times are `HH:MM` strings with a documented regex.
-3. **Stable IDs.** Zone IDs and activity IDs are strings with explicit patterns; schedule period IDs are `1..N` per day.
-4. **Enums.** HVAC mode, activity, fan speed, hold type, conditioning state — all enumerated in OpenAPI and Pydantic.
-5. **Separation of concerns:**
-   - `System` — mode, outdoor temp, humidifier, local time, diagnostic strings.
-   - `Zone` — name, temps, setpoints, humidity, damper, fan, hold, conditioning state.
+2. **Explicit types.** Temperatures are numbers, booleans are booleans.
+3. **Datetime discipline.** All absolute timestamps are **ISO 8601 UTC with `Z` suffix** (`2026-04-17T22:30:00Z`). Only recurring schedule periods use wall-clock `HH:MM` local to the thermostat, since a weekly program has no meaningful date component. The two types are distinct schemas in the spec (`IsoDateTime` vs. `LocalWallTime`) so they cannot be confused.
+4. **Stable IDs.** Zone IDs and activity IDs are strings with explicit patterns; schedule period IDs are `1..N` per day.
+5. **Enums.** HVAC mode, activity, fan speed, hold type, conditioning state — all enumerated in OpenAPI and Pydantic.
+6. **Separation of concerns:**
+   - `System` — mode, outdoor temp, humidifier, `lastReportAt` (UTC ISO of most recent thermostat POST), diagnostic strings.
+   - `Zone` — name, temps, setpoints, humidity, damper position (normalized to 0–100% from the thermostat's native 0–15), fan, hold, conditioning state.
    - `Activity` — setpoints & fan for a named activity (`home|away|sleep|wake|manual`).
-   - `Schedule` — per-zone weekly program: 7 days × up to 5 periods each.
-   - `Hold` — zone-level OR whole-house; `until` is either `HH:MM` or `"indefinite"`.
+   - `Schedule` — per-zone weekly program: 7 days × up to 5 periods each. Replaced atomically via a single `PUT`.
+   - `Hold` — zone-level OR whole-house; `until` is either an ISO 8601 UTC datetime or `null` (indefinite).
 
 Full schemas live in `openapi.yaml`.
 
@@ -164,9 +165,9 @@ See `openapi.yaml` for full request/response shapes and error definitions.
 | `GET /status.json` | `GET /v1/state` |
 | `GET /Alive` | `GET /v1/healthz` (Carrier status is one field) |
 | `PUT /api/config?mode=…` | `PATCH /v1/system` body `{ "mode": "cool" }` |
-| `PUT /api/{zone}/hold?activity=…&until=…` | `PUT /v1/zones/{zoneId}/hold` body `{ "activity": "home", "until": "HH:MM" }` |
+| `PUT /api/{zone}/hold?activity=…&until=…` | `PUT /v1/zones/{zoneId}/hold` body `{ "activity": "home", "until": "2026-04-17T19:00:00Z" }` |
 | `PUT /api/{zone}/activity/{id}?htsp=…` | `PATCH /v1/zones/{zoneId}/activities/{activityId}` body `{ "heat": 68, "cool": 76 }` |
-| `PUT /api/config/wholeHouse?hold=on&…` | `PUT /v1/system/hold` body `{ "activity": "away", "until": "17:30" }` |
+| `PUT /api/config/wholeHouse?hold=on&…` | `PUT /v1/system/hold` body `{ "activity": "away", "until": "2026-04-17T17:30:00Z" }` |
 | `POST /systems/infinitude` (full config dump) | `PUT /v1/zones/{zoneId}/schedule` with structured body |
 | `/native.html` | Removed. |
 
@@ -233,7 +234,7 @@ event: state.update
 data: {"resource": "zones/1", "changes": {"rt": 72, "zoneconditioning": "idle"}}
 
 event: hold.changed
-data: {"resource": "zones/1/hold", "state": "active", "activity": "manual", "until": "19:00"}
+data: {"resource": "zones/1/hold", "state": "active", "activity": "manual", "until": "2026-04-17T19:00:00Z"}
 
 event: health.changed
 data: {"status": "degraded", "reason": "carrier_cloud.unreachable"}
@@ -287,7 +288,7 @@ Phases, each shippable independently:
 
 1. **Phase 0 — Freeze legacy, tag final release** on the existing Perl proxy. (Done: v1.0.x is the reference.)
 2. **Phase 1 — OpenAPI spec finalized.** (This branch.) Design doc + `openapi.yaml` merged to `main` behind a clear note that no runtime changes have happened.
-3. **Phase 2 — New add-on scaffolding.** Directory `addon/` (or `proxy/`) with FastAPI app, southbound stubs, generated Pydantic models. Runs but only serves `/v1/healthz` and canned `/v1/state`.
+3. **Phase 2 — New add-on scaffolding.** New top-level `addon/` directory with FastAPI app, Dockerfile, southbound stubs, generated Pydantic models. Runs but only serves `/v1/healthz` and canned `/v1/state`. Legacy `infinitude/` stays in place until Phase 7.
 4. **Phase 3 — Southbound re-implementation.** Thermostat can point at the new add-on and it behaves correctly. Feature-gated behind an opt-in option.
 5. **Phase 4 — Northbound write endpoints.** Holds, setpoints, activities, schedules all functional.
 6. **Phase 5 — HA integration cutover.** A single PR updates the Python coordinator to the new API. Bump major version of the integration. Old add-on is deprecated in the README.
@@ -307,7 +308,7 @@ No dual-stack period is planned; the HA integration tracks the API version it kn
 | 3 | **Thermostat firmware variability.** Different Infinity/Evolution firmware versions may send slightly different XML. | Mitigation: protocol replay tests using captures from multiple firmware versions. Ask community for captures in Phase 3. |
 | 4 | **HA add-on restart** briefly drops the thermostat's HTTP connection. | Acceptable: the thermostat retries. Document the expected ~30s post-restart gap. |
 | 5 | **SSE over HA ingress** may not work with all reverse proxies. | Fall back to polling is always available. |
-| 6 | **Hold `until`: "forever" vs. omitted** | Normalize in the API: `until: null` = indefinite, `until: "HH:MM"` = timed. Whole-house and zone holds behave the same. |
+| 6 | **Hold `until`: "forever" vs. omitted** | Normalize in the API: `until: null` = indefinite, `until: "<ISO 8601 UTC datetime>"` = timed (e.g. `"2026-04-17T19:00:00Z"`). Whole-house and zone holds behave the same. The southbound translator converts to/from the thermostat's native `HH:MM` using the thermostat's local timezone. |
 | 7 | **`activity: "manual"` asymmetry** | Today, whole-house hold forbids `manual`. Clarified in OpenAPI enum: `system.hold.activity` enum omits `manual`. |
 | 8 | **Thermostat serial number** | Currently surfaced via `systems.json`; the new API exposes it under `GET /v1/system`. |
 
@@ -322,11 +323,11 @@ No dual-stack period is planned; the HA integration tracks the API version it kn
 
 ---
 
-## 16. Open to discussion
+## 16. Resolved design decisions
 
-Before Phase 2 starts, please confirm or redirect:
+The four open questions from earlier drafts have been answered:
 
-1. **Repo layout.** Proposal: new top-level `addon/` directory (Python source + Dockerfile), legacy `infinitude/` stays until removed in Phase 7. Alternative: rename `infinitude/` to `infinitude-legacy/` now and use `infinitude/` for the new add-on.
-2. **API versioning.** Proposal: path-based (`/v1/`). Alternative: header-based. Path-based is simpler and matches HA conventions.
-3. **Hold `until` semantics.** Proposal: ISO-like `HH:MM` (24h local time, same as today) or `null` for indefinite. Alternative: pass an ISO 8601 datetime and let the server convert. `HH:MM` is what the thermostat natively uses, so we match.
-4. **Schedule PUT atomicity.** Proposal: `PUT /v1/zones/{zoneId}/schedule` replaces the whole week in one call (what the HA integration does today). Alternative: `PUT /v1/zones/{zoneId}/schedule/days/{day}` per-day writes. Full-week PUT is simpler and matches the current flow; per-day is a future refinement if needed.
+1. **Repo layout — RESOLVED.** New top-level `addon/` directory holds the Python source + Dockerfile. Legacy `infinitude/` stays in place until removed in Phase 7. No renames.
+2. **API versioning — RESOLVED.** Path-based (`/v1/`). All northbound routes live under that prefix.
+3. **Hold `until` semantics — RESOLVED.** ISO 8601 UTC with explicit `Z` offset for all absolute datetimes, across both the API and SSE event payloads. `null` means indefinite. The southbound translator converts to/from the thermostat's native wall-clock format. Wall-clock `HH:MM` is retained **only** for recurring schedule periods, which have no date component.
+4. **Schedule PUT atomicity — RESOLVED.** `PUT /v1/zones/{zoneId}/schedule` replaces the entire week in one atomic call. No per-day endpoint in v1.
