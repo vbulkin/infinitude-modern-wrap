@@ -24,9 +24,13 @@ from lxml import etree
 
 SENTINEL_UTC = "2026-01-01T12:00:00Z"
 SENTINEL_SERIAL = "0000TEST0000"
+SENTINEL_PIN = "00000000"
+SENTINEL_MAC = "000000000000"
 
 TIMESTAMP_TAGS = {"localTime", "utc", "timestamp"}
 SERIAL_TAGS = {"serial", "SerialNumber", "serialNumber"}
+PIN_TAGS = {"pin"}
+MAC_TAGS = {"routerMac"}
 
 
 def _strip_ns(tag: str) -> str:
@@ -56,6 +60,14 @@ def scrub_tree(root: etree._Element) -> int:
         if local in SERIAL_TAGS and el.text and el.text.strip():
             if el.text != SENTINEL_SERIAL:
                 el.text = SENTINEL_SERIAL
+                n += 1
+        if local in PIN_TAGS and el.text and el.text.strip():
+            if el.text != SENTINEL_PIN:
+                el.text = SENTINEL_PIN
+                n += 1
+        if local in MAC_TAGS and el.text and el.text.strip():
+            if el.text != SENTINEL_MAC:
+                el.text = SENTINEL_MAC
                 n += 1
     return n
 

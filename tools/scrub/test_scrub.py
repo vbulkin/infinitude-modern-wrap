@@ -7,6 +7,8 @@ from pathlib import Path
 from lxml import etree
 
 from tools.scrub.scrub_fixtures import (
+    SENTINEL_MAC,
+    SENTINEL_PIN,
     SENTINEL_SERIAL,
     SENTINEL_UTC,
     scrub_file,
@@ -44,6 +46,17 @@ def test_serial_replaced(tmp_path: Path):
     f.write_bytes(xml)
     scrub_file(f)
     assert etree.fromstring(f.read_bytes()).findtext("serial") == SENTINEL_SERIAL
+
+
+def test_pin_and_mac_replaced(tmp_path: Path):
+    xml = b'<profile><pin>C00D8F96</pin><routerMac>F23883459DB2</routerMac></profile>'
+    f = tmp_path / "t.xml"
+    f.write_bytes(xml)
+    n = scrub_file(f)
+    assert n == 2
+    tree = etree.fromstring(f.read_bytes())
+    assert tree.findtext("pin") == SENTINEL_PIN
+    assert tree.findtext("routerMac") == SENTINEL_MAC
 
 
 def test_idempotent(tmp_path: Path):

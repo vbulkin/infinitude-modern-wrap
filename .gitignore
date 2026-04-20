@@ -7,3 +7,7 @@ __pycache__/
 .venv/
 .claude/
 .mcp.json
+
+# Capture proxy output (raw, unscrubbed — see tools/capture/)
+captures/
+tools/scrub/_scratch_*.py
