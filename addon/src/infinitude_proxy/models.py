@@ -191,6 +191,33 @@ class Schedule(BaseModel):
     days: Annotated[list[ScheduleDay], Field(min_length=7, max_length=7)]
 
 
+# ── System-level equipment config ────────────────────────────────────
+
+class VacationConfig(BaseModel):
+    model_config = ConfigDict(use_enum_values=True)
+    active: bool
+    start: datetime | None = None
+    end: datetime | None = None
+    heatSetpoint: Temperature
+    coolSetpoint: Temperature
+    fan: FanSpeed
+
+
+class HumidityConfig(BaseModel):
+    """Humidifier equipment + per-mode target RH.
+
+    Targets are Optional because units without a humidifier configured
+    leave the fields empty in the wire payload. `equipmentInstalled`
+    reflects `<cfghumid>on</cfghumid>` — the presence of the hardware,
+    not whether any target is set.
+    """
+    equipmentInstalled: bool
+    humidifierFan: bool
+    targetHome: PercentInt | None = None
+    targetAway: PercentInt | None = None
+    targetVacation: PercentInt | None = None
+
+
 # ── State + events ───────────────────────────────────────────────────
 
 class State(BaseModel):

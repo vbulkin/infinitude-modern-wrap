@@ -164,6 +164,47 @@ def test_parse_system_config_activities_and_schedule():
     assert p1.activity == "wake" and p1.time == "08:00" and p1.enabled is True
 
 
+def test_parse_system_config_vacation_and_humidity():
+    cfg = parse_system_config(_read("boot_01_system_config.xml"))
+    # Fixture has vacat=off with 60/80 setpoints retained from the last
+    # vacation; no active window so start/end are None.
+    assert cfg.vacation.active is False
+    assert cfg.vacation.start is None and cfg.vacation.end is None
+    assert cfg.vacation.heatSetpoint == 60
+    assert cfg.vacation.coolSetpoint == 80
+    assert cfg.vacation.fan == "off"
+    # Humidifier hardware installed (cfghumid=on), fan runs with it,
+    # but the live household hasn't set any per-mode targets.
+    assert cfg.humidity.equipmentInstalled is True
+    assert cfg.humidity.humidifierFan is True
+    assert cfg.humidity.targetHome is None
+    assert cfg.humidity.targetAway is None
+    assert cfg.humidity.targetVacation is None
+
+
+def test_v1_system_vacation_and_humidity_endpoints():
+    store = StateStore()
+    app = create_app(store=store)
+    client = TestClient(app)
+
+    assert client.get("/v1/system/vacation").status_code == 404
+    assert client.get("/v1/system/humidity").status_code == 404
+
+    client.post(
+        "/systems/0000TEST0000",
+        content=_read("boot_01_system_config.xml"),
+        headers={"content-type": "application/xml"},
+    )
+
+    vac = client.get("/v1/system/vacation").json()
+    assert vac["active"] is False
+    assert vac["heatSetpoint"] == 60 and vac["coolSetpoint"] == 80
+
+    hum = client.get("/v1/system/humidity").json()
+    assert hum["equipmentInstalled"] is True
+    assert hum["targetHome"] is None
+
+
 def test_v1_zone_activities_and_schedule_endpoints():
     store = StateStore()
     app = create_app(store=store)

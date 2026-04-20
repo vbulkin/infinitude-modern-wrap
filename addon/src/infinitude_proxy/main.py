@@ -27,6 +27,7 @@ from .models import (
     FanSpeed,
     Health,
     HealthComponents,
+    HumidityConfig,
     HvacAction,
     HvacMode,
     RuntimeConfig,
@@ -35,6 +36,7 @@ from .models import (
     StateStoreHealth,
     System,
     ThermostatHealth,
+    VacationConfig,
     Version,
     Zone,
     ZoneHold,
@@ -267,6 +269,24 @@ def create_app(store: StateStore | None = None) -> FastAPI:
             if zc.id == zone_id:
                 return Schedule(zoneId=zone_id, days=list(zc.schedule))
         raise HTTPException(status_code=404, detail=f"zone {zone_id} not found")
+
+    @app.get(
+        "/v1/system/vacation", response_model=VacationConfig, tags=["system"]
+    )
+    def get_vacation() -> VacationConfig:
+        stored = store.get_config()
+        if stored is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        return VacationConfig.model_validate(stored.config.vacation)
+
+    @app.get(
+        "/v1/system/humidity", response_model=HumidityConfig, tags=["system"]
+    )
+    def get_humidity() -> HumidityConfig:
+        stored = store.get_config()
+        if stored is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        return HumidityConfig.model_validate(stored.config.humidity)
 
     @app.get("/v1/events", tags=["events"])
     async def stream_events(request: Request) -> EventSourceResponse:

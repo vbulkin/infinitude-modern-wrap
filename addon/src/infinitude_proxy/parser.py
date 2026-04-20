@@ -17,11 +17,13 @@ from .models import (
     ActivityId,
     DayOfWeek,
     FanSpeed,
+    HumidityConfig,
     HvacAction,
     HvacMode,
     ScheduleDay,
     SchedulePeriod,
     SystemHoldActivity,
+    VacationConfig,
     WholeHouseHold,
     ZoneHold,
 )
@@ -102,6 +104,8 @@ class SystemConfig(BaseModel):
     mode: HvacMode
     wholeHouseHold: WholeHouseHold
     zones: list[ZoneConfig]
+    vacation: VacationConfig
+    humidity: HumidityConfig
 
 
 def _parse_whole_house_hold(wh: etree._Element | None) -> WholeHouseHold:
@@ -116,6 +120,51 @@ def _parse_whole_house_hold(wh: etree._Element | None) -> WholeHouseHold:
         except ValueError:
             activity = None
     return WholeHouseHold(active=active, activity=activity, until=None)
+
+
+def _parse_vacation(config_el: etree._Element) -> VacationConfig:
+    """Parse the vacation fields out of <config>.
+
+    Fields are flat children of <config>, not a nested element. vacstart/
+    vacend are ISO-like timestamps when set and empty strings otherwise.
+    """
+    def _iso(tag: str) -> datetime | None:
+        t = _text(config_el, tag)
+        if not t:
+            return None
+        try:
+            return datetime.fromisoformat(t.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    return VacationConfig(
+        active=_text(config_el, "vacat") == "on",
+        start=_iso("vacstart"),
+        end=_iso("vacend"),
+        heatSetpoint=_float_round(config_el, "vacmint") or 0,
+        coolSetpoint=_float_round(config_el, "vacmaxt") or 0,
+        fan=FanSpeed(_text(config_el, "vacfan") or "off"),
+    )
+
+
+def _parse_humidity(config_el: etree._Element) -> HumidityConfig:
+    """Parse humidifier equipment + per-mode target RH out of <config>.
+
+    Targets are empty on units without a humidifier — we leave them
+    as None rather than zero so consumers can distinguish "no target
+    configured" from "target set to 0%".
+    """
+    def _pct(tag: str) -> int | None:
+        t = _text(config_el, tag)
+        return int(t) if t is not None else None
+
+    return HumidityConfig(
+        equipmentInstalled=_text(config_el, "cfghumid") == "on",
+        humidifierFan=_text(config_el, "humidityfan") == "on",
+        targetHome=_pct("humidityHome"),
+        targetAway=_pct("humidityAway"),
+        targetVacation=_pct("humidityVacation"),
+    )
 
 
 def _parse_activities(zone_el: etree._Element) -> list[Activity]:
@@ -208,10 +257,10 @@ def parse_system_config(xml_bytes: bytes) -> SystemConfig:
 
     TODO: known-unsurfaced fields in this payload. Each is a candidate
     for its own slice once a northbound consumer needs it:
-      <config>/<vacation>            vacation hold window + setpoints
-      <config>/<humidityConfig>      humidifier/dehumidifier targets
-      <config>/<utility>             utility-rate response config
+      <config>/<utilityEvent>        utility-rate response config
       <config>/<staticPressure>      duct static pressure calibration
+      <config>/<blowerSpeed>, CFM    blower commissioning data
+      <config>/<filterinterval>, …   service-reminder thresholds
       zone/<otmr>, <setback>, etc.   per-zone behavior tuning knobs
     """
     root = etree.fromstring(xml_bytes)
@@ -238,7 +287,13 @@ def parse_system_config(xml_bytes: bytes) -> SystemConfig:
                     schedule=_parse_schedule(z),
                 )
             )
-    return SystemConfig(mode=mode, wholeHouseHold=wh_hold, zones=zones)
+    return SystemConfig(
+        mode=mode,
+        wholeHouseHold=wh_hold,
+        zones=zones,
+        vacation=_parse_vacation(config),
+        humidity=_parse_humidity(config),
+    )
 
 
 class NotificationChange(BaseModel):
