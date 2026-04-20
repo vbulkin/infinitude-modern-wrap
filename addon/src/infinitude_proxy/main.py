@@ -12,11 +12,12 @@ import logging
 import time
 from datetime import datetime, timezone
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from . import __version__
 from .canned_state import canned_state
 from .models import (
+    Activity,
     ActivityId,
     ApiHealth,
     CarrierCloudHealth,
@@ -26,6 +27,7 @@ from .models import (
     HvacAction,
     HvacMode,
     RuntimeConfig,
+    Schedule,
     State,
     StateStoreHealth,
     System,
@@ -234,6 +236,34 @@ def create_app(store: StateStore | None = None) -> FastAPI:
     @app.get("/v1/state", response_model=State, tags=["state"])
     def get_state() -> State:
         return _compose_state(store.get_config(), store.get_telemetry())
+
+    @app.get(
+        "/v1/zones/{zone_id}/activities",
+        response_model=list[Activity],
+        tags=["zones"],
+    )
+    def get_zone_activities(zone_id: str) -> list[Activity]:
+        stored = store.get_config()
+        if stored is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        for zc in stored.config.zones:
+            if zc.id == zone_id:
+                return [Activity.model_validate(a) for a in zc.activities]
+        raise HTTPException(status_code=404, detail=f"zone {zone_id} not found")
+
+    @app.get(
+        "/v1/zones/{zone_id}/schedule",
+        response_model=Schedule,
+        tags=["zones"],
+    )
+    def get_zone_schedule(zone_id: str) -> Schedule:
+        stored = store.get_config()
+        if stored is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        for zc in stored.config.zones:
+            if zc.id == zone_id:
+                return Schedule(zoneId=zone_id, days=list(zc.schedule))
+        raise HTTPException(status_code=404, detail=f"zone {zone_id} not found")
 
     return app
 

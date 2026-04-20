@@ -13,10 +13,14 @@ from lxml import etree
 from pydantic import BaseModel, ConfigDict
 
 from .models import (
+    Activity,
     ActivityId,
+    DayOfWeek,
     FanSpeed,
     HvacAction,
     HvacMode,
+    ScheduleDay,
+    SchedulePeriod,
     SystemHoldActivity,
     WholeHouseHold,
     ZoneHold,
@@ -89,6 +93,8 @@ class ZoneConfig(BaseModel):
     name: str
     enabled: bool
     hold: ZoneHold
+    activities: list[Activity]
+    schedule: list[ScheduleDay]
 
 
 class SystemConfig(BaseModel):
@@ -112,6 +118,75 @@ def _parse_whole_house_hold(wh: etree._Element | None) -> WholeHouseHold:
     return WholeHouseHold(active=active, activity=activity, until=None)
 
 
+def _parse_activities(zone_el: etree._Element) -> list[Activity]:
+    """Parse <zone>/<activities>/<activity id="..."> entries.
+
+    Unknown ids are dropped (we keep ActivityId as a closed enum on
+    the API surface). Setpoints come in as float strings; we round
+    to the ints our Temperature type requires.
+    """
+    out: list[Activity] = []
+    acts_el = zone_el.find("activities")
+    if acts_el is None:
+        return out
+    for a in acts_el.findall("activity"):
+        raw_id = a.get("id") or ""
+        try:
+            aid = ActivityId(raw_id)
+        except ValueError:
+            continue
+        out.append(
+            Activity(
+                id=aid,
+                heat=_float_round(a, "htsp") or 0,
+                cool=_float_round(a, "clsp") or 0,
+                fan=FanSpeed(_text(a, "fan") or "off"),
+            )
+        )
+    return out
+
+
+def _parse_schedule(zone_el: etree._Element) -> list[ScheduleDay]:
+    """Parse <zone>/<program>/<day id="Sunday"><period id="N">...
+
+    Seven days, up to five periods each. Period activity references
+    must resolve against ActivityId; unknown ids drop the period.
+    """
+    out: list[ScheduleDay] = []
+    prog = zone_el.find("program")
+    if prog is None:
+        return out
+    for d in prog.findall("day"):
+        raw_day = d.get("id") or ""
+        try:
+            day = DayOfWeek(raw_day)
+        except ValueError:
+            continue
+        periods: list[SchedulePeriod] = []
+        for p in d.findall("period"):
+            raw_id = p.get("id") or ""
+            try:
+                pid = int(raw_id)
+            except ValueError:
+                continue
+            raw_act = _text(p, "activity") or ""
+            try:
+                act = ActivityId(raw_act)
+            except ValueError:
+                continue
+            periods.append(
+                SchedulePeriod(
+                    id=pid,
+                    activity=act,
+                    time=_text(p, "time") or "00:00",
+                    enabled=_text(p, "enabled") == "on",
+                )
+            )
+        if periods:
+            out.append(ScheduleDay(day=day, periods=periods))
+    return out
+
+
 def _parse_zone_hold(zone_el: etree._Element) -> ZoneHold:
     active = _text(zone_el, "hold") == "on"
     raw = _text(zone_el, "holdActivity")
@@ -133,12 +208,11 @@ def parse_system_config(xml_bytes: bytes) -> SystemConfig:
 
     TODO: known-unsurfaced fields in this payload. Each is a candidate
     for its own slice once a northbound consumer needs it:
-      <config>/<activities>          per-activity setpoint templates
-      <config>/zone/<program>        weekly schedule (periods per day)
       <config>/<vacation>            vacation hold window + setpoints
       <config>/<humidityConfig>      humidifier/dehumidifier targets
       <config>/<utility>             utility-rate response config
       <config>/<staticPressure>      duct static pressure calibration
+      zone/<otmr>, <setback>, etc.   per-zone behavior tuning knobs
     """
     root = etree.fromstring(xml_bytes)
     config = root.find("config")
@@ -160,6 +234,8 @@ def parse_system_config(xml_bytes: bytes) -> SystemConfig:
                     name=_text(z, "name") or "",
                     enabled=True,
                     hold=_parse_zone_hold(z),
+                    activities=_parse_activities(z),
+                    schedule=_parse_schedule(z),
                 )
             )
     return SystemConfig(mode=mode, wholeHouseHold=wh_hold, zones=zones)

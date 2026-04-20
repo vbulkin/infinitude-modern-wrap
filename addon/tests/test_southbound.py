@@ -146,6 +146,54 @@ def test_parse_system_config_opmode_change():
     assert cfg.mode == "auto"
 
 
+def test_parse_system_config_activities_and_schedule():
+    cfg = parse_system_config(_read("boot_01_system_config.xml"))
+    z1 = next(z for z in cfg.zones if z.id == "1")
+    # Five closed-enum activities in fixed order.
+    assert [a.id for a in z1.activities] == ["home", "away", "sleep", "wake", "manual"]
+    home = next(a for a in z1.activities if a.id == "home")
+    assert home.heat == 68 and home.cool == 74 and home.fan == "low"
+    # Seven-day schedule; period 1 on Sunday is wake @ 08:00.
+    assert [d.day for d in z1.schedule] == [
+        "Sunday", "Monday", "Tuesday", "Wednesday",
+        "Thursday", "Friday", "Saturday",
+    ]
+    sunday = next(d for d in z1.schedule if d.day == "Sunday")
+    p1 = next(p for p in sunday.periods if p.id == 1)
+    assert p1.activity == "wake" and p1.time == "08:00" and p1.enabled is True
+
+
+def test_v1_zone_activities_and_schedule_endpoints():
+    store = StateStore()
+    app = create_app(store=store)
+    client = TestClient(app)
+
+    # Before any config, both endpoints 404.
+    assert client.get("/v1/zones/1/activities").status_code == 404
+    assert client.get("/v1/zones/1/schedule").status_code == 404
+
+    client.post(
+        "/systems/0000TEST0000",
+        content=_read("boot_01_system_config.xml"),
+        headers={"content-type": "application/xml"},
+    )
+
+    acts = client.get("/v1/zones/1/activities").json()
+    assert [a["id"] for a in acts] == ["home", "away", "sleep", "wake", "manual"]
+
+    sched = client.get("/v1/zones/1/schedule").json()
+    assert sched["zoneId"] == "1"
+    assert len(sched["days"]) == 7
+    sunday = next(d for d in sched["days"] if d["day"] == "Sunday")
+    assert sunday["periods"][0] == {
+        "id": 1, "activity": "wake", "time": "08:00", "enabled": True,
+    }
+
+    # Unknown zone id → 404.
+    assert client.get("/v1/zones/9/activities").status_code == 404
+    assert client.get("/v1/zones/9/schedule").status_code == 404
+
+
 def test_post_system_config_updates_store():
     store = StateStore()
     app = create_app(store=store)
