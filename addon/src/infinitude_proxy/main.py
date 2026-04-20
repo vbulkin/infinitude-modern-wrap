@@ -9,12 +9,11 @@ fields the thermostat has reported become live.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from sse_starlette.sse import EventSourceResponse
 
 from . import __version__
@@ -31,6 +30,9 @@ from .models import (
     HvacAction,
     HvacMode,
     IduConfig,
+    NotificationBody,
+    NotificationChangeEntry,
+    NotificationEnvelope,
     OduConfig,
     RuntimeConfig,
     Schedule,
@@ -308,6 +310,38 @@ def create_app(store: StateStore | None = None) -> FastAPI:
             )
         return stored.config
 
+    @app.get(
+        "/v1/notifications",
+        response_model=list[NotificationEnvelope],
+        tags=["events"],
+    )
+    def get_notifications(
+        since: datetime | None = Query(
+            None,
+            description=(
+                "ISO-8601 timestamp — return only notifications whose "
+                "receivedAt is strictly greater. Intended cursor for "
+                "SSE reconnect backfill; use the receivedAt of the last "
+                "event the client processed."
+            ),
+        ),
+        limit: int = Query(50, ge=1, le=50),
+    ) -> list[NotificationEnvelope]:
+        """Recent-notifications ring-buffer view for SSE reconnect backfill.
+
+        Oldest-first so clients can replay in arrival order. The ring
+        buffer holds up to 50 entries — if `since` is older than the
+        buffer's oldest event the caller has missed events and this
+        endpoint can't prove it; a future slice may add a truncation
+        header or a `gap` response field if that becomes operationally
+        important.
+        """
+        stored = store.recent_notifications()
+        if since is not None:
+            stored = [sn for sn in stored if sn.receivedAt > since]
+        stored = stored[-limit:]
+        return [_envelope_from_stored(sn) for sn in stored]
+
     @app.get("/v1/events", tags=["events"])
     async def stream_events(request: Request) -> EventSourceResponse:
         """SSE stream of thermostat notifications.
@@ -342,19 +376,36 @@ def create_app(store: StateStore | None = None) -> FastAPI:
     return app
 
 
+def _envelope_from_stored(sn: StoredNotification) -> NotificationEnvelope:
+    """Lift a StoredNotification dataclass into the northbound envelope.
+
+    Single serialization shape for both SSE frames and the /v1/
+    notifications backfill endpoint — if the wire format ever changes
+    (additional metadata, rename, etc.) this is the one place to edit.
+    """
+    return NotificationEnvelope(
+        serial=sn.serial,
+        receivedAt=sn.receivedAt,
+        event=NotificationBody(
+            type=sn.event.type,
+            code=sn.event.code,
+            message=sn.event.message,
+            timestamp=sn.event.timestamp,
+            changes=[
+                NotificationChangeEntry(id=c.id, zone=c.zone)
+                for c in sn.event.changes
+            ],
+        ),
+    )
+
+
 def _stored_notification_json(sn: StoredNotification) -> str:
     """Serialize a StoredNotification for SSE payload.
 
-    Pydantic handles the event; the dataclass wrapper needs manual
-    composition so we get serial/receivedAt alongside the event body.
+    Routes through _envelope_from_stored so SSE frames and backfill
+    responses are guaranteed to have identical shape.
     """
-    return json.dumps(
-        {
-            "serial": sn.serial,
-            "receivedAt": sn.receivedAt.isoformat(),
-            "event": sn.event.model_dump(mode="json"),
-        }
-    )
+    return _envelope_from_stored(sn).model_dump_json()
 
 
 app = create_app()

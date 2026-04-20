@@ -232,6 +232,41 @@ class IduConfig(BaseModel):
     auxiliaryTerminalAvailable: bool
 
 
+class NotificationChangeEntry(BaseModel):
+    id: str
+    zone: str | None = None
+
+
+class NotificationBody(BaseModel):
+    """Thermostat notification event body.
+
+    Mirrors what the thermostat sends in a POST /notifications body —
+    `type` is always "confirmation" in observed traffic but is left
+    open so we don't drop future alert/warning shapes. `timestamp` is
+    the thermostat's wall-clock at emission; `receivedAt` on the
+    envelope is ours.
+    """
+    type: str
+    code: int
+    message: str
+    timestamp: datetime
+    changes: list[NotificationChangeEntry]
+
+
+class NotificationEnvelope(BaseModel):
+    """Stored-and-served notification: a body plus our receive metadata.
+
+    Same shape the SSE stream emits for each `notification` event.
+    Clients doing reconnect backfill (/v1/notifications?since=…) use
+    `receivedAt` as their cursor — the thermostat's own `timestamp`
+    can go backwards across resets, so it's not a reliable ordering
+    key on its own.
+    """
+    serial: str
+    receivedAt: datetime
+    event: NotificationBody
+
+
 class OduConfig(BaseModel):
     """Outdoor-unit equipment identity + airflow/lockout config.
 

@@ -455,6 +455,86 @@ def test_sse_events_route_registered():
     assert "GET" in getattr(events_route, "methods", set())
 
 
+def test_v1_notifications_empty_buffer_returns_empty_list():
+    client = TestClient(create_app())
+    r = client.get("/v1/notifications")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_v1_notifications_returns_recent_entries_oldest_first():
+    store = StateStore()
+    app = create_app(store=store)
+    client = TestClient(app)
+
+    for fixture in (
+        "change_opmode_notifications.xml",
+        "change_schedule_notifications.xml",
+        "change_setpoint_notifications.xml",
+    ):
+        client.post(
+            "/systems/0000TEST0000/notifications",
+            content=_read(fixture),
+            headers={"content-type": "application/xml"},
+        )
+
+    body = client.get("/v1/notifications").json()
+    # Oldest-first; deque preserves insertion order.
+    assert [n["event"]["changes"][0]["id"] for n in body] == [
+        "OP_MODE", "ZONE_SCHEDULE", "ZONE_SETPOINTS",
+    ]
+    # Envelope shape matches the SSE frame contract.
+    n0 = body[0]
+    assert n0["serial"] == "0000TEST0000"
+    assert "receivedAt" in n0
+    assert n0["event"]["type"] == "confirmation"
+
+
+def test_v1_notifications_since_filter_excludes_older_and_equal():
+    """`since` is strictly greater-than — a client passing the cursor
+    of its last-seen event must not get that event back."""
+    store = StateStore()
+    app = create_app(store=store)
+    client = TestClient(app)
+
+    client.post(
+        "/systems/0000TEST0000/notifications",
+        content=_read("change_opmode_notifications.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    first = client.get("/v1/notifications").json()
+    cursor = first[0]["receivedAt"]
+
+    client.post(
+        "/systems/0000TEST0000/notifications",
+        content=_read("change_setpoint_notifications.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    body = client.get(f"/v1/notifications?since={cursor}").json()
+    assert len(body) == 1
+    assert body[0]["event"]["changes"][0]["id"] == "ZONE_SETPOINTS"
+
+
+def test_v1_notifications_limit_caps_results():
+    store = StateStore()
+    app = create_app(store=store)
+    client = TestClient(app)
+
+    for _ in range(3):
+        client.post(
+            "/systems/0000TEST0000/notifications",
+            content=_read("change_opmode_notifications.xml"),
+            headers={"content-type": "application/xml"},
+        )
+
+    body = client.get("/v1/notifications?limit=2").json()
+    assert len(body) == 2
+
+    # Out-of-range limit is rejected by FastAPI validation.
+    assert client.get("/v1/notifications?limit=0").status_code == 422
+    assert client.get("/v1/notifications?limit=51").status_code == 422
+
+
 def test_post_notifications_appends_to_store():
     store = StateStore()
     app = create_app(store=store)
