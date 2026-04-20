@@ -46,6 +46,7 @@ class StateStore:
         self._notifications: deque[StoredNotification] = deque(
             maxlen=NOTIFICATION_BUFFER_SIZE
         )
+        self._config_dirty: bool = False
         self._lock = asyncio.Lock()
 
     async def apply_telemetry(self, serial: str, snapshot: TelemetrySnapshot) -> None:
@@ -63,6 +64,15 @@ class StateStore:
                 config=config,
                 receivedAt=datetime.now(timezone.utc),
             )
+            # Fresh config from the thermostat — whatever northbound edits
+            # were pending have now been round-tripped. Clear the flag.
+            self._config_dirty = False
+
+    async def mark_config_dirty(self) -> None:
+        """Signal to the next telemetry directive that the thermostat
+        should re-fetch its config. Cleared by the next apply_config."""
+        async with self._lock:
+            self._config_dirty = True
 
     async def append_notifications(
         self, serial: str, events: list[NotificationEvent]
@@ -82,3 +92,7 @@ class StateStore:
 
     def recent_notifications(self) -> list[StoredNotification]:
         return list(self._notifications)
+
+    @property
+    def config_dirty(self) -> bool:
+        return self._config_dirty

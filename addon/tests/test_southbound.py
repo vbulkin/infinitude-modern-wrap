@@ -216,6 +216,38 @@ def test_parse_notifications_extracts_three_change_ids():
         assert ev.changes[0].zone == zone
 
 
+def test_directive_flips_dirty_flag_and_config_post_clears_it():
+    """Dirty-flag lifecycle end-to-end:
+      1. clean store   → configHasChanges=false
+      2. mark_dirty    → configHasChanges=true
+      3. full-config POST clears it → next telemetry back to false
+    """
+    import asyncio
+    store = StateStore()
+    app = create_app(store=store)
+    client = TestClient(app)
+
+    def _telemetry_response() -> bytes:
+        return client.post(
+            "/systems/0000TEST0000/status",
+            content=_read("telemetry_steady.xml"),
+            headers={"content-type": "application/xml"},
+        ).content
+
+    assert b"<configHasChanges>false</configHasChanges>" in _telemetry_response()
+
+    asyncio.run(store.mark_config_dirty())
+    assert b"<configHasChanges>true</configHasChanges>" in _telemetry_response()
+
+    # Thermostat responds to the directive by re-uploading full config.
+    client.post(
+        "/systems/0000TEST0000",
+        content=_read("boot_01_system_config.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    assert b"<configHasChanges>false</configHasChanges>" in _telemetry_response()
+
+
 def test_post_notifications_appends_to_store():
     store = StateStore()
     app = create_app(store=store)

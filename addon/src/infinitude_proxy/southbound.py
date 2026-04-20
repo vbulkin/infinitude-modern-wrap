@@ -19,14 +19,27 @@ from .parser import parse_notifications, parse_system_config, parse_telemetry
 from .state_store import StateStore
 
 
-DIRECTIVE_XML = (
-    b'<?xml version="1.0" encoding="UTF-8"?>\n'
-    b'<status version="1.37">'
-    b'<configHasChanges>false</configHasChanges>'
-    b'<pingRate>12</pingRate>'
-    b'<serverHasChanges>false</serverHasChanges>'
-    b'</status>'
-)
+DIRECTIVE_PING_RATE = 12
+
+
+def _directive_xml(config_has_changes: bool) -> bytes:
+    """Build the directive-channel response.
+
+    Three fields; the only one that varies today is configHasChanges.
+    True tells the thermostat to come back for a fresh /systems/{serial}
+    dump; the ensuing POST clears the flag. pingRate is the telemetry
+    poll cadence hint; Carrier's own server returned 12 in our captures
+    regardless of dirty state, so we match that for now.
+    """
+    flag = b"true" if config_has_changes else b"false"
+    return (
+        b'<?xml version="1.0" encoding="UTF-8"?>\n'
+        b'<status version="1.37">'
+        b'<configHasChanges>' + flag + b'</configHasChanges>'
+        b'<pingRate>' + str(DIRECTIVE_PING_RATE).encode() + b'</pingRate>'
+        b'<serverHasChanges>false</serverHasChanges>'
+        b'</status>'
+    )
 
 
 def _unwrap_form(body: bytes) -> bytes:
@@ -43,7 +56,10 @@ def create_southbound_router(store: StateStore) -> APIRouter:
         body = await request.body()
         snapshot = parse_telemetry(_unwrap_form(body))
         await store.apply_telemetry(serial, snapshot)
-        return Response(content=DIRECTIVE_XML, media_type="application/xml")
+        return Response(
+            content=_directive_xml(store.config_dirty),
+            media_type="application/xml",
+        )
 
     @router.post("/systems/{serial}")
     async def post_system_config(serial: str, request: Request) -> Response:
