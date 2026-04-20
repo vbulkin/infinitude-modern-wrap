@@ -1,0 +1,118 @@
+"""Parsers from captured thermostat XML into typed snapshots.
+
+Only the fields the proxy actually consumes. Fields like <cfgem>,
+<cfgtype>, <vacatrunning> etc. are preserved in the raw bytes for
+forensics but not surfaced in the snapshot.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from lxml import etree
+from pydantic import BaseModel, ConfigDict
+
+from .models import ActivityId, FanSpeed, HvacAction
+
+
+# Thermostat <zoneconditioning> wire values → our HvacAction enum.
+# Values observed in live fixtures + defensive coverage for the
+# remaining heat/cool/dehumidify variants documented in the design.
+_CONDITIONING_MAP = {
+    "idle": HvacAction.IDLE,
+    "off": HvacAction.OFF,
+    "active_heat": HvacAction.HEATING,
+    "staged1_heat": HvacAction.HEATING,
+    "staged2_heat": HvacAction.HEATING,
+    "active_cool": HvacAction.COOLING,
+    "staged1_cool": HvacAction.COOLING,
+    "staged2_cool": HvacAction.COOLING,
+    "dehumidify": HvacAction.DEHUMIDIFYING,
+    "fan": HvacAction.FAN,
+}
+
+
+def _text(el: etree._Element, tag: str) -> str | None:
+    found = el.find(tag)
+    if found is None:
+        return None
+    txt = found.text
+    return txt.strip() if txt and txt.strip() else None
+
+
+def _int(el: etree._Element, tag: str) -> int | None:
+    t = _text(el, tag)
+    return int(t) if t is not None else None
+
+
+def _float_round(el: etree._Element, tag: str) -> int | None:
+    t = _text(el, tag)
+    return round(float(t)) if t is not None else None
+
+
+class TelemetryZone(BaseModel):
+    model_config = ConfigDict(use_enum_values=True)
+    id: str
+    name: str
+    enabled: bool
+    temperature: int
+    humidity: int
+    heatSetpoint: int
+    coolSetpoint: int
+    fan: FanSpeed
+    damperPercent: int
+    conditioning: HvacAction
+    currentActivity: ActivityId
+    holdActive: bool
+
+
+class TelemetrySnapshot(BaseModel):
+    model_config = ConfigDict(use_enum_values=True)
+    localTime: datetime
+    outdoorTemperature: int
+    operatingStatusMessage: str
+    humidifierOn: bool
+    zones: list[TelemetryZone]
+
+
+def parse_telemetry(xml_bytes: bytes) -> TelemetrySnapshot:
+    """Parse a POST /systems/{serial}/status body into a snapshot.
+
+    Damper: thermostat reports 0–15; we normalize to 0–100% at this
+    boundary per the design decision (see design/DESIGN.md §6).
+    """
+    root = etree.fromstring(xml_bytes)
+    zones: list[TelemetryZone] = []
+    zones_el = root.find("zones")
+    if zones_el is not None:
+        for z in zones_el.findall("zone"):
+            if _text(z, "enabled") != "on":
+                continue
+            damper_raw = _int(z, "damperposition") or 0
+            zones.append(
+                TelemetryZone(
+                    id=z.get("id") or "",
+                    name=_text(z, "name") or "",
+                    enabled=True,
+                    temperature=_float_round(z, "rt") or 0,
+                    humidity=_int(z, "rh") or 0,
+                    heatSetpoint=_float_round(z, "htsp") or 0,
+                    coolSetpoint=_float_round(z, "clsp") or 0,
+                    fan=FanSpeed(_text(z, "fan") or "off"),
+                    damperPercent=round(damper_raw * 100 / 15),
+                    conditioning=_CONDITIONING_MAP.get(
+                        _text(z, "zoneconditioning") or "idle", HvacAction.IDLE
+                    ),
+                    currentActivity=ActivityId(_text(z, "currentActivity") or "home"),
+                    holdActive=_text(z, "hold") == "on",
+                )
+            )
+    return TelemetrySnapshot(
+        localTime=datetime.fromisoformat(
+            (_text(root, "localTime") or "").replace("Z", "+00:00")
+        ),
+        outdoorTemperature=_int(root, "oat") or 0,
+        operatingStatusMessage=_text(root, "oprstsmsg") or "",
+        humidifierOn=_text(root, "humid") == "on",
+        zones=zones,
+    )
