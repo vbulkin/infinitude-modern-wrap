@@ -15,7 +15,7 @@ from urllib.parse import unquote_to_bytes
 
 from fastapi import APIRouter, Request, Response
 
-from .parser import parse_system_config, parse_telemetry
+from .parser import parse_notifications, parse_system_config, parse_telemetry
 from .state_store import StateStore
 
 
@@ -52,10 +52,16 @@ def create_southbound_router(store: StateStore) -> APIRouter:
         await store.apply_config(serial, config)
         return Response(status_code=200)
 
-    # Metadata POSTs the thermostat also sends during boot and after some
-    # user actions (profile, dealer, idu_config, odu_config, notifications,
-    # utility_events). We don't consume them yet — accept and discard so
-    # the thermostat doesn't retry.
+    @router.post("/systems/{serial}/notifications")
+    async def post_notifications(serial: str, request: Request) -> Response:
+        body = await request.body()
+        events = parse_notifications(_unwrap_form(body))
+        await store.append_notifications(serial, events)
+        return Response(status_code=200)
+
+    # Metadata POSTs the thermostat also sends during boot (profile,
+    # dealer, idu_config, odu_config, utility_events). Not consumed
+    # yet — accept and discard so the thermostat doesn't retry.
     @router.post("/systems/{serial}/{subpath:path}")
     async def post_metadata_fallback(serial: str, subpath: str) -> Response:
         return Response(status_code=200)

@@ -9,10 +9,13 @@ never observe a torn snapshot.
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from .parser import SystemConfig, TelemetrySnapshot
+from .parser import NotificationEvent, SystemConfig, TelemetrySnapshot
+
+NOTIFICATION_BUFFER_SIZE = 50
 
 
 @dataclass
@@ -29,10 +32,20 @@ class StoredConfig:
     receivedAt: datetime
 
 
+@dataclass
+class StoredNotification:
+    serial: str
+    event: NotificationEvent
+    receivedAt: datetime
+
+
 class StateStore:
     def __init__(self) -> None:
         self._telemetry: StoredTelemetry | None = None
         self._config: StoredConfig | None = None
+        self._notifications: deque[StoredNotification] = deque(
+            maxlen=NOTIFICATION_BUFFER_SIZE
+        )
         self._lock = asyncio.Lock()
 
     async def apply_telemetry(self, serial: str, snapshot: TelemetrySnapshot) -> None:
@@ -51,8 +64,21 @@ class StateStore:
                 receivedAt=datetime.now(timezone.utc),
             )
 
+    async def append_notifications(
+        self, serial: str, events: list[NotificationEvent]
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        async with self._lock:
+            for ev in events:
+                self._notifications.append(
+                    StoredNotification(serial=serial, event=ev, receivedAt=now)
+                )
+
     def get_telemetry(self) -> StoredTelemetry | None:
         return self._telemetry
 
     def get_config(self) -> StoredConfig | None:
         return self._config
+
+    def recent_notifications(self) -> list[StoredNotification]:
+        return list(self._notifications)

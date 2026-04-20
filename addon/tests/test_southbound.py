@@ -7,7 +7,11 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from infinitude_proxy.main import create_app
-from infinitude_proxy.parser import parse_system_config, parse_telemetry
+from infinitude_proxy.parser import (
+    parse_notifications,
+    parse_system_config,
+    parse_telemetry,
+)
 from infinitude_proxy.state_store import StateStore
 
 FIXTURES = Path(__file__).parent / "fixtures" / "thermostat"
@@ -186,10 +190,51 @@ def test_metadata_posts_accepted_without_parse():
     """The thermostat's profile/dealer/idu_config/odu_config metadata
     POSTs must 200 OK so it doesn't retry."""
     client = TestClient(create_app())
-    for path in ("profile", "dealer", "idu_config", "odu_config", "notifications"):
+    for path in ("profile", "dealer", "idu_config", "odu_config"):
         r = client.post(
             f"/systems/0000TEST0000/{path}",
             content=_read("boot_02_profile.xml"),
             headers={"content-type": "application/xml"},
         )
         assert r.status_code == 200, f"{path} should 200"
+
+
+def test_parse_notifications_extracts_three_change_ids():
+    cases = [
+        ("change_opmode_notifications.xml",   "OP_MODE",        None),
+        ("change_schedule_notifications.xml", "ZONE_SCHEDULE",  "1"),
+        ("change_setpoint_notifications.xml", "ZONE_SETPOINTS", "1"),
+    ]
+    for fixture, change_id, zone in cases:
+        events = parse_notifications(_read(fixture))
+        assert len(events) == 1
+        ev = events[0]
+        assert ev.type == "confirmation"
+        assert ev.code == 200
+        assert len(ev.changes) == 1
+        assert ev.changes[0].id == change_id
+        assert ev.changes[0].zone == zone
+
+
+def test_post_notifications_appends_to_store():
+    store = StateStore()
+    app = create_app(store=store)
+    client = TestClient(app)
+
+    for fixture in (
+        "change_opmode_notifications.xml",
+        "change_schedule_notifications.xml",
+        "change_setpoint_notifications.xml",
+    ):
+        r = client.post(
+            "/systems/0000TEST0000/notifications",
+            content=_read(fixture),
+            headers={"content-type": "application/xml"},
+        )
+        assert r.status_code == 200
+
+    stored = store.recent_notifications()
+    assert [sn.event.changes[0].id for sn in stored] == [
+        "OP_MODE", "ZONE_SCHEDULE", "ZONE_SETPOINTS",
+    ]
+    assert all(sn.serial == "0000TEST0000" for sn in stored)

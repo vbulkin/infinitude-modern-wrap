@@ -156,6 +156,49 @@ def parse_system_config(xml_bytes: bytes) -> SystemConfig:
     return SystemConfig(mode=mode, wholeHouseHold=wh_hold, zones=zones)
 
 
+class NotificationChange(BaseModel):
+    id: str
+    zone: str | None = None
+
+
+class NotificationEvent(BaseModel):
+    type: str
+    code: int
+    message: str
+    timestamp: datetime
+    changes: list[NotificationChange]
+
+
+def parse_notifications(xml_bytes: bytes) -> list[NotificationEvent]:
+    """Parse a POST /systems/{serial}/notifications body.
+
+    One <notifications> envelope can carry multiple <notification>
+    children; each in turn can list multiple <change> entries.
+    """
+    root = etree.fromstring(xml_bytes)
+    events: list[NotificationEvent] = []
+    for n in root.findall("notification"):
+        changes_el = n.find("changes")
+        changes: list[NotificationChange] = []
+        if changes_el is not None:
+            for c in changes_el.findall("change"):
+                changes.append(
+                    NotificationChange(id=c.get("id") or "", zone=c.get("zone"))
+                )
+        events.append(
+            NotificationEvent(
+                type=_text(n, "type") or "",
+                code=int(_text(n, "code") or "0"),
+                message=_text(n, "message") or "",
+                timestamp=datetime.fromisoformat(
+                    (_text(n, "timestamp") or "").replace("Z", "+00:00")
+                ),
+                changes=changes,
+            )
+        )
+    return events
+
+
 def parse_telemetry(xml_bytes: bytes) -> TelemetrySnapshot:
     """Parse a POST /systems/{serial}/status body into a snapshot.
 
