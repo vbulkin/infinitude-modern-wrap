@@ -9,13 +9,17 @@ never observe a torn snapshot.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from .parser import NotificationEvent, SystemConfig, TelemetrySnapshot
 
+logger = logging.getLogger(__name__)
+
 NOTIFICATION_BUFFER_SIZE = 50
+SUBSCRIBER_QUEUE_MAXSIZE = 64
 
 
 @dataclass
@@ -48,6 +52,7 @@ class StateStore:
         )
         self._config_dirty: bool = False
         self._lock = asyncio.Lock()
+        self._subscribers: list[asyncio.Queue[StoredNotification]] = []
 
     async def apply_telemetry(self, serial: str, snapshot: TelemetrySnapshot) -> None:
         async with self._lock:
@@ -78,11 +83,51 @@ class StateStore:
         self, serial: str, events: list[NotificationEvent]
     ) -> None:
         now = datetime.now(timezone.utc)
+        stored: list[StoredNotification] = []
         async with self._lock:
             for ev in events:
-                self._notifications.append(
-                    StoredNotification(serial=serial, event=ev, receivedAt=now)
-                )
+                sn = StoredNotification(serial=serial, event=ev, receivedAt=now)
+                self._notifications.append(sn)
+                stored.append(sn)
+            subs = list(self._subscribers)
+        # Broadcast outside the lock — a slow subscriber must not stall
+        # the southbound POST that drove the append.
+        for sn in stored:
+            for q in subs:
+                try:
+                    q.put_nowait(sn)
+                except asyncio.QueueFull:
+                    # Drop: a subscriber not keeping up shouldn't cause
+                    # head-of-line blocking for healthy ones. The ring
+                    # buffer still has the event if they reconnect and
+                    # fetch backfill later.
+                    logger.warning(
+                        "SSE subscriber queue full; dropping notification"
+                    )
+
+    def subscribe(self) -> asyncio.Queue[StoredNotification]:
+        """Register an SSE subscriber and get its queue.
+
+        The queue is bounded (SUBSCRIBER_QUEUE_MAXSIZE) so a stalled
+        client can't grow memory without limit. Overflow drops with a
+        WARNING; the caller is responsible for calling unsubscribe()
+        when the stream closes (typically in a finally: block).
+        """
+        q: asyncio.Queue[StoredNotification] = asyncio.Queue(
+            maxsize=SUBSCRIBER_QUEUE_MAXSIZE
+        )
+        self._subscribers.append(q)
+        return q
+
+    def unsubscribe(self, queue: asyncio.Queue[StoredNotification]) -> None:
+        try:
+            self._subscribers.remove(queue)
+        except ValueError:
+            pass
+
+    @property
+    def subscriber_count(self) -> int:
+        return len(self._subscribers)
 
     def get_telemetry(self) -> StoredTelemetry | None:
         return self._telemetry

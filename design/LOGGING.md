@@ -29,5 +29,6 @@ loggers are left with their own config.
 ## Known log sites today
 
 - `southbound.post_metadata_fallback` — INFO per unhandled subpath hit.
+- `state_store.append_notifications` — WARNING when an SSE subscriber's queue is full (event dropped for that subscriber; others unaffected).
 
 Future sites land here as the list grows so this file stays the index.

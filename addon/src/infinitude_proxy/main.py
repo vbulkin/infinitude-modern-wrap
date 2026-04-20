@@ -8,11 +8,14 @@ fields the thermostat has reported become live.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import time
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from sse_starlette.sse import EventSourceResponse
 
 from . import __version__
 from .canned_state import canned_state
@@ -38,7 +41,7 @@ from .models import (
 )
 from .settings import load_settings
 from .southbound import create_southbound_router
-from .state_store import StateStore, StoredConfig, StoredTelemetry
+from .state_store import StateStore, StoredConfig, StoredNotification, StoredTelemetry
 
 _STARTUP_MONOTONIC = time.monotonic()
 
@@ -265,7 +268,53 @@ def create_app(store: StateStore | None = None) -> FastAPI:
                 return Schedule(zoneId=zone_id, days=list(zc.schedule))
         raise HTTPException(status_code=404, detail=f"zone {zone_id} not found")
 
+    @app.get("/v1/events", tags=["events"])
+    async def stream_events(request: Request) -> EventSourceResponse:
+        """SSE stream of thermostat notifications.
+
+        Each event is a single StoredNotification as JSON. Clients
+        reconnect on disconnect; we don't replay backfill on this slice —
+        /v1/notifications (REST) is the catch-up surface when we add it.
+        The 15s keepalive is well under typical proxy/idle-connection
+        timeouts and doubles as the disconnect-detection tick.
+        """
+        queue = store.subscribe()
+
+        async def event_gen():
+            try:
+                while True:
+                    if await request.is_disconnected():
+                        return
+                    try:
+                        sn = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    except asyncio.TimeoutError:
+                        yield {"event": "keepalive", "data": ""}
+                        continue
+                    yield {
+                        "event": "notification",
+                        "data": _stored_notification_json(sn),
+                    }
+            finally:
+                store.unsubscribe(queue)
+
+        return EventSourceResponse(event_gen())
+
     return app
+
+
+def _stored_notification_json(sn: StoredNotification) -> str:
+    """Serialize a StoredNotification for SSE payload.
+
+    Pydantic handles the event; the dataclass wrapper needs manual
+    composition so we get serial/receivedAt alongside the event body.
+    """
+    return json.dumps(
+        {
+            "serial": sn.serial,
+            "receivedAt": sn.receivedAt.isoformat(),
+            "event": sn.event.model_dump(mode="json"),
+        }
+    )
 
 
 app = create_app()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -294,6 +295,42 @@ def test_directive_flips_dirty_flag_and_config_post_clears_it():
         headers={"content-type": "application/xml"},
     )
     assert b"<configHasChanges>false</configHasChanges>" in _telemetry_response()
+
+
+async def test_store_broadcasts_notifications_to_subscribers():
+    store = StateStore()
+    q1 = store.subscribe()
+    q2 = store.subscribe()
+    events = parse_notifications(_read("change_opmode_notifications.xml"))
+    await store.append_notifications("0000TEST0000", events)
+
+    sn1 = q1.get_nowait()
+    sn2 = q2.get_nowait()
+    assert sn1.event.changes[0].id == "OP_MODE"
+    assert sn2.serial == "0000TEST0000"
+    assert q1.empty() and q2.empty()
+
+    store.unsubscribe(q1)
+    store.unsubscribe(q2)
+    assert store.subscriber_count == 0
+
+
+def test_sse_events_route_registered():
+    """/v1/events is mounted as a GET route.
+
+    End-to-end HTTP-level SSE testing needs a real uvicorn server —
+    both TestClient and httpx.ASGITransport buffer the full response
+    before returning, so they can't exercise an endpoint that never
+    closes. The store fan-out test above covers the broadcast logic;
+    this smoke-tests that the route is wired.
+    """
+    app = create_app()
+    events_route = next(
+        (r for r in app.routes if getattr(r, "path", None) == "/v1/events"),
+        None,
+    )
+    assert events_route is not None
+    assert "GET" in getattr(events_route, "methods", set())
 
 
 def test_post_notifications_appends_to_store():
