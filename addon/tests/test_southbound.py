@@ -9,7 +9,9 @@ from fastapi.testclient import TestClient
 
 from infinitude_proxy.main import create_app
 from infinitude_proxy.parser import (
+    parse_idu_config,
     parse_notifications,
+    parse_odu_config,
     parse_system_config,
     parse_telemetry,
 )
@@ -277,16 +279,95 @@ def test_v1_state_after_config_then_telemetry():
 
 
 def test_metadata_posts_accepted_without_parse():
-    """The thermostat's profile/dealer/idu_config/odu_config metadata
-    POSTs must 200 OK so it doesn't retry."""
+    """The thermostat's profile/dealer metadata POSTs must 200 OK so it
+    doesn't retry. idu_config/odu_config are now parsed — covered by
+    their own tests."""
     client = TestClient(create_app())
-    for path in ("profile", "dealer", "idu_config", "odu_config"):
+    for path in ("profile", "dealer"):
         r = client.post(
             f"/systems/0000TEST0000/{path}",
             content=_read("boot_02_profile.xml"),
             headers={"content-type": "application/xml"},
         )
         assert r.status_code == 200, f"{path} should 200"
+
+
+def test_parse_idu_config_boot_sample():
+    idu = parse_idu_config(_read("boot_03_idu_config.xml"))
+    assert idu.type == "fancoilelectric"
+    assert idu.elevationFeet == 800
+    # <gtermavail>on</gtermavail> in the fixture
+    assert idu.auxiliaryTerminalAvailable is True
+
+
+def test_parse_odu_config_boot_sample():
+    odu = parse_odu_config(_read("boot_04_odu_config.xml"))
+    assert odu.type == "hp2stgnoncomm"
+    assert odu.coolAirflowProfile == "comfort"
+    assert odu.heatAirflowProfile == "comfort"
+    assert odu.dehumidifyAirflowProfile == "normal"
+    # Both lockouts are "none" in the fixture — round-trips as None.
+    assert odu.coolLockoutTemp is None
+    assert odu.heatLockoutTemp is None
+    assert odu.defrostInterval == "auto"
+
+
+def test_post_idu_and_odu_config_updates_store():
+    store = StateStore()
+    app = create_app(store=store)
+    client = TestClient(app)
+
+    r = client.post(
+        "/systems/0000TEST0000/idu_config",
+        content=_read("boot_03_idu_config.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    assert r.status_code == 200
+    stored_idu = store.get_idu()
+    assert stored_idu is not None
+    assert stored_idu.serial == "0000TEST0000"
+    assert stored_idu.config.type == "fancoilelectric"
+
+    r = client.post(
+        "/systems/0000TEST0000/odu_config",
+        content=_read("boot_04_odu_config.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    assert r.status_code == 200
+    stored_odu = store.get_odu()
+    assert stored_odu is not None
+    assert stored_odu.config.type == "hp2stgnoncomm"
+
+
+def test_v1_system_idu_and_odu_endpoints():
+    store = StateStore()
+    app = create_app(store=store)
+    client = TestClient(app)
+
+    assert client.get("/v1/system/idu").status_code == 404
+    assert client.get("/v1/system/odu").status_code == 404
+
+    client.post(
+        "/systems/0000TEST0000/idu_config",
+        content=_read("boot_03_idu_config.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    client.post(
+        "/systems/0000TEST0000/odu_config",
+        content=_read("boot_04_odu_config.xml"),
+        headers={"content-type": "application/xml"},
+    )
+
+    idu = client.get("/v1/system/idu").json()
+    assert idu["type"] == "fancoilelectric"
+    assert idu["elevationFeet"] == 800
+    assert idu["auxiliaryTerminalAvailable"] is True
+
+    odu = client.get("/v1/system/odu").json()
+    assert odu["type"] == "hp2stgnoncomm"
+    assert odu["coolAirflowProfile"] == "comfort"
+    assert odu["coolLockoutTemp"] is None
+    assert odu["defrostInterval"] == "auto"
 
 
 def test_parse_notifications_extracts_three_change_ids():

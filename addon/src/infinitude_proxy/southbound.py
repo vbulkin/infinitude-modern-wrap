@@ -16,7 +16,13 @@ from urllib.parse import unquote_to_bytes
 
 from fastapi import APIRouter, Request, Response
 
-from .parser import parse_notifications, parse_system_config, parse_telemetry
+from .parser import (
+    parse_idu_config,
+    parse_notifications,
+    parse_odu_config,
+    parse_system_config,
+    parse_telemetry,
+)
 from .state_store import StateStore
 
 logger = logging.getLogger(__name__)
@@ -29,8 +35,6 @@ DIRECTIVE_PING_RATE = 12
 # parser. Known subpaths observed in live captures:
 #   profile          — hardware/firmware identity
 #   dealer           — dealer contact record
-#   idu_config       — indoor-unit capability map
-#   odu_config       — outdoor-unit capability map
 #   utility_events   — utility-rate / demand-response schedule
 
 
@@ -85,6 +89,20 @@ def create_southbound_router(store: StateStore) -> APIRouter:
         body = await request.body()
         events = parse_notifications(_unwrap_form(body))
         await store.append_notifications(serial, events)
+        return Response(status_code=200)
+
+    @router.post("/systems/{serial}/idu_config")
+    async def post_idu_config(serial: str, request: Request) -> Response:
+        body = await request.body()
+        config = parse_idu_config(_unwrap_form(body))
+        await store.apply_idu(serial, config)
+        return Response(status_code=200)
+
+    @router.post("/systems/{serial}/odu_config")
+    async def post_odu_config(serial: str, request: Request) -> Response:
+        body = await request.body()
+        config = parse_odu_config(_unwrap_form(body))
+        await store.apply_odu(serial, config)
         return Response(status_code=200)
 
     # Metadata POSTs the thermostat also sends during boot (profile,

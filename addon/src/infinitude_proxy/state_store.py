@@ -14,6 +14,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from .models import IduConfig, OduConfig
 from .parser import NotificationEvent, SystemConfig, TelemetrySnapshot
 
 logger = logging.getLogger(__name__)
@@ -43,10 +44,26 @@ class StoredNotification:
     receivedAt: datetime
 
 
+@dataclass
+class StoredIdu:
+    serial: str
+    config: IduConfig
+    receivedAt: datetime
+
+
+@dataclass
+class StoredOdu:
+    serial: str
+    config: OduConfig
+    receivedAt: datetime
+
+
 class StateStore:
     def __init__(self) -> None:
         self._telemetry: StoredTelemetry | None = None
         self._config: StoredConfig | None = None
+        self._idu: StoredIdu | None = None
+        self._odu: StoredOdu | None = None
         self._notifications: deque[StoredNotification] = deque(
             maxlen=NOTIFICATION_BUFFER_SIZE
         )
@@ -72,6 +89,22 @@ class StateStore:
             # Fresh config from the thermostat — whatever northbound edits
             # were pending have now been round-tripped. Clear the flag.
             self._config_dirty = False
+
+    async def apply_idu(self, serial: str, config: IduConfig) -> None:
+        async with self._lock:
+            self._idu = StoredIdu(
+                serial=serial,
+                config=config,
+                receivedAt=datetime.now(timezone.utc),
+            )
+
+    async def apply_odu(self, serial: str, config: OduConfig) -> None:
+        async with self._lock:
+            self._odu = StoredOdu(
+                serial=serial,
+                config=config,
+                receivedAt=datetime.now(timezone.utc),
+            )
 
     async def mark_config_dirty(self) -> None:
         """Signal to the next telemetry directive that the thermostat
@@ -134,6 +167,12 @@ class StateStore:
 
     def get_config(self) -> StoredConfig | None:
         return self._config
+
+    def get_idu(self) -> StoredIdu | None:
+        return self._idu
+
+    def get_odu(self) -> StoredOdu | None:
+        return self._odu
 
     def recent_notifications(self) -> list[StoredNotification]:
         return list(self._notifications)

@@ -218,6 +218,38 @@ class HumidityConfig(BaseModel):
     targetVacation: PercentInt | None = None
 
 
+class IduConfig(BaseModel):
+    """Indoor-unit equipment identity + commissioning knobs.
+
+    `type` is the wire string (e.g., "fancoilelectric", "furnace") kept
+    open because the installer base is broad and we don't want parsing
+    to fail when a new idutype ships. `elevationFeet` is None on units
+    where the installer left it at defaults; zero is a legitimate value
+    at sea level, so None means "unset" not "ground".
+    """
+    type: str
+    elevationFeet: int | None = None
+    auxiliaryTerminalAvailable: bool
+
+
+class OduConfig(BaseModel):
+    """Outdoor-unit equipment identity + airflow/lockout config.
+
+    Airflow profiles are wire strings ("comfort", "efficiency", etc.);
+    we don't enum them for the same forward-compat reason as IDU type.
+    Lockout temps are Optional — the thermostat reports "none" when the
+    installer hasn't set a threshold, which we round-trip as None rather
+    than coerce to a sentinel int.
+    """
+    type: str
+    coolAirflowProfile: str
+    heatAirflowProfile: str
+    dehumidifyAirflowProfile: str
+    coolLockoutTemp: int | None = None
+    heatLockoutTemp: int | None = None
+    defrostInterval: str
+
+
 # ── State + events ───────────────────────────────────────────────────
 
 class State(BaseModel):

@@ -20,6 +20,8 @@ from .models import (
     HumidityConfig,
     HvacAction,
     HvacMode,
+    IduConfig,
+    OduConfig,
     ScheduleDay,
     SchedulePeriod,
     SystemHoldActivity,
@@ -236,6 +238,74 @@ def _parse_schedule(zone_el: etree._Element) -> list[ScheduleDay]:
     return out
 
 
+def _lockout_temp(root: etree._Element, tag: str) -> int | None:
+    """Parse a <...locktemp> field that's either "none" or a numeric degree.
+
+    The thermostat emits the literal string "none" when the installer
+    hasn't set a lockout; anything else is a Fahrenheit integer. None
+    preserves the "unset" semantic; 0 would collide with a real value.
+    """
+    t = _text(root, tag)
+    if not t or t == "none":
+        return None
+    try:
+        return int(t)
+    except ValueError:
+        return None
+
+
+def parse_idu_config(xml_bytes: bytes) -> IduConfig:
+    """Parse POST /systems/{serial}/idu_config body.
+
+    Most fields are commissioning knobs we don't surface (airflow CFM
+    limits, furnace stages, hydronic timers, etc.). We keep the TODO
+    block inline so future slices can pick off what a consumer asks for.
+
+    TODO: known-unsurfaced fields here are candidates for later slices:
+      <iduairflow>             installed airflow setting
+      <gtermsetting>, label1-3 aux-terminal function + user labels
+      <heatoffdelay>           blower run-on after heat call
+      <reheat>, <dehumdrain>   reheat + drain-mode toggles
+      <mincfm>, <maxcfm>, …    per-stage CFM commissioning
+      <furnstages>             furnace stage count
+      <altitudeselect>         elevation preset (paired with <elevation>)
+    """
+    root = etree.fromstring(xml_bytes)
+    return IduConfig(
+        type=_text(root, "idutype") or "",
+        elevationFeet=_int(root, "elevation"),
+        auxiliaryTerminalAvailable=_text(root, "gtermavail") == "on",
+    )
+
+
+def parse_odu_config(xml_bytes: bytes) -> OduConfig:
+    """Parse POST /systems/{serial}/odu_config body.
+
+    Surfaces identity + the three airflow profiles + lockouts + defrost
+    cadence. The deep commissioning knobs (stage caps, low-ambient cool,
+    brownout protection, variable-cap CFM limits) stay unsurfaced until
+    a consumer asks.
+
+    TODO: known-unsurfaced fields here are candidates for later slices:
+      <coollatchmode>, <coollatchtemp>     heat-pump → aux transition
+      <heatlatchmode>, <heatlatchtemp>
+      <lowambcool>, <brownout>             low-ambient + brownout guards
+      <mincoolstage>, <maxcoolstage>, …    per-direction stage caps
+      <vcapfloorcfm>, <vcap…>              variable-capacity CFM envelope
+      <flowratesetting>                    hydronic flow config
+    """
+    root = etree.fromstring(xml_bytes)
+    return OduConfig(
+        type=_text(root, "odutype") or "",
+        coolAirflowProfile=_text(root, "oducoolafl") or "",
+        heatAirflowProfile=_text(root, "oduheatafl") or "",
+        dehumidifyAirflowProfile=_text(root, "dehumafl") or "",
+        coolLockoutTemp=_lockout_temp(root, "coollocktemp"),
+        heatLockoutTemp=_lockout_temp(root, "heatlocktemp"),
+        defrostInterval=_text(root, "defrostInt") or "",
+    )
+
+
 def _parse_zone_hold(zone_el: etree._Element) -> ZoneHold:
     active = _text(zone_el, "hold") == "on"
     raw = _text(zone_el, "holdActivity")
@@ -347,12 +417,16 @@ def parse_telemetry(xml_bytes: bytes) -> TelemetrySnapshot:
 
     TODO: known-unsurfaced fields in this payload. Candidates for
     future slices once a northbound consumer asks for them:
-      <status>/<idu>                 indoor-unit runtime telemetry
-      <status>/<odu>                 outdoor-unit runtime telemetry
       <status>/zone/<vacation…>      zone-scoped vacation state
       <status>/zone/<currentProgram> active schedule period id
       <status>/<cfgem>/<cfgtype>     config echo fields (forensics only)
       <status>/<vacatrunning>        vacation-in-progress flag
+      <status>/<filtrlvl>, uvlvl…    filter/uv/humidifier/vent life %
+
+    Equipment identity (indoor/outdoor unit type, airflow profiles,
+    lockouts) is NOT in this <status> payload — it arrives as separate
+    POSTs to /systems/{serial}/idu_config and /odu_config, handled by
+    parse_idu_config / parse_odu_config.
     """
     root = etree.fromstring(xml_bytes)
     zones: list[TelemetryZone] = []

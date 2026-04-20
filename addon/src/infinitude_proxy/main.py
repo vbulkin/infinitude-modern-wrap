@@ -30,6 +30,8 @@ from .models import (
     HumidityConfig,
     HvacAction,
     HvacMode,
+    IduConfig,
+    OduConfig,
     RuntimeConfig,
     Schedule,
     State,
@@ -287,6 +289,24 @@ def create_app(store: StateStore | None = None) -> FastAPI:
         if stored is None:
             raise HTTPException(status_code=404, detail="no config received yet")
         return HumidityConfig.model_validate(stored.config.humidity)
+
+    @app.get("/v1/system/idu", response_model=IduConfig, tags=["system"])
+    def get_idu() -> IduConfig:
+        stored = store.get_idu()
+        if stored is None:
+            raise HTTPException(
+                status_code=404, detail="no idu_config received yet"
+            )
+        return stored.config
+
+    @app.get("/v1/system/odu", response_model=OduConfig, tags=["system"])
+    def get_odu() -> OduConfig:
+        stored = store.get_odu()
+        if stored is None:
+            raise HTTPException(
+                status_code=404, detail="no odu_config received yet"
+            )
+        return stored.config
 
     @app.get("/v1/events", tags=["events"])
     async def stream_events(request: Request) -> EventSourceResponse:
