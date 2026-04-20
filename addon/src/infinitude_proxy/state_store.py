@@ -12,7 +12,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from .parser import TelemetrySnapshot
+from .parser import SystemConfig, TelemetrySnapshot
 
 
 @dataclass
@@ -22,9 +22,17 @@ class StoredTelemetry:
     receivedAt: datetime
 
 
+@dataclass
+class StoredConfig:
+    serial: str
+    config: SystemConfig
+    receivedAt: datetime
+
+
 class StateStore:
     def __init__(self) -> None:
         self._telemetry: StoredTelemetry | None = None
+        self._config: StoredConfig | None = None
         self._lock = asyncio.Lock()
 
     async def apply_telemetry(self, serial: str, snapshot: TelemetrySnapshot) -> None:
@@ -35,5 +43,16 @@ class StateStore:
                 receivedAt=datetime.now(timezone.utc),
             )
 
+    async def apply_config(self, serial: str, config: SystemConfig) -> None:
+        async with self._lock:
+            self._config = StoredConfig(
+                serial=serial,
+                config=config,
+                receivedAt=datetime.now(timezone.utc),
+            )
+
     def get_telemetry(self) -> StoredTelemetry | None:
         return self._telemetry
+
+    def get_config(self) -> StoredConfig | None:
+        return self._config

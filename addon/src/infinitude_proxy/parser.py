@@ -12,7 +12,15 @@ from datetime import datetime
 from lxml import etree
 from pydantic import BaseModel, ConfigDict
 
-from .models import ActivityId, FanSpeed, HvacAction
+from .models import (
+    ActivityId,
+    FanSpeed,
+    HvacAction,
+    HvacMode,
+    SystemHoldActivity,
+    WholeHouseHold,
+    ZoneHold,
+)
 
 
 # Thermostat <zoneconditioning> wire values → our HvacAction enum.
@@ -73,6 +81,79 @@ class TelemetrySnapshot(BaseModel):
     operatingStatusMessage: str
     humidifierOn: bool
     zones: list[TelemetryZone]
+
+
+class ZoneConfig(BaseModel):
+    model_config = ConfigDict(use_enum_values=True)
+    id: str
+    name: str
+    enabled: bool
+    hold: ZoneHold
+
+
+class SystemConfig(BaseModel):
+    model_config = ConfigDict(use_enum_values=True)
+    mode: HvacMode
+    wholeHouseHold: WholeHouseHold
+    zones: list[ZoneConfig]
+
+
+def _parse_whole_house_hold(wh: etree._Element | None) -> WholeHouseHold:
+    if wh is None:
+        return WholeHouseHold(active=False)
+    active = _text(wh, "hold") == "on"
+    raw = _text(wh, "holdActivity")
+    activity: SystemHoldActivity | None = None
+    if raw and raw != "none":
+        try:
+            activity = SystemHoldActivity(raw)
+        except ValueError:
+            activity = None
+    return WholeHouseHold(active=active, activity=activity, until=None)
+
+
+def _parse_zone_hold(zone_el: etree._Element) -> ZoneHold:
+    active = _text(zone_el, "hold") == "on"
+    raw = _text(zone_el, "holdActivity")
+    activity: ActivityId | None = None
+    if raw and raw not in ("none", ""):
+        try:
+            activity = ActivityId(raw)
+        except ValueError:
+            activity = None
+    return ZoneHold(active=active, activity=activity, until=None)
+
+
+def parse_system_config(xml_bytes: bytes) -> SystemConfig:
+    """Parse a POST /systems/{serial} body (full config dump).
+
+    Extracts the whole-house mode + hold state and the per-zone identity
+    and hold state. Activities and schedules live in the same XML but
+    are surfaced via dedicated parsers/endpoints in later slices.
+    """
+    root = etree.fromstring(xml_bytes)
+    config = root.find("config")
+    if config is None:
+        raise ValueError("system XML missing <config>")
+
+    mode = HvacMode(_text(config, "mode") or "off")
+    wh_hold = _parse_whole_house_hold(config.find("wholeHouse"))
+
+    zones: list[ZoneConfig] = []
+    zones_el = config.find("zones")
+    if zones_el is not None:
+        for z in zones_el.findall("zone"):
+            if _text(z, "enabled") != "on":
+                continue
+            zones.append(
+                ZoneConfig(
+                    id=z.get("id") or "",
+                    name=_text(z, "name") or "",
+                    enabled=True,
+                    hold=_parse_zone_hold(z),
+                )
+            )
+    return SystemConfig(mode=mode, wholeHouseHold=wh_hold, zones=zones)
 
 
 def parse_telemetry(xml_bytes: bytes) -> TelemetrySnapshot:

@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from infinitude_proxy.main import create_app
-from infinitude_proxy.parser import parse_telemetry
+from infinitude_proxy.parser import parse_system_config, parse_telemetry
 from infinitude_proxy.state_store import StateStore
 
 FIXTURES = Path(__file__).parent / "fixtures" / "thermostat"
@@ -125,3 +125,71 @@ def test_alive_heartbeat():
     r = client.get("/Alive")
     assert r.status_code == 200
     assert r.content == b"alive"
+
+
+def test_parse_system_config_boot_dump():
+    cfg = parse_system_config(_read("boot_01_system_config.xml"))
+    assert cfg.mode == "cool"
+    assert cfg.wholeHouseHold.active is False
+    # 8 zones in XML; 2 enabled (id=1, id=2) — matches the live household.
+    ids = {z.id for z in cfg.zones}
+    assert ids == {"1", "2"}
+
+
+def test_parse_system_config_opmode_change():
+    """Wall-panel mode switch flips config.mode from cool → auto."""
+    cfg = parse_system_config(_read("change_opmode_system.xml"))
+    assert cfg.mode == "auto"
+
+
+def test_post_system_config_updates_store():
+    store = StateStore()
+    app = create_app(store=store)
+    client = TestClient(app)
+
+    resp = client.post(
+        "/systems/0000TEST0000",
+        content=_read("boot_01_system_config.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    assert resp.status_code == 200
+    stored = store.get_config()
+    assert stored is not None
+    assert stored.config.mode == "cool"
+
+
+def test_v1_state_after_config_then_telemetry():
+    """Realistic boot order: full config POST, then telemetry POST.
+    /v1/state should surface both — config's mode plus telemetry's live values.
+    """
+    store = StateStore()
+    app = create_app(store=store)
+    client = TestClient(app)
+
+    client.post(
+        "/systems/0000TEST0000",
+        content=_read("change_opmode_system.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    client.post(
+        "/systems/0000TEST0000/status",
+        content=_read("telemetry_steady.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    state = client.get("/v1/state").json()
+    assert state["system"]["mode"] == "auto"          # from config
+    assert state["system"]["outdoorTemperature"] == 52  # from telemetry
+    assert state["system"]["serial"] == "0000TEST0000"
+
+
+def test_metadata_posts_accepted_without_parse():
+    """The thermostat's profile/dealer/idu_config/odu_config metadata
+    POSTs must 200 OK so it doesn't retry."""
+    client = TestClient(create_app())
+    for path in ("profile", "dealer", "idu_config", "odu_config", "notifications"):
+        r = client.post(
+            f"/systems/0000TEST0000/{path}",
+            content=_read("boot_02_profile.xml"),
+            headers={"content-type": "application/xml"},
+        )
+        assert r.status_code == 200, f"{path} should 200"
