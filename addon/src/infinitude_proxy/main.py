@@ -8,6 +8,7 @@ fields the thermostat has reported become live.
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime, timezone
 
@@ -42,6 +43,24 @@ _STARTUP_MONOTONIC = time.monotonic()
 
 def _uptime_seconds() -> int:
     return int(time.monotonic() - _STARTUP_MONOTONIC)
+
+
+def _configure_logging(level: str) -> None:
+    """Configure the infinitude_proxy.* logger tree.
+
+    Scoped so uvicorn's own access/error loggers keep their config.
+    Idempotent — tests that spin up multiple app instances won't stack
+    handlers. Policy: see design/LOGGING.md.
+    """
+    proxy_logger = logging.getLogger("infinitude_proxy")
+    proxy_logger.setLevel(level.upper())
+    if not any(isinstance(h, logging.StreamHandler) for h in proxy_logger.handlers):
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        )
+        proxy_logger.addHandler(handler)
+    proxy_logger.propagate = False
 
 
 def _compose_state(
@@ -127,6 +146,7 @@ def _compose_state(
 
 def create_app(store: StateStore | None = None) -> FastAPI:
     settings = load_settings()
+    _configure_logging(settings.log_level)
     store = store or StateStore()
     app = FastAPI(
         title="Infinitude Modern Proxy API",

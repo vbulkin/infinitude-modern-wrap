@@ -11,6 +11,7 @@ server settings and at what interval.
 
 from __future__ import annotations
 
+import logging
 from urllib.parse import unquote_to_bytes
 
 from fastapi import APIRouter, Request, Response
@@ -18,8 +19,19 @@ from fastapi import APIRouter, Request, Response
 from .parser import parse_notifications, parse_system_config, parse_telemetry
 from .state_store import StateStore
 
+logger = logging.getLogger(__name__)
 
 DIRECTIVE_PING_RATE = 12
+
+# TODO: metadata POSTs we currently accept-and-discard. Each one carries
+# data we may eventually surface northbound; logging hits at INFO lets us
+# confirm what a given thermostat actually sends before investing in a
+# parser. Known subpaths observed in live captures:
+#   profile          — hardware/firmware identity
+#   dealer           — dealer contact record
+#   idu_config       — indoor-unit capability map
+#   odu_config       — outdoor-unit capability map
+#   utility_events   — utility-rate / demand-response schedule
 
 
 def _directive_xml(config_has_changes: bool) -> bytes:
@@ -77,9 +89,18 @@ def create_southbound_router(store: StateStore) -> APIRouter:
 
     # Metadata POSTs the thermostat also sends during boot (profile,
     # dealer, idu_config, odu_config, utility_events). Not consumed
-    # yet — accept and discard so the thermostat doesn't retry.
+    # yet — accept and discard so the thermostat doesn't retry. Log
+    # each hit so we can audit which subpaths a given unit emits and
+    # prioritize parser work. See the TODO block at top of this module.
     @router.post("/systems/{serial}/{subpath:path}")
-    async def post_metadata_fallback(serial: str, subpath: str) -> Response:
+    async def post_metadata_fallback(
+        serial: str, subpath: str, request: Request
+    ) -> Response:
+        body = await request.body()
+        logger.info(
+            "unhandled thermostat POST serial=%s subpath=%s bytes=%d",
+            serial, subpath, len(body),
+        )
         return Response(status_code=200)
 
     @router.get("/Alive")

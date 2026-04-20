@@ -130,6 +130,15 @@ def parse_system_config(xml_bytes: bytes) -> SystemConfig:
     Extracts the whole-house mode + hold state and the per-zone identity
     and hold state. Activities and schedules live in the same XML but
     are surfaced via dedicated parsers/endpoints in later slices.
+
+    TODO: known-unsurfaced fields in this payload. Each is a candidate
+    for its own slice once a northbound consumer needs it:
+      <config>/<activities>          per-activity setpoint templates
+      <config>/zone/<program>        weekly schedule (periods per day)
+      <config>/<vacation>            vacation hold window + setpoints
+      <config>/<humidityConfig>      humidifier/dehumidifier targets
+      <config>/<utility>             utility-rate response config
+      <config>/<staticPressure>      duct static pressure calibration
     """
     root = etree.fromstring(xml_bytes)
     config = root.find("config")
@@ -204,6 +213,15 @@ def parse_telemetry(xml_bytes: bytes) -> TelemetrySnapshot:
 
     Damper: thermostat reports 0–15; we normalize to 0–100% at this
     boundary per the design decision (see design/DESIGN.md §6).
+
+    TODO: known-unsurfaced fields in this payload. Candidates for
+    future slices once a northbound consumer asks for them:
+      <status>/<idu>                 indoor-unit runtime telemetry
+      <status>/<odu>                 outdoor-unit runtime telemetry
+      <status>/zone/<vacation…>      zone-scoped vacation state
+      <status>/zone/<currentProgram> active schedule period id
+      <status>/<cfgem>/<cfgtype>     config echo fields (forensics only)
+      <status>/<vacatrunning>        vacation-in-progress flag
     """
     root = etree.fromstring(xml_bytes)
     zones: list[TelemetryZone] = []
