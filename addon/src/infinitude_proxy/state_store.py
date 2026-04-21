@@ -24,6 +24,7 @@ from typing import Callable
 
 from lxml import etree
 
+from .events import EventPublisher
 from .models import IduConfig, OduConfig
 from .mutations import REPLAY_REGISTRY
 from .parser import (
@@ -41,7 +42,55 @@ from .persistence import Persistence
 logger = logging.getLogger(__name__)
 
 NOTIFICATION_BUFFER_SIZE = 50
-SUBSCRIBER_QUEUE_MAXSIZE = 64
+
+# Mutation kinds that represent a hold transition. For these, mutate_config
+# emits a `hold.changed` event in addition to the usual `state.update`.
+_HOLD_SET_KINDS = {"zone_hold_set", "system_hold_set"}
+_HOLD_CLEAR_KINDS = {"zone_hold_clear", "system_hold_clear"}
+
+
+def _target_to_resource(target: str | None) -> str:
+    """Translate mutate_config's internal `target` to an SSE resource path.
+
+    Targets use colon-separated dotted paths (e.g. `zone:1:schedule`);
+    the spec wants slash-separated with pluralized collections
+    (e.g. `zones/1/schedule`, `system/vacation`). Collisions aren't
+    possible because target components never contain slashes or colons.
+    """
+    if not target:
+        return "system"
+    parts = target.split(":")
+    out: list[str] = []
+    i = 0
+    while i < len(parts):
+        p = parts[i]
+        if p == "zone" and i + 1 < len(parts):
+            out.append(f"zones/{parts[i + 1]}")
+            i += 2
+            continue
+        if p == "activity" and i + 1 < len(parts):
+            out.append(f"activities/{parts[i + 1]}")
+            i += 2
+            continue
+        if p in ("vacation", "humidity", "service") and not out:
+            out.append(f"system/{p}")
+            i += 1
+            continue
+        out.append(p)
+        i += 1
+    return "/".join(out)
+
+
+def _sanitize_changes(kind: str, payload: dict) -> dict:
+    """Strip routing keys from `payload` so `changes` only has user fields.
+
+    `zone_id`, `activity_id`, and `activate_hold` are dispatch parameters
+    for the mutation function — they identify the target resource or
+    control side-effects, not the values the client set. Removing them
+    keeps SSE consumers from thinking the thermostat changed identity.
+    """
+    drop = {"zone_id", "activity_id", "activate_hold"}
+    return {k: v for k, v in payload.items() if k not in drop}
 
 
 @dataclass
@@ -91,8 +140,8 @@ class StateStore:
         )
         self._config_dirty: bool = False
         self._lock = asyncio.Lock()
-        self._subscribers: list[asyncio.Queue[StoredNotification]] = []
         self._persistence = persistence
+        self.events = EventPublisher()
 
     def attach_persistence(self, persistence: Persistence | None) -> None:
         """Attach (or detach) the persistence handle after construction.
@@ -173,6 +222,12 @@ class StateStore:
                 snapshot=snapshot,
                 receivedAt=datetime.now(timezone.utc),
             )
+        # Empty `changes` is the re-fetch hint: telemetry touches many
+        # fields and enumerating them here would duplicate the parser.
+        # Clients that care replay from /v1/state on the event.
+        await self.events.publish(
+            "state.update", {"resource": "system", "changes": {}}
+        )
 
     async def apply_config(
         self,
@@ -247,6 +302,9 @@ class StateStore:
                         self._persistence.save_config_dirty(serial, True),
                         what="save_config_dirty",
                     )
+        await self.events.publish(
+            "state.update", {"resource": "system", "changes": {}}
+        )
 
     async def mutate_config(
         self,
@@ -309,7 +367,26 @@ class StateStore:
                         "persistence: enqueue_write failed kind=%s target=%s",
                         kind, target,
                     )
-            return self._config
+            result = self._config
+        resource = _target_to_resource(target)
+        await self.events.publish(
+            "state.update",
+            {"resource": resource, "changes": _sanitize_changes(kind, payload)},
+        )
+        if kind in _HOLD_SET_KINDS or kind in _HOLD_CLEAR_KINDS:
+            hold_resource = (
+                f"{resource}/hold" if not resource.endswith("/hold") else resource
+            )
+            hold_payload: dict = {
+                "resource": hold_resource,
+                "state": "active" if kind in _HOLD_SET_KINDS else "cleared",
+            }
+            if "activity" in payload and payload["activity"]:
+                hold_payload["activity"] = payload["activity"]
+            if "otmr" in payload:
+                hold_payload["until"] = payload["otmr"] or None
+            await self.events.publish("hold.changed", hold_payload)
+        return result
 
     async def apply_idu(
         self,
@@ -413,52 +490,22 @@ class StateStore:
     async def append_notifications(
         self, serial: str, events: list[NotificationEvent]
     ) -> None:
+        """Append thermostat notifications to the ring buffer.
+
+        Not published on the SSE stream: the spec's EventEnvelope enum is
+        state/hold/health — raw thermostat notifications don't fit. The
+        REST endpoint /v1/notifications remains the way clients consume
+        this stream.
+        """
         now = datetime.now(timezone.utc)
-        stored: list[StoredNotification] = []
         async with self._lock:
             for ev in events:
                 sn = StoredNotification(serial=serial, event=ev, receivedAt=now)
                 self._notifications.append(sn)
-                stored.append(sn)
-            subs = list(self._subscribers)
-        # Broadcast outside the lock — a slow subscriber must not stall
-        # the southbound POST that drove the append.
-        for sn in stored:
-            for q in subs:
-                try:
-                    q.put_nowait(sn)
-                except asyncio.QueueFull:
-                    # Drop: a subscriber not keeping up shouldn't cause
-                    # head-of-line blocking for healthy ones. The ring
-                    # buffer still has the event if they reconnect and
-                    # fetch backfill later.
-                    logger.warning(
-                        "SSE subscriber queue full; dropping notification"
-                    )
-
-    def subscribe(self) -> asyncio.Queue[StoredNotification]:
-        """Register an SSE subscriber and get its queue.
-
-        The queue is bounded (SUBSCRIBER_QUEUE_MAXSIZE) so a stalled
-        client can't grow memory without limit. Overflow drops with a
-        WARNING; the caller is responsible for calling unsubscribe()
-        when the stream closes (typically in a finally: block).
-        """
-        q: asyncio.Queue[StoredNotification] = asyncio.Queue(
-            maxsize=SUBSCRIBER_QUEUE_MAXSIZE
-        )
-        self._subscribers.append(q)
-        return q
-
-    def unsubscribe(self, queue: asyncio.Queue[StoredNotification]) -> None:
-        try:
-            self._subscribers.remove(queue)
-        except ValueError:
-            pass
 
     @property
     def subscriber_count(self) -> int:
-        return len(self._subscribers)
+        return self.events.subscriber_count
 
     def get_telemetry(self) -> StoredTelemetry | None:
         return self._telemetry

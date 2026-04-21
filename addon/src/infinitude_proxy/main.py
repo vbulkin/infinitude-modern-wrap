@@ -8,7 +8,6 @@ fields the thermostat has reported become live.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -682,34 +681,73 @@ def create_app(store: StateStore | None = None) -> FastAPI:
 
     @app.get("/v1/events", tags=["events"])
     async def stream_events(request: Request) -> EventSourceResponse:
-        """SSE stream of thermostat notifications.
+        """Spec-shape SSE stream: state.snapshot / state.update / hold.changed.
 
-        Each event is a single StoredNotification as JSON. Clients
-        reconnect on disconnect; we don't replay backfill on this slice —
-        /v1/notifications (REST) is the catch-up surface when we add it.
-        The 15s keepalive is well under typical proxy/idle-connection
-        timeouts and doubles as the disconnect-detection tick.
+        Resume protocol: clients pass `Last-Event-ID` on reconnect. If
+        the publisher's ring buffer still has events with greater ids,
+        we replay them in order; otherwise we re-seed with a fresh
+        `state.snapshot`. A first connect (no header) also gets a
+        snapshot so the client can paint a full UI before any live
+        event arrives. Keepalive every 15s doubles as disconnect probe.
         """
-        queue = store.subscribe()
+        last_event_id_raw = request.headers.get("last-event-id")
+        last_event_id: int | None = None
+        if last_event_id_raw is not None:
+            try:
+                last_event_id = int(last_event_id_raw)
+            except ValueError:
+                last_event_id = None
+
+        replay: list = []
+        need_snapshot = last_event_id is None
+        if last_event_id is not None:
+            buffered = store.events.replay_since(last_event_id)
+            if buffered is None:
+                # Caller's id is older than the buffer — re-seed.
+                need_snapshot = True
+            else:
+                replay = buffered
+
+        queue = store.events.subscribe()
 
         async def event_gen():
             try:
-                while True:
-                    if await request.is_disconnected():
-                        return
-                    try:
-                        sn = await asyncio.wait_for(queue.get(), timeout=15.0)
-                    except asyncio.TimeoutError:
-                        yield {"event": "keepalive", "data": ""}
-                        continue
+                if need_snapshot:
+                    # Snapshot is private to this client, not a broadcast.
+                    # Its id is the publisher's latest; the client resumes
+                    # with Last-Event-ID and gets anything newer from the
+                    # ring buffer next reconnect.
+                    snap_state = _compose_state(
+                        store.get_config(), store.get_telemetry()
+                    )
                     yield {
-                        "event": "notification",
-                        "data": _stored_notification_json(sn),
+                        "id": str(store.events.latest_id),
+                        "event": "state.snapshot",
+                        "data": _event_json(snap_state.model_dump(mode="json")),
+                    }
+                for ev in replay:
+                    yield {
+                        "id": str(ev.id),
+                        "event": ev.event,
+                        "data": _event_json(ev.data),
+                    }
+                while True:
+                    ev = await queue.get()
+                    yield {
+                        "id": str(ev.id),
+                        "event": ev.event,
+                        "data": _event_json(ev.data),
                     }
             finally:
-                store.unsubscribe(queue)
+                store.events.unsubscribe(queue)
 
-        return EventSourceResponse(event_gen())
+        # ping=15 emits an SSE comment line (`: ping`) every 15s —
+        # keeps idle proxies from killing the stream and is ignored by
+        # the EventSource API, so it doesn't pollute the spec's event
+        # enum. sse_starlette also cancels event_gen() on client
+        # disconnect, so we don't poll request.is_disconnected()
+        # ourselves.
+        return EventSourceResponse(event_gen(), ping=15)
 
     @app.put(
         "/v1/zones/{zone_id}/hold",
@@ -972,13 +1010,15 @@ def _envelope_from_stored(sn: StoredNotification) -> NotificationEnvelope:
     )
 
 
-def _stored_notification_json(sn: StoredNotification) -> str:
-    """Serialize a StoredNotification for SSE payload.
+def _event_json(data) -> str:
+    """Serialize an SSE event's `data` payload as JSON.
 
-    Routes through _envelope_from_stored so SSE frames and backfill
-    responses are guaranteed to have identical shape.
+    Events carry plain dicts or Pydantic-mode-json dumps; a fast path
+    through json.dumps (not orjson — the rest of the app doesn't depend
+    on it) keeps the wire format predictable for tests.
     """
-    return _envelope_from_stored(sn).model_dump_json()
+    import json
+    return json.dumps(data, default=str)
 
 
 app = create_app()

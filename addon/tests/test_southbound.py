@@ -486,21 +486,22 @@ def test_get_systems_config_serves_stored_tree():
     assert b"<mode>cool</mode>" in body
 
 
-async def test_store_broadcasts_notifications_to_subscribers():
+async def test_store_appends_notifications_to_ring_buffer():
+    """Thermostat notifications land in the ring buffer only.
+
+    The SSE stream no longer carries raw thermostat notifications
+    (openapi EventEnvelope enum is state/hold/health). Subscribers
+    live on `store.events`, not on the legacy per-notification fan-out.
+    """
     store = StateStore()
-    q1 = store.subscribe()
-    q2 = store.subscribe()
     events = parse_notifications(_read("change_opmode_notifications.xml"))
     await store.append_notifications("0000TEST0000", events)
 
-    sn1 = q1.get_nowait()
-    sn2 = q2.get_nowait()
-    assert sn1.event.changes[0].id == "OP_MODE"
-    assert sn2.serial == "0000TEST0000"
-    assert q1.empty() and q2.empty()
-
-    store.unsubscribe(q1)
-    store.unsubscribe(q2)
+    buffered = store.recent_notifications()
+    assert len(buffered) >= 1
+    assert buffered[-1].event.changes[0].id == "OP_MODE"
+    assert buffered[-1].serial == "0000TEST0000"
+    # No SSE subscribers created; spec-event publisher has none.
     assert store.subscriber_count == 0
 
 
