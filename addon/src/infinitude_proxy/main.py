@@ -28,6 +28,7 @@ from .models import (
     Health,
     HealthComponents,
     HumidityConfig,
+    HumidityPatch,
     HvacAction,
     HvacMode,
     IduConfig,
@@ -52,6 +53,7 @@ from .models import (
 )
 from .errors import register_error_handlers
 from .mutations import (
+    apply_humidity_set,
     apply_system_hold_clear,
     apply_system_hold_set,
     apply_system_mode_set,
@@ -404,6 +406,40 @@ def create_app(store: StateStore | None = None) -> FastAPI:
         if stored is None:
             raise HTTPException(status_code=404, detail="no config received yet")
         return HumidityConfig.model_validate(stored.config.humidity)
+
+    @app.patch(
+        "/v1/system/humidity",
+        response_model=HumidityConfig,
+        tags=["system"],
+    )
+    async def patch_humidity(body: HumidityPatch) -> HumidityConfig:
+        """Update per-mode humidity targets — sparse update.
+
+        Only the supplied fields are written; unsupplied targets are left
+        alone. At least one must be present (empty PATCH → 422). Writing
+        to a unit without `<cfghumid>on</cfghumid>` is still accepted —
+        the thermostat silently ignores targets when the equipment is
+        absent, and rejecting here would pretend we have more knowledge
+        than we do.
+        """
+        stored = store.get_config()
+        if stored is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        supplied = body.model_dump(exclude_none=True)
+        if not supplied:
+            raise HTTPException(
+                status_code=422, detail="at least one target must be supplied"
+            )
+        updated = await store.mutate_config(
+            apply_humidity_set,
+            serial=stored.serial,
+            kind="humidity_set",
+            target="humidity",
+            payload=supplied,
+        )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        return HumidityConfig.model_validate(updated.config.humidity)
 
     @app.get("/v1/system/idu", response_model=IduConfig, tags=["system"])
     def get_idu() -> IduConfig:

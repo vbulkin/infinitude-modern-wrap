@@ -218,6 +218,19 @@ class HumidityConfig(BaseModel):
     targetVacation: PercentInt | None = None
 
 
+class HumidityPatch(BaseModel):
+    """Writable subset of HumidityConfig — per-mode target RH.
+
+    Only the targets are writable; `equipmentInstalled` is a commissioning
+    fact, not a user preference. At least one target must be supplied —
+    an empty body is rejected with 422 at the endpoint.
+    """
+    model_config = ConfigDict(extra="forbid")
+    targetHome: PercentInt | None = None
+    targetAway: PercentInt | None = None
+    targetVacation: PercentInt | None = None
+
+
 class IduConfig(BaseModel):
     """Indoor-unit equipment identity + commissioning knobs.
 

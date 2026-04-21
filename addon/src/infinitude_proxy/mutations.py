@@ -173,6 +173,28 @@ def apply_system_mode_set(tree: etree._Element, payload: dict) -> None:
     _set_or_create(tree, "mode", payload["mode"])
 
 
+# ── Humidity targets ─────────────────────────────────────────────────
+
+def apply_humidity_set(tree: etree._Element, payload: dict) -> None:
+    """Write per-mode humidity targets — sparse update, only supplied
+    keys are written.
+
+    Payload shape (any subset):
+      {"targetHome": 40, "targetAway": 35, "targetVacation": 30}
+    Each value is an integer 0–100. Targets live as flat children of
+    <config> named `humidityHome`/`humidityAway`/`humidityVacation` —
+    siblings of `<cfghumid>`, not nested. Pydantic's PercentInt bounds
+    enforce the 0–100 range at the HTTP boundary.
+    """
+    for key, tag in (
+        ("targetHome", "humidityHome"),
+        ("targetAway", "humidityAway"),
+        ("targetVacation", "humidityVacation"),
+    ):
+        if key in payload and payload[key] is not None:
+            _set_or_create(tree, tag, str(int(payload[key])))
+
+
 # ── Whole-house (system) hold ────────────────────────────────────────
 
 def _find_whole_house(tree: etree._Element) -> etree._Element:
@@ -217,4 +239,5 @@ REPLAY_REGISTRY: dict[str, MutationFn] = {
     "system_hold_clear": apply_system_hold_clear,
     "system_mode_set": apply_system_mode_set,
     "zone_setpoints_set": apply_zone_setpoints_set,
+    "humidity_set": apply_humidity_set,
 }
