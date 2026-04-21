@@ -47,17 +47,17 @@ class InfinitudeWholeHouseHoldSelect(CoordinatorEntity, SelectEntity):
 
     @property
     def current_option(self) -> str:
-        wh = self.coordinator.data.get("whole_house_hold", {})
-        if wh.get("hold") and wh.get("holdActivity"):
-            return wh["holdActivity"]
+        wh = self.coordinator.data.get("system", {}).get("hold") or {}
+        if wh.get("active") and wh.get("activity"):
+            return wh["activity"]
         return OPTION_OFF
 
     @property
     def extra_state_attributes(self) -> dict:
-        wh = self.coordinator.data.get("whole_house_hold", {})
+        wh = self.coordinator.data.get("system", {}).get("hold") or {}
         attrs = {}
-        if wh.get("otmr"):
-            attrs["hold_until"] = wh["otmr"]
+        if wh.get("until"):
+            attrs["hold_until"] = wh["until"]
         return attrs
 
     async def async_select_option(self, option: str) -> None:

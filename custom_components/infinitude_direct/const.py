@@ -17,12 +17,6 @@ MAX_COOL_TEMP = 99
 DEFAULT_HEAT_SP = 68
 DEFAULT_COOL_SP = 76
 
-# Damper raw value range (0–15 from thermostat, displayed as percentage)
-DAMPER_RAW_MAX = 15
-
-# Number of consecutive stale polls before marking data stale
-STALE_THRESHOLD = 2
-
 PRESET_HOME = "home"
 PRESET_AWAY = "away"
 PRESET_SLEEP = "sleep"

@@ -16,15 +16,16 @@ _LOGGER = logging.getLogger(__name__)
 async def _validate_connection(session, host: str) -> str | None:
     """Test the connection to an Infinitude proxy.
 
-    Returns an error key string on failure, or None on success.
+    Hits `/v1/healthz` on the Python add-on. Returns an error key string
+    on failure, or None on success.
     """
     try:
         resp = await session.get(
-            f"{host}/status.json", timeout=aiohttp.ClientTimeout(total=10)
+            f"{host}/v1/healthz", timeout=aiohttp.ClientTimeout(total=10)
         )
         resp.raise_for_status()
         data = await resp.json(content_type=None)
-        if "status" not in data:
+        if "components" not in data or "status" not in data:
             return "invalid_response"
     except aiohttp.ClientError:
         return "cannot_connect"
