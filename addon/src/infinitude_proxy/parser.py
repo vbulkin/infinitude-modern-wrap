@@ -89,6 +89,34 @@ class TelemetrySnapshot(BaseModel):
     operatingStatusMessage: str
     humidifierOn: bool
     zones: list[TelemetryZone]
+    # Life-remaining percentages for the four reminder-tracked services.
+    # None when the fixture/unit doesn't emit the field (pre-commission,
+    # feature absent). Paired with ServiceConfig on the config side to
+    # feed /v1/system/service.
+    filterLevelPercent: int | None = None
+    uvLevelPercent: int | None = None
+    humidifierLevelPercent: int | None = None
+    ventilatorLevelPercent: int | None = None
+
+
+class ServiceConfig(BaseModel):
+    """Service-reminder commissioning state from the config payload.
+
+    Intervals are months between services (installer-configured).
+    Reminder flags are the thermostat's `<*rmd>` toggles — whether the
+    end-user has armed notifications for that service. `filterType` is
+    the label shown on the thermostat UI; None if unset.
+    """
+    model_config = ConfigDict(use_enum_values=True)
+    filterIntervalMonths: int
+    uvIntervalMonths: int
+    humidifierIntervalMonths: int
+    ventilatorIntervalMonths: int
+    filterReminderEnabled: bool
+    uvReminderEnabled: bool
+    humidifierReminderEnabled: bool
+    ventilatorReminderEnabled: bool
+    filterType: str | None = None
 
 
 class ZoneConfig(BaseModel):
@@ -108,6 +136,7 @@ class SystemConfig(BaseModel):
     zones: list[ZoneConfig]
     vacation: VacationConfig
     humidity: HumidityConfig
+    service: ServiceConfig
 
 
 def _parse_whole_house_hold(wh: etree._Element | None) -> WholeHouseHold:
@@ -146,6 +175,21 @@ def _parse_vacation(config_el: etree._Element) -> VacationConfig:
         heatSetpoint=_float_round(config_el, "vacmint") or 0,
         coolSetpoint=_float_round(config_el, "vacmaxt") or 0,
         fan=FanSpeed(_text(config_el, "vacfan") or "off"),
+    )
+
+
+def _parse_service(config_el: etree._Element) -> ServiceConfig:
+    """Parse service-reminder intervals + flags + filter type from <config>."""
+    return ServiceConfig(
+        filterIntervalMonths=_int(config_el, "filterinterval") or 0,
+        uvIntervalMonths=_int(config_el, "uvinterval") or 0,
+        humidifierIntervalMonths=_int(config_el, "huminterval") or 0,
+        ventilatorIntervalMonths=_int(config_el, "ventinterval") or 0,
+        filterReminderEnabled=_text(config_el, "filtrrmd") == "on",
+        uvReminderEnabled=_text(config_el, "uvrmd") == "on",
+        humidifierReminderEnabled=_text(config_el, "humrmd") == "on",
+        ventilatorReminderEnabled=_text(config_el, "ventrmd") == "on",
+        filterType=_text(config_el, "filtertype"),
     )
 
 
@@ -344,6 +388,7 @@ def _config_from_element(config: etree._Element) -> SystemConfig:
         zones=zones,
         vacation=_parse_vacation(config),
         humidity=_parse_humidity(config),
+        service=_parse_service(config),
     )
 
 
@@ -463,13 +508,17 @@ def parse_telemetry(xml_bytes: bytes) -> TelemetrySnapshot:
     Damper: thermostat reports 0–15; we normalize to 0–100% at this
     boundary per the design decision (see design/DESIGN.md §6).
 
+    Service life-remaining percentages (<filtrlvl>, <uvlvl>, <humlvl>,
+    <ventlvl>) are surfaced on the snapshot so /v1/system/service can
+    combine them with config-side intervals/flags. None when the unit
+    doesn't emit the field.
+
     TODO: known-unsurfaced fields in this payload. Candidates for
     future slices once a northbound consumer asks for them:
       <status>/zone/<vacation…>      zone-scoped vacation state
       <status>/zone/<currentProgram> active schedule period id
       <status>/<cfgem>/<cfgtype>     config echo fields (forensics only)
       <status>/<vacatrunning>        vacation-in-progress flag
-      <status>/<filtrlvl>, uvlvl…    filter/uv/humidifier/vent life %
 
     Equipment identity (indoor/outdoor unit type, airflow profiles,
     lockouts) is NOT in this <status> payload — it arrives as separate
@@ -510,4 +559,8 @@ def parse_telemetry(xml_bytes: bytes) -> TelemetrySnapshot:
         operatingStatusMessage=_text(root, "oprstsmsg") or "",
         humidifierOn=_text(root, "humid") == "on",
         zones=zones,
+        filterLevelPercent=_int(root, "filtrlvl"),
+        uvLevelPercent=_int(root, "uvlvl"),
+        humidifierLevelPercent=_int(root, "humlvl"),
+        ventilatorLevelPercent=_int(root, "ventlvl"),
     )

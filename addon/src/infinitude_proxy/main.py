@@ -32,12 +32,15 @@ from .models import (
     HvacAction,
     HvacMode,
     IduConfig,
+    FilterReminder,
     NotificationBody,
     NotificationChangeEntry,
     NotificationEnvelope,
     OduConfig,
     RuntimeConfig,
     Schedule,
+    ServiceReminderItem,
+    ServiceReminders,
     State,
     StateStoreHealth,
     System,
@@ -479,6 +482,45 @@ def create_app(store: StateStore | None = None) -> FastAPI:
         if updated is None:
             raise HTTPException(status_code=404, detail="no config received yet")
         return HumidityConfig.model_validate(updated.config.humidity)
+
+    @app.get(
+        "/v1/system/service",
+        response_model=ServiceReminders,
+        tags=["system"],
+    )
+    def get_service_reminders() -> ServiceReminders:
+        """Combined service-reminder view: commissioning intervals + flags
+        from config, life-remaining percentages from the most recent
+        telemetry snapshot. Level is None until telemetry has landed."""
+        stored = store.get_config()
+        if stored is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        svc = stored.config.service
+        tel = store.get_telemetry()
+        snap = tel.snapshot if tel is not None else None
+        return ServiceReminders(
+            filter=FilterReminder(
+                reminderEnabled=svc.filterReminderEnabled,
+                intervalMonths=svc.filterIntervalMonths,
+                levelPercent=snap.filterLevelPercent if snap else None,
+                filterType=svc.filterType,
+            ),
+            uv=ServiceReminderItem(
+                reminderEnabled=svc.uvReminderEnabled,
+                intervalMonths=svc.uvIntervalMonths,
+                levelPercent=snap.uvLevelPercent if snap else None,
+            ),
+            humidifier=ServiceReminderItem(
+                reminderEnabled=svc.humidifierReminderEnabled,
+                intervalMonths=svc.humidifierIntervalMonths,
+                levelPercent=snap.humidifierLevelPercent if snap else None,
+            ),
+            ventilator=ServiceReminderItem(
+                reminderEnabled=svc.ventilatorReminderEnabled,
+                intervalMonths=svc.ventilatorIntervalMonths,
+                levelPercent=snap.ventilatorLevelPercent if snap else None,
+            ),
+        )
 
     @app.get("/v1/system/idu", response_model=IduConfig, tags=["system"])
     def get_idu() -> IduConfig:

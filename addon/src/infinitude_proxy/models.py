@@ -219,6 +219,37 @@ class VacationPatch(BaseModel):
     fan: FanSpeed | None = None
 
 
+class ServiceReminderItem(BaseModel):
+    """One service-reminder entry.
+
+    `intervalMonths` is the installer-configured servicing cadence.
+    `reminderEnabled` reflects the thermostat's `<*rmd>` flag — whether
+    the user has armed the reminder for this service. `levelPercent` is
+    the telemetry-reported life remaining (0–100, where 0 means due);
+    None means no telemetry has landed yet.
+    """
+    reminderEnabled: bool
+    intervalMonths: Annotated[int, Field(ge=0)]
+    levelPercent: PercentInt | None = None
+
+
+class FilterReminder(ServiceReminderItem):
+    """Filter reminder adds a human-readable filter-type label from config
+    (`<filtertype>`, e.g. "air filter", "media filter"). None when the
+    installer hasn't set one."""
+    filterType: str | None = None
+
+
+class ServiceReminders(BaseModel):
+    """Combined service-reminder view: config-driven intervals/flags plus
+    telemetry-driven life-remaining levels. Read-only — intervals and
+    reminder flags are commissioning data, not user-tunable through our API."""
+    filter: FilterReminder
+    uv: ServiceReminderItem
+    humidifier: ServiceReminderItem
+    ventilator: ServiceReminderItem
+
+
 class HumidityConfig(BaseModel):
     """Humidifier equipment + per-mode target RH.
 
