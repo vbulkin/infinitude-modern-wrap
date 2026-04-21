@@ -22,6 +22,7 @@ from .canned_state import canned_state
 from .models import (
     Activity,
     ActivityId,
+    ActivityPatch,
     ApiHealth,
     CarrierCloudHealth,
     FanSpeed,
@@ -57,6 +58,7 @@ from .models import (
 )
 from .errors import register_error_handlers
 from .mutations import (
+    apply_activity_set,
     apply_humidity_set,
     apply_system_hold_clear,
     apply_system_hold_set,
@@ -345,6 +347,64 @@ def create_app(store: StateStore | None = None) -> FastAPI:
             if zc.id == zone_id:
                 return [Activity.model_validate(a) for a in zc.activities]
         raise HTTPException(status_code=404, detail=f"zone {zone_id} not found")
+
+    @app.patch(
+        "/v1/zones/{zone_id}/activities/{activity_id}",
+        response_model=Activity,
+        tags=["zones"],
+    )
+    async def patch_zone_activity(
+        zone_id: str, activity_id: str, body: ActivityPatch
+    ) -> Activity:
+        """Edit an activity's setpoints and/or fan. Sparse update — only
+        supplied fields are written. Unlike PATCH /v1/zones/{id} (which
+        edits the `manual` activity and engages the hold), this endpoint
+        edits whichever activity you name without touching hold state,
+        so you can tweak the `home` or `sleep` profiles without forcing
+        an immediate override.
+        """
+        stored = store.get_config()
+        if stored is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        zone_cfg = next(
+            (zc for zc in stored.config.zones if zc.id == zone_id), None
+        )
+        if zone_cfg is None:
+            raise HTTPException(status_code=404, detail=f"zone {zone_id} not found")
+        try:
+            aid = ActivityId(activity_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=404,
+                detail=f"activity {activity_id} not found in zone {zone_id}",
+            )
+        if not any(a.id == aid.value for a in zone_cfg.activities):
+            raise HTTPException(
+                status_code=404,
+                detail=f"activity {activity_id} not found in zone {zone_id}",
+            )
+        supplied = body.model_dump(exclude_none=True)
+        if not supplied:
+            raise HTTPException(
+                status_code=422, detail="at least one field must be supplied"
+            )
+        payload = {"zone_id": zone_id, "activity_id": activity_id, **supplied}
+        updated = await store.mutate_config(
+            apply_activity_set,
+            serial=stored.serial,
+            kind="activity_set",
+            target=f"zone:{zone_id}:activity:{activity_id}",
+            payload=payload,
+        )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        updated_zone = next(
+            zc for zc in updated.config.zones if zc.id == zone_id
+        )
+        updated_activity = next(
+            a for a in updated_zone.activities if a.id == aid.value
+        )
+        return Activity.model_validate(updated_activity)
 
     @app.get(
         "/v1/zones/{zone_id}/schedule",

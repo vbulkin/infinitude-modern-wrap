@@ -130,6 +130,31 @@ def apply_zone_setpoints_set(tree: etree._Element, payload: dict) -> None:
         _set_or_create(zone, "otmr", "")
 
 
+# ── Activity edit ────────────────────────────────────────────────────
+
+def apply_activity_set(tree: etree._Element, payload: dict) -> None:
+    """Edit one activity's setpoints and/or fan — sparse update.
+
+    Payload shape:
+      {"zone_id": "1", "activity_id": "home", "heat": 68, "cool": 74, "fan": "low"}
+    Any of heat/cool/fan may be omitted; only supplied keys touch the tree.
+    Unlike apply_zone_setpoints_set (which is the hold-engaging "manual"
+    composite), this mutation does not touch hold state — editing the
+    `home` activity's setpoints shouldn't silently engage a hold. If the
+    zone is already holding on this activity the change takes effect at
+    the next thermostat refresh; otherwise it's staged for the next time
+    the activity runs.
+    """
+    zone = _find_zone(tree, payload["zone_id"])
+    activity = _find_activity(zone, payload["activity_id"])
+    if "heat" in payload and payload["heat"] is not None:
+        _set_or_create(activity, "htsp", _format_setpoint(int(payload["heat"])))
+    if "cool" in payload and payload["cool"] is not None:
+        _set_or_create(activity, "clsp", _format_setpoint(int(payload["cool"])))
+    if "fan" in payload and payload["fan"] is not None:
+        _set_or_create(activity, "fan", str(payload["fan"]))
+
+
 # ── Zone hold ────────────────────────────────────────────────────────
 
 def apply_zone_hold_set(tree: etree._Element, payload: dict) -> None:
@@ -293,6 +318,7 @@ REPLAY_REGISTRY: dict[str, MutationFn] = {
     "system_hold_clear": apply_system_hold_clear,
     "system_mode_set": apply_system_mode_set,
     "zone_setpoints_set": apply_zone_setpoints_set,
+    "activity_set": apply_activity_set,
     "humidity_set": apply_humidity_set,
     "vacation_set": apply_vacation_set,
 }
