@@ -387,11 +387,16 @@ def test_parse_notifications_extracts_three_change_ids():
         assert ev.changes[0].zone == zone
 
 
-def test_directive_flips_dirty_flag_and_config_post_clears_it():
-    """Dirty-flag lifecycle end-to-end:
-      1. clean store   → configHasChanges=false
-      2. mark_dirty    → configHasChanges=true
-      3. full-config POST clears it → next telemetry back to false
+def test_directive_dirty_flag_optimistic_clear_in_status_handler():
+    """Dirty-flag lifecycle matches upstream Perl's optimistic pattern:
+      1. clean store             → configHasChanges=false, pingRate=12
+      2. mark_dirty              → the NEXT status POST returns
+                                   configHasChanges=true, pingRate=20
+                                   AND clears the flag in the same step
+      3. the status POST AFTER   → configHasChanges=false, pingRate=12
+                                   (no additional config POST needed;
+                                   clear is optimistic, not earned by the
+                                   thermostat actually fetching /config)
     """
     import asyncio
     store = StateStore()
@@ -405,18 +410,80 @@ def test_directive_flips_dirty_flag_and_config_post_clears_it():
             headers={"content-type": "application/xml"},
         ).content
 
-    assert b"<configHasChanges>false</configHasChanges>" in _telemetry_response()
+    r = _telemetry_response()
+    assert b"<configHasChanges>false</configHasChanges>" in r
+    assert b"<pingRate>12</pingRate>" in r
 
     asyncio.run(store.mark_config_dirty())
-    assert b"<configHasChanges>true</configHasChanges>" in _telemetry_response()
+    r = _telemetry_response()
+    assert b"<configHasChanges>true</configHasChanges>" in r
+    assert b"<pingRate>20</pingRate>" in r
 
-    # Thermostat responds to the directive by re-uploading full config.
+    # Optimistic clear: the dirty signal was consumed by the status
+    # handler above; the next status POST already sees clean state.
+    # The thermostat follows up with a GET /config (tested separately)
+    # but that GET is NOT what clears the flag.
+    r = _telemetry_response()
+    assert b"<configHasChanges>false</configHasChanges>" in r
+    assert b"<pingRate>12</pingRate>" in r
+
+
+def test_post_system_config_does_not_clear_dirty_flag():
+    """Config POST from the thermostat is a data refresh, not a write
+    acknowledgement. The dirty flag is managed solely by the status
+    handler (set via mark_config_dirty, cleared via take_config_dirty)."""
+    import asyncio
+    store = StateStore()
+    app = create_app(store=store)
+    client = TestClient(app)
+
+    asyncio.run(store.mark_config_dirty())
+    # A config POST arriving while dirty MUST NOT clear the flag —
+    # the thermostat might be doing an unrelated boot-time upload and
+    # the pending northbound edit still needs to be signalled.
     client.post(
         "/systems/0000TEST0000",
         content=_read("boot_01_system_config.xml"),
         headers={"content-type": "application/xml"},
     )
-    assert b"<configHasChanges>false</configHasChanges>" in _telemetry_response()
+    assert store.config_dirty is True
+
+
+def test_get_systems_config_404_before_boot_post():
+    """Thermostat-facing GET /config returns 404 until the boot-time
+    POST to /systems/{serial} populates the store. Serving empty or
+    stale bytes would send the thermostat into a re-sync loop."""
+    client = TestClient(create_app())
+    r = client.get("/systems/0000TEST0000/config")
+    assert r.status_code == 404
+
+
+def test_get_systems_config_serves_stored_tree():
+    """After the thermostat's boot POST, GET /config serves the
+    retained <config> subtree as `<?xml ...?>\\n<config>...</config>`
+    — outer <system> stripped, matching the live Mojolicious shape."""
+    store = StateStore()
+    app = create_app(store=store)
+    client = TestClient(app)
+
+    client.post(
+        "/systems/0000TEST0000",
+        content=_read("boot_01_system_config.xml"),
+        headers={"content-type": "application/xml"},
+    )
+
+    r = client.get("/systems/0000TEST0000/config")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/xml")
+    body = r.content
+    assert body.startswith(b'<?xml version="1.0" encoding="UTF-8"?>\n<config>')
+    assert body.rstrip().endswith(b"</config>")
+    # No <system> wrapper on the wire (the POST had one; GET strips
+    # it). Match the tag with its version attribute to avoid false hits
+    # from <systemCFM>, <staticPressure>'s neighbors, etc.
+    assert b"<system " not in body and b"<system>" not in body
+    # Round-trip spot checks against the known fixture state.
+    assert b"<mode>cool</mode>" in body
 
 
 async def test_store_broadcasts_notifications_to_subscribers():

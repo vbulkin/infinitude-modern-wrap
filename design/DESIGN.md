@@ -88,11 +88,17 @@ The rewrite is primarily a **northbound API modernization** plus a **language mi
 ### 4.3 Data flow — write (setpoint, hold, schedule)
 
 1. HA integration or web UI PATCHes a resource (e.g. `PATCH /v1/zones/1`).
-2. API validates against the Pydantic model and writes to state store.
-3. State store marks a "pending-push" flag for the thermostat.
-4. Next time the thermostat polls Infinitude (its natural cadence), the southbound handler includes the pending change in the response — same mechanism upstream uses today.
-5. Thermostat confirms by including the new value in its next telemetry POST; pending-push flag is cleared.
+2. API validates against the Pydantic model; a `mutate_config(fn)` helper edits the in-memory `<config>` tree in place (Slice 2+).
+3. State store marks `config_dirty=true` AND enqueues a typed row in `pending_writes` (kind/target/payload) so the write survives restart.
+4. On the next status POST from the thermostat, the directive response flips `configHasChanges=true` and shortens `pingRate` from 12 → 20 s. The dirty flag is cleared **optimistically in the same handler** (upstream Perl behavior).
+5. Thermostat follows up with `GET /systems/{serial}/config`; we serve the mutated tree. Any rows in `pending_writes` for this serial are marked `applied_at=now()` — **pull-observed** semantic: we take "thermostat pulled the config" as proof the edit landed, rather than waiting for an echo in a later telemetry POST.
 6. State store emits a diff to SSE.
+
+**Pull-observed vs confirmation:** Earlier drafts of this spec called for clearing pending only when the thermostat echoed the new value in its next telemetry POST. We chose pull-observed for two reasons:
+- A typed-payload → expected-telemetry-field map is laborious to build and kind-specific.
+- Telemetry elides many config fields (schedules, vacation targets, per-activity setpoints). "Confirmation" can never arrive for those — the flag would pile up.
+
+A confirmation upgrade path remains in the backlog; pull-observed is adequate for the failure modes Slice 2 handles (see §11.3).
 
 This matches how upstream Infinitude operates — we inherit Carrier's "thermostat pulls changes" model rather than trying to push.
 
@@ -426,8 +432,17 @@ Unchanged: one field, `host`, pointing at the add-on's base URL.
 
 Two concerns:
 
-1. **State cache** — last known thermostat report. Persisted to SQLite so that immediately after add-on restart the northbound API can answer reads without waiting for the next thermostat POST. Single-row table keyed by thermostat serial.
-2. **Pending writes** — mutations made via the API that haven't yet been picked up by the thermostat. Persisted to SQLite so that an add-on restart doesn't lose a user's setpoint change. On startup, the scheduler re-arms any pending writes.
+1. **State cache** — last known thermostat report. Persisted to SQLite so that immediately after add-on restart the northbound API can answer reads without waiting for the next thermostat POST. Single-row-per-serial table (`state_cache`) holding `config_xml`, `idu_xml`, `odu_xml`, and the dirty flag. Stored XML is the raw `<config>` subtree as served on `GET /systems/{serial}/config` — parser accepts both the POST-body shape (`<system><config>…`) and the serialized shape (bare `<config>`) so restore and live handling share one entry point.
+2. **Pending writes** — mutations made via the API that haven't yet been picked up by the thermostat. Persisted in `pending_writes` (kind / target / payload_json / created_at / applied_at). On startup they remain queued; `mark_all_applied(serial)` fires when the thermostat pulls `/config` (pull-observed clear — see §4.3).
+
+### 11.3 Known limitations
+
+Deliberate trade-offs, not bugs:
+
+1. **Thermostat-reboot race.** If the proxy has pending writes and is restarted, then the thermostat reboots and POSTs its stale full config *before* ever fetching `/config`, our `apply_config` overwrites the restored mutated tree. The pending rows survive but are orphaned until a Slice 2 replay dispatcher re-applies each `PendingWrite` onto the incoming tree. Today we log a WARNING and accept the loss (matches upstream Perl — see `state_store.apply_config`).
+2. **Startup window.** Uvicorn opens the listening socket before FastAPI lifespan completes. A southbound POST landing between socket-open and `Persistence.open` writes to memory only; disk catches up on the next write. Narrow (sub-second) and self-healing.
+3. **Mid-session SQLite write failures** (disk full, WAL lock timeout, permission change) are logged and swallowed — the in-memory update wins. The alternative (propagate to the southbound handler and return 500 to the thermostat) would desync the directive channel and risk a retry storm. On process restart the in-memory-only update is lost; the next successful write supersedes it.
+4. **Pull-observed ≠ confirmation.** §4.3 details the trade.
 
 No historical data is retained. Time-series metrics, if ever needed, belong in Prometheus / InfluxDB external to the proxy.
 

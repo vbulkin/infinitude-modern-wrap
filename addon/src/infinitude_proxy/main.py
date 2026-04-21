@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -45,9 +46,12 @@ from .models import (
     Zone,
     ZoneHold,
 )
+from .persistence import Persistence
 from .settings import load_settings
 from .southbound import create_southbound_router
 from .state_store import StateStore, StoredConfig, StoredNotification, StoredTelemetry
+
+logger = logging.getLogger(__name__)
 
 _STARTUP_MONOTONIC = time.monotonic()
 
@@ -158,16 +162,46 @@ def _compose_state(
 def create_app(store: StateStore | None = None) -> FastAPI:
     settings = load_settings()
     _configure_logging(settings.log_level)
+    # When the caller supplies a store (tests), we trust it's pre-configured
+    # and skip the auto-open lifespan path. Production entrypoint calls
+    # create_app() with no args → lifespan opens the DB at settings.db_path.
+    owns_store = store is None
     store = store or StateStore()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        persistence: Persistence | None = None
+        if owns_store:
+            try:
+                persistence = await Persistence.open(settings.db_path)
+                store.attach_persistence(persistence)
+                await store.restore_from_persistence()
+            except Exception:
+                # A broken/locked DB shouldn't brick the proxy — degrade
+                # to in-memory-only mode and log. Operator can delete the
+                # file and restart to recover.
+                logger.exception(
+                    "persistence: failed to open %s; running in-memory only",
+                    settings.db_path,
+                )
+                persistence = None
+                store.attach_persistence(None)
+        try:
+            yield
+        finally:
+            if persistence is not None:
+                await persistence.close()
+
     app = FastAPI(
         title="Infinitude Modern Proxy API",
         version=__version__,
         description="Northbound HTTP API for the modernized Infinitude proxy.",
+        lifespan=lifespan,
     )
     app.include_router(create_southbound_router(store))
 
     @app.get("/v1/healthz", response_model=Health, tags=["health"])
-    def get_health() -> Health:
+    async def get_health() -> Health:
         now = datetime.now(timezone.utc)
         stored = store.get_telemetry()
         if stored is None:
@@ -189,6 +223,13 @@ def create_app(store: StateStore | None = None) -> FastAPI:
                 staleThresholdSeconds=300,
             )
             overall = "healthy" if age < 300 else "degraded"
+        pending_count = 0
+        oldest_age: int | None = None
+        if store.persistence is not None:
+            pending_count = await store.persistence.unapplied_count()
+            raw_age = await store.persistence.oldest_pending_age_seconds()
+            oldest_age = int(raw_age) if raw_age is not None else None
+        zones_tracked = len(store.get_config().config.zones) if store.get_config() else 0
         return Health(
             status=overall,  # type: ignore[arg-type]
             timestamp=now,
@@ -204,14 +245,14 @@ def create_app(store: StateStore | None = None) -> FastAPI:
                 ),
                 stateStore=StateStoreHealth(
                     status="healthy",
-                    zonesTracked=0,
-                    pendingPushes=0,
-                    oldestPendingPushAgeSeconds=None,
+                    zonesTracked=zones_tracked,
+                    pendingPushes=pending_count,
+                    oldestPendingPushAgeSeconds=oldest_age,
                 ),
                 api=ApiHealth(
                     status="healthy",
                     uptimeSeconds=_uptime_seconds(),
-                    activeSseSubscribers=0,
+                    activeSseSubscribers=store.subscriber_count,
                 ),
             ),
             version=Version(

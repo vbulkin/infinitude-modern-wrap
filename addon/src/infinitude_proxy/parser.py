@@ -318,26 +318,7 @@ def _parse_zone_hold(zone_el: etree._Element) -> ZoneHold:
     return ZoneHold(active=active, activity=activity, until=None)
 
 
-def parse_system_config(xml_bytes: bytes) -> SystemConfig:
-    """Parse a POST /systems/{serial} body (full config dump).
-
-    Extracts the whole-house mode + hold state and the per-zone identity
-    and hold state. Activities and schedules live in the same XML but
-    are surfaced via dedicated parsers/endpoints in later slices.
-
-    TODO: known-unsurfaced fields in this payload. Each is a candidate
-    for its own slice once a northbound consumer needs it:
-      <config>/<utilityEvent>        utility-rate response config
-      <config>/<staticPressure>      duct static pressure calibration
-      <config>/<blowerSpeed>, CFM    blower commissioning data
-      <config>/<filterinterval>, …   service-reminder thresholds
-      zone/<otmr>, <setback>, etc.   per-zone behavior tuning knobs
-    """
-    root = etree.fromstring(xml_bytes)
-    config = root.find("config")
-    if config is None:
-        raise ValueError("system XML missing <config>")
-
+def _config_from_element(config: etree._Element) -> SystemConfig:
     mode = HvacMode(_text(config, "mode") or "off")
     wh_hold = _parse_whole_house_hold(config.find("wholeHouse"))
 
@@ -363,6 +344,62 @@ def parse_system_config(xml_bytes: bytes) -> SystemConfig:
         zones=zones,
         vacation=_parse_vacation(config),
         humidity=_parse_humidity(config),
+    )
+
+
+def parse_system_config_with_tree(
+    xml_bytes: bytes,
+) -> tuple[etree._Element, SystemConfig]:
+    """Parse a POST /systems/{serial} body, returning BOTH the raw
+    <config> subtree and the typed snapshot.
+
+    The raw tree is retained by the state store so we can serve it
+    back verbatim on GET /systems/{serial}/config and mutate it in
+    place when northbound writes land (Slice 2+). The thermostat's
+    POST body is wrapped in <system><config>…</config></system>; we
+    return the inner <config> element, which is what the GET response
+    actually carries over the wire.
+    """
+    root = etree.fromstring(xml_bytes)
+    # POST body is <system><config>...</config></system>; the serialized
+    # form we persist (and serve on GET) is a bare <config>. Accept both
+    # so restore-from-DB and live POSTs share one entry point.
+    if root.tag == "config":
+        config = root
+    else:
+        config = root.find("config")
+        if config is None:
+            raise ValueError("system XML missing <config>")
+    return config, _config_from_element(config)
+
+
+def parse_system_config(xml_bytes: bytes) -> SystemConfig:
+    """Parse a POST /systems/{serial} body (full config dump).
+
+    Extracts the whole-house mode + hold state and the per-zone identity
+    and hold state. Activities and schedules live in the same XML but
+    are surfaced via dedicated parsers/endpoints in later slices.
+
+    TODO: known-unsurfaced fields in this payload. Each is a candidate
+    for its own slice once a northbound consumer needs it:
+      <config>/<utilityEvent>        utility-rate response config
+      <config>/<staticPressure>      duct static pressure calibration
+      <config>/<blowerSpeed>, CFM    blower commissioning data
+      <config>/<filterinterval>, …   service-reminder thresholds
+      zone/<otmr>, <setback>, etc.   per-zone behavior tuning knobs
+    """
+    _, cfg = parse_system_config_with_tree(xml_bytes)
+    return cfg
+
+
+def serialize_config_tree(tree: etree._Element) -> bytes:
+    """Serialize the retained <config> subtree to wire bytes for GET
+    /systems/{serial}/config. Matches the live Mojolicious response:
+    XML declaration, newline, then the element.
+    """
+    return (
+        b'<?xml version="1.0" encoding="UTF-8"?>\n'
+        + etree.tostring(tree, encoding="utf-8")
     )
 
 
