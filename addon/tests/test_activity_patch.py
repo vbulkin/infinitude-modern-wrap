@@ -135,6 +135,44 @@ def _seed_client() -> TestClient:
     return client
 
 
+def test_get_activity_returns_current_settings():
+    client = _seed_client()
+    resp = client.get("/v1/zones/1/activities/home")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == "home"
+    for key in ("heat", "cool", "fan"):
+        assert key in body
+
+
+def test_get_activity_reflects_prior_patch():
+    client = _seed_client()
+    client.patch("/v1/zones/1/activities/sleep", json={"heat": 65})
+    resp = client.get("/v1/zones/1/activities/sleep")
+    assert resp.status_code == 200
+    assert resp.json()["heat"] == 65
+
+
+def test_get_activity_unknown_zone_404():
+    client = _seed_client()
+    resp = client.get("/v1/zones/99/activities/home")
+    assert resp.status_code == 404
+
+
+def test_get_activity_unknown_activity_404():
+    client = _seed_client()
+    resp = client.get("/v1/zones/1/activities/nonesuch")
+    assert resp.status_code == 404
+
+
+def test_get_activity_before_config_404():
+    store = StateStore()
+    app = create_app(store=store)
+    client = TestClient(app)
+    resp = client.get("/v1/zones/1/activities/home")
+    assert resp.status_code == 404
+
+
 def test_patch_activity_updates_all_fields_and_echoes():
     client = _seed_client()
     resp = client.patch(

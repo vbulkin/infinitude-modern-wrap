@@ -349,6 +349,35 @@ def create_app(store: StateStore | None = None) -> FastAPI:
                 return [Activity.model_validate(a) for a in zc.activities]
         raise HTTPException(status_code=404, detail=f"zone {zone_id} not found")
 
+    @app.get(
+        "/v1/zones/{zone_id}/activities/{activity_id}",
+        response_model=Activity,
+        tags=["zones"],
+    )
+    def get_zone_activity(zone_id: str, activity_id: str) -> Activity:
+        stored = store.get_config()
+        if stored is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        zone_cfg = next(
+            (zc for zc in stored.config.zones if zc.id == zone_id), None
+        )
+        if zone_cfg is None:
+            raise HTTPException(status_code=404, detail=f"zone {zone_id} not found")
+        try:
+            aid = ActivityId(activity_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=404,
+                detail=f"activity {activity_id} not found in zone {zone_id}",
+            )
+        match = next((a for a in zone_cfg.activities if a.id == aid.value), None)
+        if match is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"activity {activity_id} not found in zone {zone_id}",
+            )
+        return Activity.model_validate(match)
+
     @app.patch(
         "/v1/zones/{zone_id}/activities/{activity_id}",
         response_model=Activity,

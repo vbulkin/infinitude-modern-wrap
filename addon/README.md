@@ -42,6 +42,7 @@ the full API contract.
 - `GET /v1/zones` — all zones (including disabled).
 - `GET /v1/zones/{id}` — single zone.
 - `GET /v1/zones/{id}/activities` — all activities for a zone.
+- `GET /v1/zones/{id}/activities/{id}` — single activity.
 - `GET /v1/zones/{id}/schedule` — 7-day program.
 
 ### State (write)
@@ -90,7 +91,7 @@ cd addon
 pytest
 ```
 
-Current coverage: 224 tests across parser, mutations, state store, persistence, southbound handler, error shape, and every northbound endpoint including SSE publisher/resume semantics.
+Current coverage: 229 tests across parser, mutations, state store, persistence, southbound handler, error shape, and every northbound endpoint including SSE publisher/resume semantics.
 
 ## HA add-on build (local)
 

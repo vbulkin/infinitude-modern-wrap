@@ -221,6 +221,179 @@ paths:
               schema:
                 $ref: "#/components/schemas/System"
 
+  /v1/system/vacation:
+    get:
+      tags: [system]
+      summary: Get vacation window + setpoints + fan.
+      operationId: getVacation
+      responses:
+        "200":
+          description: Vacation config.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VacationConfig"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [system]
+      summary: Update vacation fields (sparse).
+      description: |
+        Sparse update. Send any subset of fields; unsupplied keys are
+        left alone. To exit vacation early, send `{"active": false}` —
+        this leaves `start`/`end` intact for next time.
+      operationId: patchVacation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VacationPatch"
+      responses:
+        "200":
+          description: Updated vacation config.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VacationConfig"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/system/humidity:
+    get:
+      tags: [system]
+      summary: Get per-mode humidity targets + equipment flags.
+      operationId: getHumidity
+      responses:
+        "200":
+          description: Humidity config.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HumidityConfig"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [system]
+      summary: Update per-mode humidity targets (sparse).
+      description: |
+        Only target RH fields are writable. `equipmentInstalled` and
+        `humidifierFan` are commissioning facts, not user preferences.
+        At least one target must be supplied; empty body → 422.
+      operationId: patchHumidity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HumidityPatch"
+      responses:
+        "200":
+          description: Updated humidity config.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HumidityConfig"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/system/service:
+    get:
+      tags: [system]
+      summary: Service-reminder intervals/flags + life-remaining percentages.
+      description: |
+        Read-only. Intervals and reminder-enabled flags come from
+        commissioning config; `levelPercent` per component comes from
+        telemetry (None until telemetry has landed).
+      operationId: getServiceReminders
+      responses:
+        "200":
+          description: Service reminders.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceReminders"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/system/idu:
+    get:
+      tags: [system]
+      summary: Indoor-unit equipment identity + commissioning knobs.
+      operationId: getIdu
+      responses:
+        "200":
+          description: Indoor unit config.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IduConfig"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/system/odu:
+    get:
+      tags: [system]
+      summary: Outdoor-unit equipment identity + airflow/lockout config.
+      operationId: getOdu
+      responses:
+        "200":
+          description: Outdoor unit config.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OduConfig"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Notifications (ring-buffer backfill — not emitted on SSE)
+  # ──────────────────────────────────────────────────────────────────────
+
+  /v1/notifications:
+    get:
+      tags: [state]
+      summary: Recent thermostat notifications (ring buffer).
+      description: |
+        REST-backed ring buffer of raw thermostat notification events, for
+        SSE reconnect backfill. Oldest-first; the buffer holds up to 50
+        entries. Notifications are **not** emitted on `/v1/events` —
+        they don't fit the spec's `EventEnvelope` enum, so a separate
+        REST endpoint owns them. Clients reconnecting from a gap can
+        page here using `receivedAt` as the cursor.
+      operationId: getNotifications
+      parameters:
+        - in: query
+          name: since
+          required: false
+          schema:
+            $ref: "#/components/schemas/IsoDateTime"
+          description: |
+            Return only notifications whose `receivedAt` is strictly
+            greater than this timestamp. Intended cursor for reconnect
+            backfill.
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 50
+      responses:
+        "200":
+          description: Notifications (oldest-first).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/NotificationEnvelope"
+
   # ──────────────────────────────────────────────────────────────────────
   # Zones
   # ──────────────────────────────────────────────────────────────────────
@@ -1021,3 +1194,253 @@ components:
         logLevel:
           type: string
           enum: [debug, info, warning, error]
+
+    # ── Vacation ─────────────────────────────────────────────────────
+
+    VacationConfig:
+      type: object
+      required: [active, heatSetpoint, coolSetpoint, fan]
+      properties:
+        active:
+          type: boolean
+        start:
+          oneOf:
+            - $ref: "#/components/schemas/IsoDateTime"
+            - type: "null"
+          description: Start of the vacation window (UTC).
+        end:
+          oneOf:
+            - $ref: "#/components/schemas/IsoDateTime"
+            - type: "null"
+          description: End of the vacation window (UTC).
+        heatSetpoint:
+          $ref: "#/components/schemas/Temperature"
+        coolSetpoint:
+          $ref: "#/components/schemas/Temperature"
+        fan:
+          $ref: "#/components/schemas/FanSpeed"
+
+    VacationPatch:
+      type: object
+      description: |
+        Sparse update. At least one property must be supplied; empty
+        body → 422. `start`/`end` may be cleared by sending `null`.
+      minProperties: 1
+      properties:
+        active:
+          type: boolean
+        start:
+          oneOf:
+            - $ref: "#/components/schemas/IsoDateTime"
+            - type: "null"
+        end:
+          oneOf:
+            - $ref: "#/components/schemas/IsoDateTime"
+            - type: "null"
+        heatSetpoint:
+          $ref: "#/components/schemas/Temperature"
+        coolSetpoint:
+          $ref: "#/components/schemas/Temperature"
+        fan:
+          $ref: "#/components/schemas/FanSpeed"
+      additionalProperties: false
+
+    # ── Humidity ─────────────────────────────────────────────────────
+
+    HumidityConfig:
+      type: object
+      required: [equipmentInstalled, humidifierFan]
+      properties:
+        equipmentInstalled:
+          type: boolean
+          description: |
+            Reflects `<cfghumid>on</cfghumid>` — presence of humidifier
+            hardware, not whether any target is set.
+        humidifierFan:
+          type: boolean
+        targetHome:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+        targetAway:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+        targetVacation:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+
+    HumidityPatch:
+      type: object
+      description: |
+        Sparse update of per-mode target RH. At least one target must
+        be supplied; empty body → 422.
+      minProperties: 1
+      properties:
+        targetHome:
+          type: integer
+          minimum: 0
+          maximum: 100
+        targetAway:
+          type: integer
+          minimum: 0
+          maximum: 100
+        targetVacation:
+          type: integer
+          minimum: 0
+          maximum: 100
+      additionalProperties: false
+
+    # ── Service reminders ────────────────────────────────────────────
+
+    ServiceReminderItem:
+      type: object
+      required: [reminderEnabled, intervalMonths]
+      properties:
+        reminderEnabled:
+          type: boolean
+          description: |
+            Whether the user has armed this reminder (the thermostat's
+            `<*rmd>` flag).
+        intervalMonths:
+          type: integer
+          minimum: 0
+          description: Installer-configured servicing cadence, in months.
+        levelPercent:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+          description: |
+            Life remaining (0 = due). Null until telemetry has landed.
+
+    FilterReminder:
+      allOf:
+        - $ref: "#/components/schemas/ServiceReminderItem"
+        - type: object
+          properties:
+            filterType:
+              type: string
+              nullable: true
+              description: |
+                Installer-set filter-type label (e.g. "air filter",
+                "media filter"). Null when unset.
+
+    ServiceReminders:
+      type: object
+      required: [filter, uv, humidifier, ventilator]
+      properties:
+        filter:
+          $ref: "#/components/schemas/FilterReminder"
+        uv:
+          $ref: "#/components/schemas/ServiceReminderItem"
+        humidifier:
+          $ref: "#/components/schemas/ServiceReminderItem"
+        ventilator:
+          $ref: "#/components/schemas/ServiceReminderItem"
+
+    # ── Indoor/outdoor unit equipment ────────────────────────────────
+
+    IduConfig:
+      type: object
+      required: [type, auxiliaryTerminalAvailable]
+      properties:
+        type:
+          type: string
+          description: |
+            Wire string for indoor-unit type (e.g. `fancoilelectric`,
+            `furnace`). Left open for forward-compat with future
+            `idutype` values.
+        elevationFeet:
+          type: integer
+          nullable: true
+          description: |
+            Installation elevation. Null means installer left it unset;
+            zero is a legitimate sea-level value.
+        auxiliaryTerminalAvailable:
+          type: boolean
+
+    OduConfig:
+      type: object
+      required:
+        - type
+        - coolAirflowProfile
+        - heatAirflowProfile
+        - dehumidifyAirflowProfile
+        - defrostInterval
+      properties:
+        type:
+          type: string
+          description: Wire string for outdoor-unit type.
+        coolAirflowProfile:
+          type: string
+          description: e.g. `comfort`, `efficiency`.
+        heatAirflowProfile:
+          type: string
+        dehumidifyAirflowProfile:
+          type: string
+        coolLockoutTemp:
+          type: integer
+          nullable: true
+          description: Null when the installer hasn't set a threshold.
+        heatLockoutTemp:
+          type: integer
+          nullable: true
+        defrostInterval:
+          type: string
+
+    # ── Notifications (REST-only; not on SSE) ────────────────────────
+
+    NotificationChangeEntry:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+        zone:
+          type: string
+          nullable: true
+
+    NotificationBody:
+      type: object
+      required: [type, code, message, timestamp, changes]
+      properties:
+        type:
+          type: string
+          description: |
+            Always `confirmation` in observed traffic, but left open for
+            future alert/warning shapes.
+        code:
+          type: integer
+        message:
+          type: string
+        timestamp:
+          allOf:
+            - $ref: "#/components/schemas/IsoDateTime"
+          description: Thermostat's wall-clock at emission.
+        changes:
+          type: array
+          items:
+            $ref: "#/components/schemas/NotificationChangeEntry"
+
+    NotificationEnvelope:
+      type: object
+      required: [serial, receivedAt, event]
+      description: |
+        Stored-and-served notification: a body plus our receive
+        metadata. Clients doing reconnect backfill use `receivedAt`
+        as their cursor — the thermostat's own `timestamp` can go
+        backwards across resets, so it's not a reliable ordering key.
+      properties:
+        serial:
+          type: string
+        receivedAt:
+          allOf:
+            - $ref: "#/components/schemas/IsoDateTime"
+          description: Server-side timestamp when the notification landed.
+        event:
+          $ref: "#/components/schemas/NotificationBody"
