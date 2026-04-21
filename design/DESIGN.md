@@ -406,9 +406,13 @@ event: health.changed
 data: {"status": "degraded", "reason": "carrier_cloud.unreachable"}
 ```
 
-Subscribers reconnect with `Last-Event-ID` to resume.
+Subscribers reconnect with `Last-Event-ID` to resume. The server keeps a bounded ring buffer (200 events) of recent events; if the requested `Last-Event-ID` is older than the buffer's oldest entry, the server re-seeds with a fresh `state.snapshot` instead of replaying.
 
 Initial connect: the server sends a `state.snapshot` event with the full current state, then incremental diffs.
+
+Keepalive is emitted as an SSE comment line (`: ping\n\n`) every 15 s rather than as a named event, so it doesn't pollute the `EventEnvelope` enum — the `EventSource` API silently ignores it.
+
+`health.changed` is specified but not yet emitted; no continuous health ticker exists to drive transitions. Deferred until a health-monitor component needs it.
 
 ---
 
@@ -439,7 +443,7 @@ Two concerns:
 
 Deliberate trade-offs, not bugs:
 
-1. **Thermostat-reboot race.** If the proxy has pending writes and is restarted, then the thermostat reboots and POSTs its stale full config *before* ever fetching `/config`, our `apply_config` overwrites the restored mutated tree. The pending rows survive but are orphaned until a Slice 2 replay dispatcher re-applies each `PendingWrite` onto the incoming tree. Today we log a WARNING and accept the loss (matches upstream Perl — see `state_store.apply_config`).
+1. **Thermostat-reboot race — FIXED.** If the proxy has pending writes and is restarted, then the thermostat reboots and POSTs its stale full config *before* ever fetching `/config`, the incoming tree would otherwise overwrite our mutations. `state_store.apply_config` now runs each unapplied `PendingWrite` through `REPLAY_REGISTRY` onto the incoming tree, re-derives the typed `SystemConfig`, persists the mutated bytes, and sets `config_dirty` so the next directive re-signals. Unknown `kind` values stay pending (forward-compat with newer mutation types that an older build doesn't know how to replay). Pending rows still clear on the pull-observed GET `/config`.
 2. **Startup window.** Uvicorn opens the listening socket before FastAPI lifespan completes. A southbound POST landing between socket-open and `Persistence.open` writes to memory only; disk catches up on the next write. Narrow (sub-second) and self-healing.
 3. **Mid-session SQLite write failures** (disk full, WAL lock timeout, permission change) are logged and swallowed — the in-memory update wins. The alternative (propagate to the southbound handler and return 500 to the thermostat) would desync the directive channel and risk a retry storm. On process restart the in-memory-only update is lost; the next successful write supersedes it.
 4. **Pull-observed ≠ confirmation.** §4.3 details the trade.
@@ -462,13 +466,15 @@ No historical data is retained. Time-series metrics, if ever needed, belong in P
 Phases, each shippable independently:
 
 1. **Phase 0 — Freeze legacy, tag final release** on the existing Perl proxy. (Done: v1.0.x is the reference.)
-2. **Phase 1 — OpenAPI spec finalized.** (This branch.) Design doc + `openapi.yaml` merged to `main` behind a clear note that no runtime changes have happened.
-3. **Phase 2 — New add-on scaffolding.** New top-level `addon/` directory with FastAPI app, Dockerfile, southbound stubs, generated Pydantic models. Runs but only serves `/v1/healthz` and canned `/v1/state`. Legacy `infinitude/` stays in place until Phase 7.
-4. **Phase 3 — Southbound re-implementation.** Thermostat can point at the new add-on and it behaves correctly. Feature-gated behind an opt-in option.
-5. **Phase 4 — Northbound write endpoints.** Holds, setpoints, activities, schedules all functional.
-6. **Phase 5 — HA integration cutover.** A single PR updates the Python coordinator to the new API. Bump major version of the integration. Old add-on is deprecated in the README.
-7. **Phase 6 — SSE push.** Opportunistic; coordinator keeps polling as a fallback.
-8. **Phase 7 — Legacy add-on removed.** After a deprecation window (~2 releases), the Perl add-on is removed from the repo.
+2. **Phase 1 — OpenAPI spec finalized.** (This branch.) Design doc + `openapi.yaml` merged to `main` behind a clear note that no runtime changes have happened. ✅
+3. **Phase 2 — New add-on scaffolding.** New top-level `addon/` directory with FastAPI app, Dockerfile, southbound stubs, generated Pydantic models. ✅
+4. **Phase 3 — Southbound re-implementation.** Thermostat POST handlers (`/status`, `/config` GET+POST, `/notifications`, `/idu_config`, `/odu_config`), SQLite persistence, replay dispatcher on proxy-restart/thermostat-reboot. ✅
+5. **Phase 4 — Northbound write endpoints.** Holds (zone + whole-house), setpoints, activities, schedules, vacation, humidity, mode, service reminders, spec-shape SSE events. ✅
+6. **Phase 5 — HA integration cutover.** A single PR updates the Python coordinator to the new API. Bump major version of the integration. Old add-on is deprecated in the README. ⏳
+7. **Phase 6 — SSE push client.** HA coordinator consumes `/v1/events` instead of polling; polling remains as a fallback. ⏳ (server-side SSE shipped in Phase 4; client switch is this phase.)
+8. **Phase 7 — Legacy add-on removed.** After a deprecation window (~2 releases), the Perl add-on is removed from the repo. ⏳
+
+Carrier cloud passthrough (`pass_reqs` cadence) is not yet implemented — the proxy runs local-only today. It can ship alongside or after Phase 5; the northbound API surface does not depend on it.
 
 No dual-stack period is planned; the HA integration tracks the API version it knows.
 
