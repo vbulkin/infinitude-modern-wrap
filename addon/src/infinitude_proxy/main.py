@@ -45,6 +45,12 @@ from .models import (
     Version,
     Zone,
     ZoneHold,
+    ZoneHoldRequest,
+)
+from .mutations import (
+    apply_zone_hold_clear,
+    apply_zone_hold_set,
+    datetime_to_wall_time,
 )
 from .persistence import Persistence
 from .settings import load_settings
@@ -414,7 +420,104 @@ def create_app(store: StateStore | None = None) -> FastAPI:
 
         return EventSourceResponse(event_gen())
 
+    @app.put(
+        "/v1/zones/{zone_id}/hold",
+        response_model=Zone,
+        tags=["zones"],
+    )
+    async def set_zone_hold(zone_id: str, body: ZoneHoldRequest) -> Zone:
+        """Enable a hold on a zone.
+
+        Writes `<hold>on</hold>`, `<holdActivity>{activity}</holdActivity>`,
+        `<otmr>{HH:MM|empty}</otmr>` into the retained config tree, marks
+        dirty, enqueues a pending_writes row. The thermostat picks up
+        the mutation on its next GET /config, driven by the directive
+        channel signalling configHasChanges=true on the next status POST.
+        """
+        stored = store.get_config()
+        if stored is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        if not any(zc.id == zone_id for zc in stored.config.zones):
+            raise HTTPException(status_code=404, detail=f"zone {zone_id} not found")
+        otmr = datetime_to_wall_time(body.until) if body.until else ""
+        activity = body.activity.value if hasattr(body.activity, "value") else body.activity
+        payload = {"zone_id": zone_id, "activity": activity, "otmr": otmr}
+        updated = await store.mutate_config(
+            apply_zone_hold_set,
+            serial=stored.serial,
+            kind="zone_hold_set",
+            target=f"zone:{zone_id}",
+            payload=payload,
+        )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        return _zone_response(updated, store.get_telemetry(), zone_id)
+
+    @app.delete(
+        "/v1/zones/{zone_id}/hold",
+        response_model=Zone,
+        tags=["zones"],
+    )
+    async def clear_zone_hold(zone_id: str) -> Zone:
+        """Release a zone hold. Idempotent — clearing an already-cleared
+        zone is accepted and enqueued; the thermostat's config will just
+        be re-written with the same `<hold>off</hold>` state."""
+        stored = store.get_config()
+        if stored is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        if not any(zc.id == zone_id for zc in stored.config.zones):
+            raise HTTPException(status_code=404, detail=f"zone {zone_id} not found")
+        payload = {"zone_id": zone_id}
+        updated = await store.mutate_config(
+            apply_zone_hold_clear,
+            serial=stored.serial,
+            kind="zone_hold_clear",
+            target=f"zone:{zone_id}",
+            payload=payload,
+        )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        return _zone_response(updated, store.get_telemetry(), zone_id)
+
     return app
+
+
+def _zone_response(
+    stored_config: StoredConfig,
+    stored_telemetry: StoredTelemetry | None,
+    zone_id: str,
+) -> Zone:
+    """Build a Zone response for a specific zone after a hold mutation.
+
+    Config is authoritative for hold fields (activity, until) — telemetry
+    only echoes a `holdActive` bool, not the activity that drove it, so
+    using telemetry here would lose the value we just wrote. Live values
+    (temperature, humidity, setpoints, etc.) still come from the most
+    recent telemetry snapshot when present.
+    """
+    zone_config = next(z for z in stored_config.config.zones if z.id == zone_id)
+    tz = None
+    if stored_telemetry is not None:
+        tz = next(
+            (z for z in stored_telemetry.snapshot.zones if z.id == zone_id),
+            None,
+        )
+    base = canned_state()
+    base_zone = next((z for z in base.zones if z.id == zone_id), None)
+    return Zone(
+        id=zone_id,
+        name=zone_config.name,
+        enabled=zone_config.enabled,
+        temperature=tz.temperature if tz else (base_zone.temperature if base_zone else 70),
+        humidity=tz.humidity if tz else (base_zone.humidity if base_zone else 50),
+        heatSetpoint=tz.heatSetpoint if tz else (base_zone.heatSetpoint if base_zone else 68),
+        coolSetpoint=tz.coolSetpoint if tz else (base_zone.coolSetpoint if base_zone else 76),
+        fan=FanSpeed(tz.fan) if tz else (base_zone.fan if base_zone else FanSpeed.OFF),
+        damperPercent=tz.damperPercent if tz else (base_zone.damperPercent if base_zone else 100),
+        conditioning=HvacAction(tz.conditioning) if tz else (base_zone.conditioning if base_zone else HvacAction.IDLE),
+        currentActivity=ActivityId(tz.currentActivity) if tz else (base_zone.currentActivity if base_zone else ActivityId.HOME),
+        hold=zone_config.hold,
+    )
 
 
 def _envelope_from_stored(sn: StoredNotification) -> NotificationEnvelope:

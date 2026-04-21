@@ -373,6 +373,17 @@ def parse_system_config_with_tree(
     return config, _config_from_element(config)
 
 
+def reparse_config_tree(config_el: etree._Element) -> SystemConfig:
+    """Re-derive the typed SystemConfig from a (possibly mutated) tree.
+
+    Used by the replay dispatcher after applying pending writes: the
+    tree has changed, so the typed snapshot we hand to /v1/state needs
+    to be regenerated. Skips the xml_bytes parse step since the tree
+    is already in memory.
+    """
+    return _config_from_element(config_el)
+
+
 def parse_system_config(xml_bytes: bytes) -> SystemConfig:
     """Parse a POST /systems/{serial} body (full config dump).
 

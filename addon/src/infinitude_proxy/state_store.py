@@ -20,9 +20,12 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from typing import Callable
+
 from lxml import etree
 
 from .models import IduConfig, OduConfig
+from .mutations import REPLAY_REGISTRY
 from .parser import (
     NotificationEvent,
     SystemConfig,
@@ -30,6 +33,7 @@ from .parser import (
     parse_idu_config,
     parse_odu_config,
     parse_system_config_with_tree,
+    reparse_config_tree,
     serialize_config_tree,
 )
 from .persistence import Persistence
@@ -176,19 +180,40 @@ class StateStore:
         config: SystemConfig,
         tree: etree._Element,
     ) -> None:
-        # Race-fix hook: if the thermostat posts its tree while we still
-        # have unapplied writes queued (e.g. proxy restart + thermostat
-        # reboot interleave), Slice 2's mutate_config dispatcher will
-        # re-apply each PendingWrite onto `tree` before we store it, so
-        # the next GET /config round-trips our pending edits. Until that
-        # dispatcher exists we just log — losing writes would be the
-        # upstream Perl behavior anyway.
+        """Store a thermostat-pushed config, replaying any queued writes.
+
+        Replay dispatcher: if pending rows exist for this serial, each
+        is re-applied to `tree` via REPLAY_REGISTRY before we commit,
+        so the thermostat's next GET /config round-trips our mutations
+        rather than reverting them. Unknown `kind` values are logged
+        and skipped — the row stays pending so a newer build that knows
+        how to replay it can still catch up. `config` is re-derived
+        from the mutated tree when any replay actually ran.
+        """
+        mutated = False
         if self._persistence is not None:
             pending = await self._persistence.pending(serial)
-            if pending:
-                logger.warning(
-                    "state_store: apply_config with %d unapplied pending "
-                    "write(s) for %s — replay not yet implemented (Slice 2)",
+            for pw in pending:
+                fn = REPLAY_REGISTRY.get(pw.kind)
+                if fn is None:
+                    logger.warning(
+                        "replay: no dispatcher for kind=%s id=%d; "
+                        "leaving pending", pw.kind, pw.id,
+                    )
+                    continue
+                try:
+                    fn(tree, pw.payload)
+                    mutated = True
+                except Exception:
+                    logger.exception(
+                        "replay: dispatcher %s failed on pending id=%d; "
+                        "leaving pending", pw.kind, pw.id,
+                    )
+            if mutated:
+                # Re-derive the typed snapshot so /v1/state reflects replays.
+                config = reparse_config_tree(tree)
+                logger.info(
+                    "replay: re-applied %d pending write(s) to serial=%s",
                     len(pending), serial,
                 )
         async with self._lock:
@@ -211,6 +236,80 @@ class StateStore:
                     ),
                     what="save_config",
                 )
+            # If we replayed writes onto the thermostat's tree, the
+            # device doesn't know about them yet — signal dirty so the
+            # next directive tells it to GET /config and pick up the
+            # replayed edits.
+            if mutated and not self._config_dirty:
+                self._config_dirty = True
+                if self._persistence is not None:
+                    await self._try_persist(
+                        self._persistence.save_config_dirty(serial, True),
+                        what="save_config_dirty",
+                    )
+
+    async def mutate_config(
+        self,
+        fn: Callable[[etree._Element, dict], None],
+        *,
+        serial: str,
+        kind: str,
+        target: str | None,
+        payload: dict,
+    ) -> StoredConfig | None:
+        """Apply a northbound mutation to the retained config tree.
+
+        Holds the state lock across the full edit → persist → enqueue
+        → dirty-flag sequence so a racing southbound POST can't observe
+        a half-mutated tree. Returns the updated StoredConfig, or None
+        if no config has been received from the thermostat yet (the
+        caller's contract is to 404 in that case).
+
+        Pending row is enqueued even though we also persist the mutated
+        tree bytes: the bytes cover a proxy restart before the next
+        thermostat POST, while the pending row survives a replace-tree
+        operation on the thermostat-reboot race path (see apply_config
+        above).
+        """
+        if self._config is None:
+            return None
+        async with self._lock:
+            if self._config is None or self._config.serial != serial:
+                return None
+            fn(self._config.tree, payload)
+            new_config = reparse_config_tree(self._config.tree)
+            self._config = StoredConfig(
+                serial=serial,
+                config=new_config,
+                tree=self._config.tree,
+                receivedAt=datetime.now(timezone.utc),
+            )
+            self._config_dirty = True
+            if self._persistence is not None:
+                await self._try_persist(
+                    self._persistence.save_config(
+                        serial, serialize_config_tree(self._config.tree)
+                    ),
+                    what="save_config",
+                )
+                await self._try_persist(
+                    self._persistence.save_config_dirty(serial, True),
+                    what="save_config_dirty",
+                )
+                try:
+                    await self._persistence.enqueue_write(
+                        serial, kind, target, payload
+                    )
+                except Exception:
+                    # Enqueue failure is observable (pull-observed clear
+                    # won't know about this write) but not fatal — the
+                    # tree bytes are already persisted so a restart still
+                    # serves the mutated config. Log and continue.
+                    logger.exception(
+                        "persistence: enqueue_write failed kind=%s target=%s",
+                        kind, target,
+                    )
+            return self._config
 
     async def apply_idu(
         self,
