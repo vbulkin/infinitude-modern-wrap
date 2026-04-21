@@ -50,6 +50,7 @@ from .models import (
     ZoneHoldRequest,
     ZonePatch,
 )
+from .errors import register_error_handlers
 from .mutations import (
     apply_system_hold_clear,
     apply_system_hold_set,
@@ -211,6 +212,7 @@ def create_app(store: StateStore | None = None) -> FastAPI:
         description="Northbound HTTP API for the modernized Infinitude proxy.",
         lifespan=lifespan,
     )
+    register_error_handlers(app)
     app.include_router(create_southbound_router(store))
 
     @app.get("/v1/healthz", response_model=Health, tags=["health"])
