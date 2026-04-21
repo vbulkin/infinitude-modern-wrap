@@ -7,11 +7,108 @@ OpenAPI matches the hand-authored spec.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    PlainSerializer,
+    PlainValidator,
+    StringConstraints,
+    model_validator,
+)
+
+
+# PATCH/PUT bodies declare nullable fields as `T | None = None` so callers can
+# omit them to leave the field unchanged. Per the OpenAPI contract most of
+# these fields are non-nullable — a caller sending an explicit JSON `null`
+# is a type error, not "clear the field". This validator strips keys whose
+# value is `None` from the incoming dict *before* Pydantic parses it, so
+# omission and explicit-null both map to "unchanged" … except when the
+# field is declared nullable in the spec, in which case explicit-null must
+# be preserved. We list the exception set per model via `NULLABLE_FIELDS`.
+
+
+def _reject_explicit_null(
+    data: dict, *, nullable_fields: frozenset[str] = frozenset()
+) -> dict:
+    """Reject explicit JSON `null` for fields not in `nullable_fields`.
+
+    Fields *omitted* from the body are fine — they stay "unchanged".
+    """
+    if not isinstance(data, dict):
+        return data
+    bad = [k for k, v in data.items() if v is None and k not in nullable_fields]
+    if bad:
+        raise ValueError(
+            "Field(s) may not be null (omit to leave unchanged): "
+            + ", ".join(sorted(bad))
+        )
+    return data
+
+
+def _parse_iso_datetime_strict(v):
+    """Replace Pydantic's default datetime coercion with strict ISO-8601.
+
+    Pydantic's default accepts numeric input as a Unix epoch timestamp —
+    not our wire contract. A bare `"0"` as a query param would silently
+    become 1970-01-01. Require a proper ISO-8601 datetime string (or an
+    existing datetime instance) and reject everything else.
+    """
+    if isinstance(v, datetime):
+        return v
+    if isinstance(v, bool) or isinstance(v, (int, float)):
+        raise ValueError(
+            "Expected an ISO-8601 datetime string; numeric input is not accepted."
+        )
+    if not isinstance(v, str):
+        raise ValueError("Expected an ISO-8601 datetime string.")
+    try:
+        return datetime.fromisoformat(v.replace("Z", "+00:00"))
+    except ValueError as e:
+        raise ValueError(f"Invalid ISO-8601 datetime: {e}") from e
+
+
+StrictIsoDatetime = Annotated[datetime, PlainValidator(_parse_iso_datetime_strict)]
+
+
+def _iso_utc_z(dt: datetime | None) -> str | None:
+    """Serialize a datetime as `YYYY-MM-DDTHH:MM:SS[.ffffff]Z` (UTC, Z-suffixed).
+
+    Naive datetimes are assumed UTC (consistent with our parser/mutation
+    layers). Aware datetimes are normalized to UTC. Microseconds are
+    preserved when non-zero so clients using `receivedAt` as a
+    reconnect cursor don't lose precision in the round trip.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    base = dt.strftime("%Y-%m-%dT%H:%M:%S")
+    if dt.microsecond:
+        base = f"{base}.{dt.microsecond:06d}"
+    return f"{base}Z"
+
+
+IsoDatetimeOut = Annotated[
+    datetime,
+    PlainSerializer(_iso_utc_z, return_type=str, when_used="json"),
+]
+
+
+def _reject_bool_as_int(v):
+    """Pydantic treats `bool` as `int` (because Python's `bool` subclasses
+    `int`), so `Field(ge=0, le=100)` happily accepts `True`/`False`.
+    Reject bool input at the wire — booleans are not percentages."""
+    if isinstance(v, bool):
+        raise ValueError("Expected integer; boolean is not accepted.")
+    return v
 
 
 # ── Scalar / enum types ──────────────────────────────────────────────
@@ -66,7 +163,7 @@ class DayOfWeek(str, Enum):
 
 
 Temperature = Annotated[int, Field(ge=45, le=99)]
-PercentInt = Annotated[int, Field(ge=0, le=100)]
+PercentInt = Annotated[int, BeforeValidator(_reject_bool_as_int), Field(ge=0, le=100)]
 ZoneIdStr = Annotated[str, StringConstraints(pattern=r"^[1-9][0-9]*$")]
 LocalWallTime = Annotated[str, StringConstraints(pattern=r"^(?:[01][0-9]|2[0-3]):(?:[0-5][0-9])$")]
 
@@ -94,26 +191,26 @@ class ZoneHold(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
     active: bool
     activity: ActivityId | None = None
-    until: datetime | None = None
+    until: IsoDatetimeOut | None = None
 
 
 class WholeHouseHold(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
     active: bool
     activity: SystemHoldActivity | None = None
-    until: datetime | None = None
+    until: IsoDatetimeOut | None = None
 
 
 class ZoneHoldRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", use_enum_values=True)
     activity: ActivityId
-    until: datetime | None = None
+    until: StrictIsoDatetime | None = None
 
 
 class WholeHouseHoldRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", use_enum_values=True)
     activity: SystemHoldActivity
-    until: datetime | None = None
+    until: StrictIsoDatetime | None = None
 
 
 # ── System / zones / activities / schedule ───────────────────────────
@@ -123,7 +220,7 @@ class System(BaseModel):
     mode: HvacMode
     outdoorTemperature: int
     humidifierOn: bool
-    lastReportAt: datetime
+    lastReportAt: IsoDatetimeOut
     operatingStatusMessage: str
     serial: str
     hold: WholeHouseHold
@@ -132,6 +229,11 @@ class System(BaseModel):
 class SystemPatch(BaseModel):
     model_config = ConfigDict(extra="forbid", use_enum_values=True)
     mode: HvacMode | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _no_null_fields(cls, data):
+        return _reject_explicit_null(data)
 
 
 class Zone(BaseModel):
@@ -154,7 +256,12 @@ class ZonePatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     heat: Temperature | None = None
     cool: Temperature | None = None
-    activateHold: bool = True
+    activateHold: Annotated[bool, Field(strict=True)] = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _no_null_fields(cls, data):
+        return _reject_explicit_null(data)
 
 
 class Activity(BaseModel):
@@ -170,6 +277,11 @@ class ActivityPatch(BaseModel):
     heat: Temperature | None = None
     cool: Temperature | None = None
     fan: FanSpeed | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _no_null_fields(cls, data):
+        return _reject_explicit_null(data)
 
 
 class SchedulePeriod(BaseModel):
@@ -205,8 +317,8 @@ class SchedulePut(BaseModel):
 class VacationConfig(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
     active: bool
-    start: datetime | None = None
-    end: datetime | None = None
+    start: IsoDatetimeOut | None = None
+    end: IsoDatetimeOut | None = None
     heatSetpoint: Temperature
     coolSetpoint: Temperature
     fan: FanSpeed
@@ -216,16 +328,22 @@ class VacationPatch(BaseModel):
     """Writable subset of VacationConfig. All fields optional — sparse
     update. At least one must be supplied (empty body rejected at
     endpoint). `start`/`end` may be cleared by sending `null`; other
-    fields are left alone when absent and cleared only when explicitly
-    null (which pydantic's optional-with-None allows).
+    fields must be omitted (not sent as null) to be left unchanged.
     """
     model_config = ConfigDict(extra="forbid", use_enum_values=True)
-    active: bool | None = None
-    start: datetime | None = None
-    end: datetime | None = None
+    active: Annotated[bool, Field(strict=True)] | None = None
+    start: StrictIsoDatetime | None = None
+    end: StrictIsoDatetime | None = None
     heatSetpoint: Temperature | None = None
     coolSetpoint: Temperature | None = None
     fan: FanSpeed | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _no_null_fields(cls, data):
+        return _reject_explicit_null(
+            data, nullable_fields=frozenset({"start", "end"})
+        )
 
 
 class ServiceReminderItem(BaseModel):
@@ -279,12 +397,19 @@ class HumidityPatch(BaseModel):
 
     Only the targets are writable; `equipmentInstalled` is a commissioning
     fact, not a user preference. At least one target must be supplied —
-    an empty body is rejected with 422 at the endpoint.
+    an empty body is rejected with 422 at the endpoint. Targets are
+    non-nullable: omit to leave unchanged; an explicit `null` is a
+    type error.
     """
     model_config = ConfigDict(extra="forbid")
     targetHome: PercentInt | None = None
     targetAway: PercentInt | None = None
     targetVacation: PercentInt | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _no_null_fields(cls, data):
+        return _reject_explicit_null(data)
 
 
 class IduConfig(BaseModel):
@@ -318,7 +443,7 @@ class NotificationBody(BaseModel):
     type: str
     code: int
     message: str
-    timestamp: datetime
+    timestamp: IsoDatetimeOut
     changes: list[NotificationChangeEntry]
 
 
@@ -332,7 +457,7 @@ class NotificationEnvelope(BaseModel):
     key on its own.
     """
     serial: str
-    receivedAt: datetime
+    receivedAt: IsoDatetimeOut
     event: NotificationBody
 
 
@@ -359,7 +484,7 @@ class OduConfig(BaseModel):
 class State(BaseModel):
     system: System
     zones: list[Zone]
-    lastUpdated: datetime
+    lastUpdated: IsoDatetimeOut
 
 
 class StateUpdatePayload(BaseModel):
@@ -377,14 +502,14 @@ class HoldChangedPayload(BaseModel):
     resource: str
     state: Literal["active", "cleared"]
     activity: ActivityId | None = None
-    until: datetime | None = None
+    until: IsoDatetimeOut | None = None
 
 
 # ── Health ───────────────────────────────────────────────────────────
 
 class ThermostatHealth(BaseModel):
     status: Literal["healthy", "stale", "unreachable"]
-    lastContact: datetime | None = None
+    lastContact: IsoDatetimeOut | None = None
     lastContactAgeSeconds: Annotated[int, Field(ge=0)] | None = None
     expectedIntervalSeconds: Annotated[int, Field(ge=1)]
     staleThresholdSeconds: Annotated[int, Field(ge=1)]
@@ -392,8 +517,8 @@ class ThermostatHealth(BaseModel):
 
 class CarrierCloudHealth(BaseModel):
     status: Literal["healthy", "degraded", "unreachable", "disabled"]
-    lastSuccess: datetime | None = None
-    lastAttempt: datetime | None = None
+    lastSuccess: IsoDatetimeOut | None = None
+    lastAttempt: IsoDatetimeOut | None = None
     lastError: str | None = None
     passReqsIntervalSeconds: Annotated[int, Field(ge=10, le=3600)]
     consecutiveFailures: Annotated[int, Field(ge=0)]
@@ -423,12 +548,12 @@ class Version(BaseModel):
     proxy: str
     api: str
     commit: str
-    builtAt: datetime
+    builtAt: IsoDatetimeOut
 
 
 class Health(BaseModel):
     status: Literal["healthy", "degraded", "unhealthy"]
-    timestamp: datetime
+    timestamp: IsoDatetimeOut
     components: HealthComponents
     version: Version
 

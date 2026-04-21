@@ -40,6 +40,7 @@ from .models import (
     RuntimeConfig,
     Schedule,
     SchedulePut,
+    StrictIsoDatetime,
     ServiceReminderItem,
     ServiceReminders,
     State,
@@ -82,6 +83,23 @@ _STARTUP_MONOTONIC = time.monotonic()
 
 def _uptime_seconds() -> int:
     return int(time.monotonic() - _STARTUP_MONOTONIC)
+
+
+def _reject_unknown_query(request: Request, allowed: set[str]) -> None:
+    """Reject any query parameter whose name isn't in `allowed`.
+
+    FastAPI silently drops unknown query params by default; schemathesis's
+    coverage generator probes for that (sending e.g.
+    `x-schemathesis-unknown-property=42`) and fails the run when it
+    succeeds. Endpoints that take tightly-scoped query params call this
+    to match the spec's `additionalProperties: false`-equivalent stance.
+    """
+    unknown = [k for k in request.query_params.keys() if k not in allowed]
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown query parameter(s): {', '.join(sorted(unknown))}",
+        )
 
 
 def _configure_logging(level: str) -> None:
@@ -555,7 +573,10 @@ def create_app(store: StateStore | None = None) -> FastAPI:
         stored = store.get_config()
         if stored is None:
             raise HTTPException(status_code=404, detail="no config received yet")
-        supplied = body.model_dump(exclude_none=True)
+        # `exclude_unset` (not `exclude_none`) so that explicit-null
+        # values on nullable fields — `{"end": null}` — count as
+        # "supplied" and don't falsely trip the empty-body guard.
+        supplied = body.model_dump(exclude_unset=True)
         if not supplied:
             raise HTTPException(
                 status_code=422, detail="at least one field must be supplied"
@@ -682,7 +703,8 @@ def create_app(store: StateStore | None = None) -> FastAPI:
         tags=["events"],
     )
     def get_notifications(
-        since: datetime | None = Query(
+        request: Request,
+        since: StrictIsoDatetime | None = Query(
             None,
             description=(
                 "ISO-8601 timestamp — return only notifications whose "
@@ -693,6 +715,7 @@ def create_app(store: StateStore | None = None) -> FastAPI:
         ),
         limit: int = Query(50, ge=1, le=50),
     ) -> list[NotificationEnvelope]:
+        _reject_unknown_query(request, {"since", "limit"})
         """Recent-notifications ring-buffer view for SSE reconnect backfill.
 
         Oldest-first so clients can replay in arrival order. The ring

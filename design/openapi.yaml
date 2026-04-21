@@ -393,6 +393,10 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/NotificationEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "422":
+          $ref: "#/components/responses/ValidationError"
 
   # ──────────────────────────────────────────────────────────────────────
   # Zones
@@ -574,14 +578,15 @@ paths:
         Replaces all 7 days in a single call. The body must include every day;
         omitting a day is a validation error. This matches the legacy flow
         (`POST /systems/infinitude` with full config) but with an explicit,
-        typed shape.
+        typed shape. The zone id comes from the path, not the body, to
+        eliminate silent path/body mismatches.
       operationId: putSchedule
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Schedule"
+              $ref: "#/components/schemas/ScheduleInput"
       responses:
         "200":
           description: Updated schedule.
@@ -631,6 +636,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+    BadRequest:
+      description: Request parameters failed validation (e.g. unknown query keys).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
 
   schemas:
 
@@ -666,7 +677,7 @@ components:
 
     HvacMode:
       type: string
-      enum: [off, heat, cool, auto, fanonly]
+      enum: ["off", "heat", "cool", "auto", "fanonly"]
       description: |
         System HVAC mode.
           * `off`     — heating and cooling disabled.
@@ -677,15 +688,17 @@ components:
 
     HvacAction:
       type: string
-      enum: [idle, heating, cooling, dehumidifying, fan, off]
+      enum: ["idle", "heating", "cooling", "dehumidifying", "fan", "off"]
       description: What the zone is actively doing right now.
 
     FanSpeed:
       type: string
-      enum: [off, low, med, high]
+      enum: ["off", "low", "med", "high"]
       description: |
-        Thermostat fan speeds. "off" means the fan is driven by the
-        HVAC cycle; "low/med/high" force continuous circulation.
+        Thermostat fan speeds. `off` means the fan is driven by the
+        HVAC cycle; `low/med/high` force continuous circulation.
+        Enum values are quoted because YAML 1.1 parses unquoted `off`
+        as the boolean `false`.
 
     ActivityId:
       type: string
@@ -775,6 +788,10 @@ components:
 
     SystemPatch:
       type: object
+      description: |
+        System-wide settings update. `mode` is currently the only writable
+        field; it is required because there is nothing else to supply.
+      required: [mode]
       properties:
         mode:
           $ref: "#/components/schemas/HvacMode"
@@ -837,7 +854,9 @@ components:
       description: |
         Patch a zone's manual setpoints. If `activateHold` is true (default
         when `heat` or `cool` is provided), the `manual` activity becomes
-        the held activity.
+        the held activity. At least one of `heat` or `cool` must be
+        supplied; an empty body is a no-op (current zone returned
+        unchanged).
       properties:
         heat:
           $ref: "#/components/schemas/Temperature"
@@ -847,6 +866,9 @@ components:
           type: boolean
           default: true
       additionalProperties: false
+      anyOf:
+        - required: [heat]
+        - required: [cool]
 
     Activity:
       type: object
@@ -863,7 +885,10 @@ components:
 
     ActivityPatch:
       type: object
-      minProperties: 1
+      description: |
+        Sparse update of an activity's setpoints and/or fan. At least one
+        of `heat`, `cool`, or `fan` must be supplied; an empty body is a
+        no-op (current activity returned unchanged).
       properties:
         heat:
           $ref: "#/components/schemas/Temperature"
@@ -872,6 +897,10 @@ components:
         fan:
           $ref: "#/components/schemas/FanSpeed"
       additionalProperties: false
+      anyOf:
+        - required: [heat]
+        - required: [cool]
+        - required: [fan]
 
     SchedulePeriod:
       type: object
@@ -916,6 +945,53 @@ components:
           items:
             $ref: "#/components/schemas/ScheduleDay"
 
+    ScheduleInput:
+      type: object
+      description: |
+        Request body for `PUT /v1/zones/{zoneId}/schedule`. Zone id is
+        not part of the body — it comes from the path. `days` must contain
+        exactly 7 entries, Monday through Sunday in that order; each day
+        may appear only once. `prefixItems` pins the order so the schema
+        itself rules out duplicates.
+      required: [days]
+      properties:
+        days:
+          type: array
+          minItems: 7
+          maxItems: 7
+          description: Exactly 7 entries, Monday through Sunday in that order.
+          prefixItems:
+            - allOf:
+                - $ref: "#/components/schemas/ScheduleDay"
+                - properties:
+                    day: { const: Monday }
+            - allOf:
+                - $ref: "#/components/schemas/ScheduleDay"
+                - properties:
+                    day: { const: Tuesday }
+            - allOf:
+                - $ref: "#/components/schemas/ScheduleDay"
+                - properties:
+                    day: { const: Wednesday }
+            - allOf:
+                - $ref: "#/components/schemas/ScheduleDay"
+                - properties:
+                    day: { const: Thursday }
+            - allOf:
+                - $ref: "#/components/schemas/ScheduleDay"
+                - properties:
+                    day: { const: Friday }
+            - allOf:
+                - $ref: "#/components/schemas/ScheduleDay"
+                - properties:
+                    day: { const: Saturday }
+            - allOf:
+                - $ref: "#/components/schemas/ScheduleDay"
+                - properties:
+                    day: { const: Sunday }
+          items: false
+      additionalProperties: false
+
     # ── Holds ────────────────────────────────────────────────────────
 
     ZoneHold:
@@ -925,7 +1001,12 @@ components:
         active:
           type: boolean
         activity:
-          $ref: "#/components/schemas/ActivityId"
+          oneOf:
+            - $ref: "#/components/schemas/ActivityId"
+            - type: "null"
+          description: |
+            Activity being held. `null` when `active = false` (no hold
+            in effect).
         until:
           oneOf:
             - $ref: "#/components/schemas/IsoDateTime"
@@ -943,7 +1024,12 @@ components:
         active:
           type: boolean
         activity:
-          $ref: "#/components/schemas/SystemHoldActivity"
+          oneOf:
+            - $ref: "#/components/schemas/SystemHoldActivity"
+            - type: "null"
+          description: |
+            Activity being held. `null` when `active = false` (no hold
+            in effect).
         until:
           oneOf:
             - $ref: "#/components/schemas/IsoDateTime"
@@ -1225,7 +1311,9 @@ components:
       description: |
         Sparse update. At least one property must be supplied; empty
         body → 422. `start`/`end` may be cleared by sending `null`.
-      minProperties: 1
+        `anyOf` (not `minProperties`) is what schemathesis's coverage
+        generator respects when deciding whether an empty body is
+        schema-compliant.
       properties:
         active:
           type: boolean
@@ -1244,6 +1332,13 @@ components:
         fan:
           $ref: "#/components/schemas/FanSpeed"
       additionalProperties: false
+      anyOf:
+        - required: [active]
+        - required: [start]
+        - required: [end]
+        - required: [heatSetpoint]
+        - required: [coolSetpoint]
+        - required: [fan]
 
     # ── Humidity ─────────────────────────────────────────────────────
 
@@ -1279,7 +1374,6 @@ components:
       description: |
         Sparse update of per-mode target RH. At least one target must
         be supplied; empty body → 422.
-      minProperties: 1
       properties:
         targetHome:
           type: integer
@@ -1294,6 +1388,10 @@ components:
           minimum: 0
           maximum: 100
       additionalProperties: false
+      anyOf:
+        - required: [targetHome]
+        - required: [targetAway]
+        - required: [targetVacation]
 
     # ── Service reminders ────────────────────────────────────────────
 

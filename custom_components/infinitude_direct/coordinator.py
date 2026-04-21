@@ -186,10 +186,7 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
                     _normalize_period(p) for p in periods_in
                 ]
 
-            body = {
-                "zoneId": zone_id,
-                "days": [day_map[d] for d in _DAY_ORDER if d in day_map],
-            }
+            body = {"days": [day_map[d] for d in _DAY_ORDER if d in day_map]}
             resp = await self._session.put(
                 f"{self.host}/v1/zones/{zone_id}/schedule", json=body
             )
