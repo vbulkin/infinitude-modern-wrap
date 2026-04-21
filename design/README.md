@@ -1,10 +1,14 @@
 # Design — OpenAPI-first Infinitude rewrite
 
 Planning artifacts for replacing the Perl Infinitude proxy with a Python/FastAPI add-on
-that exposes a typed, OpenAPI-described northbound API. **No runtime changes yet.**
+that exposes a typed, OpenAPI-described northbound API. The Python add-on is code-complete
+as of Phase 4; Phase 5 (HA integration cutover) is next. See [`CUTOVER.md`](./CUTOVER.md)
+for the operational plan.
 
 - [`DESIGN.md`](./DESIGN.md) — architecture, data flow, migration plan, open questions.
 - [`openapi.yaml`](./openapi.yaml) — full API spec (OpenAPI 3.1).
+- [`CUTOVER.md`](./CUTOVER.md) — operational plan for swapping the deployed Perl add-on for the Python one.
+- [`LOGGING.md`](./LOGGING.md) — log-level policy for the `infinitude_proxy.*` tree.
 
 ## Quick facts
 
