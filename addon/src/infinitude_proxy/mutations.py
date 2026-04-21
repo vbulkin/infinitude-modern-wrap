@@ -82,6 +82,54 @@ def _set_or_create(parent: etree._Element, tag: str, text: str) -> None:
     el.text = text
 
 
+# ── Zone manual setpoints (composite: activity edit + hold) ──────────
+
+def _find_activity(zone: etree._Element, activity_id: str) -> etree._Element:
+    acts = zone.find("activities")
+    if acts is None:
+        raise ValueError("zone is missing <activities>")
+    for a in acts.findall("activity"):
+        if a.get("id") == activity_id:
+            return a
+    raise ValueError(f"activity {activity_id} not found in zone {zone.get('id')}")
+
+
+def _format_setpoint(value: int) -> str:
+    """Render an integer setpoint as the thermostat's `NN.0` convention.
+
+    Captured configs use a single decimal place ("68.0"). Writing the
+    bare integer would round-trip fine through our parser but drifts
+    from what the thermostat emits — keep the wire format stable so
+    diffs against golden captures stay clean.
+    """
+    return f"{value}.0"
+
+
+def apply_zone_setpoints_set(tree: etree._Element, payload: dict) -> None:
+    """Update a zone's `manual` activity setpoints and (by default) engage
+    the manual hold.
+
+    Payload shape:
+      {"zone_id": "1", "heat": 68, "cool": 76, "activate_hold": True}
+    Either or both of heat/cool may be omitted — the mutation only writes
+    the fields present in the payload, so a PATCH with just `cool` leaves
+    `htsp` alone. When `activate_hold` is true (the default in the API
+    surface), we also flip hold=on/holdActivity=manual/otmr=empty so the
+    new setpoints take effect immediately; without it, the setpoints are
+    staged for the next time the user manually activates the hold.
+    """
+    zone = _find_zone(tree, payload["zone_id"])
+    manual = _find_activity(zone, "manual")
+    if "heat" in payload and payload["heat"] is not None:
+        _set_or_create(manual, "htsp", _format_setpoint(int(payload["heat"])))
+    if "cool" in payload and payload["cool"] is not None:
+        _set_or_create(manual, "clsp", _format_setpoint(int(payload["cool"])))
+    if payload.get("activate_hold", True):
+        _set_or_create(zone, "hold", "on")
+        _set_or_create(zone, "holdActivity", "manual")
+        _set_or_create(zone, "otmr", "")
+
+
 # ── Zone hold ────────────────────────────────────────────────────────
 
 def apply_zone_hold_set(tree: etree._Element, payload: dict) -> None:
@@ -168,4 +216,5 @@ REPLAY_REGISTRY: dict[str, MutationFn] = {
     "system_hold_set": apply_system_hold_set,
     "system_hold_clear": apply_system_hold_clear,
     "system_mode_set": apply_system_mode_set,
+    "zone_setpoints_set": apply_zone_setpoints_set,
 }

@@ -48,6 +48,7 @@ from .models import (
     Zone,
     ZoneHold,
     ZoneHoldRequest,
+    ZonePatch,
 )
 from .mutations import (
     apply_system_hold_clear,
@@ -55,6 +56,7 @@ from .mutations import (
     apply_system_mode_set,
     apply_zone_hold_clear,
     apply_zone_hold_set,
+    apply_zone_setpoints_set,
     datetime_to_wall_time,
 )
 from .persistence import Persistence
@@ -298,6 +300,29 @@ def create_app(store: StateStore | None = None) -> FastAPI:
     def get_state() -> State:
         return _compose_state(store.get_config(), store.get_telemetry())
 
+    @app.get("/v1/zones", response_model=list[Zone], tags=["zones"])
+    def list_zones() -> list[Zone]:
+        """All zones (including disabled). Per openapi spec: disabled
+        zones are included so clients can present the full unit layout —
+        filtering is the client's call."""
+        stored_config = store.get_config()
+        if stored_config is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        telemetry = store.get_telemetry()
+        return [
+            _zone_response(stored_config, telemetry, zc.id)
+            for zc in stored_config.config.zones
+        ]
+
+    @app.get("/v1/zones/{zone_id}", response_model=Zone, tags=["zones"])
+    def get_zone(zone_id: str) -> Zone:
+        stored_config = store.get_config()
+        if stored_config is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        if not any(zc.id == zone_id for zc in stored_config.config.zones):
+            raise HTTPException(status_code=404, detail=f"zone {zone_id} not found")
+        return _zone_response(stored_config, store.get_telemetry(), zone_id)
+
     @app.get(
         "/v1/zones/{zone_id}/activities",
         response_model=list[Activity],
@@ -518,6 +543,41 @@ def create_app(store: StateStore | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="no config received yet")
         return _zone_response(updated, store.get_telemetry(), zone_id)
 
+    @app.patch("/v1/zones/{zone_id}", response_model=Zone, tags=["zones"])
+    async def patch_zone(zone_id: str, body: ZonePatch) -> Zone:
+        """Update a zone's `manual` activity setpoints.
+
+        Writes heat/cool into the zone's `<activity id="manual">` block.
+        Unless `activateHold=false`, also flips the zone into manual hold
+        so the new setpoints take effect immediately — matching the HA
+        climate-card interaction the openapi spec describes.
+        """
+        stored = store.get_config()
+        if stored is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        if not any(zc.id == zone_id for zc in stored.config.zones):
+            raise HTTPException(status_code=404, detail=f"zone {zone_id} not found")
+        if body.heat is None and body.cool is None:
+            raise HTTPException(
+                status_code=422, detail="provide heat and/or cool"
+            )
+        payload = {
+            "zone_id": zone_id,
+            "heat": body.heat,
+            "cool": body.cool,
+            "activate_hold": body.activateHold,
+        }
+        updated = await store.mutate_config(
+            apply_zone_setpoints_set,
+            serial=stored.serial,
+            kind="zone_setpoints_set",
+            target=f"zone:{zone_id}",
+            payload=payload,
+        )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        return _zone_response(updated, store.get_telemetry(), zone_id)
+
     @app.put("/v1/system/hold", response_model=System, tags=["system"])
     async def set_system_hold(body: WholeHouseHoldRequest) -> System:
         """Enable the whole-house hold.
@@ -569,13 +629,18 @@ def _zone_response(
     stored_telemetry: StoredTelemetry | None,
     zone_id: str,
 ) -> Zone:
-    """Build a Zone response for a specific zone after a hold mutation.
+    """Build a Zone response for a specific zone after a mutation.
 
     Config is authoritative for hold fields (activity, until) — telemetry
     only echoes a `holdActive` bool, not the activity that drove it, so
     using telemetry here would lose the value we just wrote. Live values
-    (temperature, humidity, setpoints, etc.) still come from the most
+    (temperature, humidity, damper, conditioning) still come from the most
     recent telemetry snapshot when present.
+
+    Setpoints: when the zone is in an active hold, we prefer the held
+    activity's setpoints from config — that's what the thermostat will
+    display once it picks up the pending write, and it lets PATCH
+    responses echo the user's intent without waiting for telemetry.
     """
     zone_config = next(z for z in stored_config.config.zones if z.id == zone_id)
     tz = None
@@ -586,14 +651,34 @@ def _zone_response(
         )
     base = canned_state()
     base_zone = next((z for z in base.zones if z.id == zone_id), None)
+
+    hold_heat: int | None = None
+    hold_cool: int | None = None
+    if zone_config.hold.active and zone_config.hold.activity:
+        held = next(
+            (a for a in zone_config.activities if a.id == zone_config.hold.activity),
+            None,
+        )
+        if held is not None:
+            hold_heat = held.heat
+            hold_cool = held.cool
+
     return Zone(
         id=zone_id,
         name=zone_config.name,
         enabled=zone_config.enabled,
         temperature=tz.temperature if tz else (base_zone.temperature if base_zone else 70),
         humidity=tz.humidity if tz else (base_zone.humidity if base_zone else 50),
-        heatSetpoint=tz.heatSetpoint if tz else (base_zone.heatSetpoint if base_zone else 68),
-        coolSetpoint=tz.coolSetpoint if tz else (base_zone.coolSetpoint if base_zone else 76),
+        heatSetpoint=(
+            hold_heat
+            if hold_heat is not None
+            else (tz.heatSetpoint if tz else (base_zone.heatSetpoint if base_zone else 68))
+        ),
+        coolSetpoint=(
+            hold_cool
+            if hold_cool is not None
+            else (tz.coolSetpoint if tz else (base_zone.coolSetpoint if base_zone else 76))
+        ),
         fan=FanSpeed(tz.fan) if tz else (base_zone.fan if base_zone else FanSpeed.OFF),
         damperPercent=tz.damperPercent if tz else (base_zone.damperPercent if base_zone else 100),
         conditioning=HvacAction(tz.conditioning) if tz else (base_zone.conditioning if base_zone else HvacAction.IDLE),
