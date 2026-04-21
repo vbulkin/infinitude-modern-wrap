@@ -155,6 +155,49 @@ def apply_activity_set(tree: etree._Element, payload: dict) -> None:
         _set_or_create(activity, "fan", str(payload["fan"]))
 
 
+# ── Schedule (7-day program overwrite) ───────────────────────────────
+
+def apply_schedule_set(tree: etree._Element, payload: dict) -> None:
+    """Overwrite a zone's 7-day schedule.
+
+    Payload shape:
+      {
+        "zone_id": "1",
+        "days": [
+          {"day": "Sunday", "periods": [
+            {"id": 1, "activity": "wake", "time": "06:00", "enabled": true},
+            ...
+          ]},
+          ... (all seven days)
+        ]
+      }
+
+    Strategy: rebuild the `<program>` subtree from scratch rather than
+    diff. Schedule writes are coarse-grained (whole program replaced),
+    and the wire shape is compact enough that round-tripping seven days
+    × up to five periods is cheap. Absent `<program>` (partial fixtures)
+    gets created.
+    """
+    zone = _find_zone(tree, payload["zone_id"])
+    prog = zone.find("program")
+    if prog is None:
+        prog = etree.SubElement(zone, "program")
+    for d in list(prog.findall("day")):
+        prog.remove(d)
+    for day in payload["days"]:
+        day_el = etree.SubElement(prog, "day")
+        day_el.set("id", day["day"])
+        for period in day["periods"]:
+            period_el = etree.SubElement(day_el, "period")
+            period_el.set("id", str(period["id"]))
+            act_el = etree.SubElement(period_el, "activity")
+            act_el.text = str(period["activity"])
+            time_el = etree.SubElement(period_el, "time")
+            time_el.text = period["time"]
+            enabled_el = etree.SubElement(period_el, "enabled")
+            enabled_el.text = "on" if period["enabled"] else "off"
+
+
 # ── Zone hold ────────────────────────────────────────────────────────
 
 def apply_zone_hold_set(tree: etree._Element, payload: dict) -> None:
@@ -319,6 +362,7 @@ REPLAY_REGISTRY: dict[str, MutationFn] = {
     "system_mode_set": apply_system_mode_set,
     "zone_setpoints_set": apply_zone_setpoints_set,
     "activity_set": apply_activity_set,
+    "schedule_set": apply_schedule_set,
     "humidity_set": apply_humidity_set,
     "vacation_set": apply_vacation_set,
 }

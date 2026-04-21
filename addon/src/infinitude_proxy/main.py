@@ -40,6 +40,7 @@ from .models import (
     OduConfig,
     RuntimeConfig,
     Schedule,
+    SchedulePut,
     ServiceReminderItem,
     ServiceReminders,
     State,
@@ -60,6 +61,7 @@ from .errors import register_error_handlers
 from .mutations import (
     apply_activity_set,
     apply_humidity_set,
+    apply_schedule_set,
     apply_system_hold_clear,
     apply_system_hold_set,
     apply_system_mode_set,
@@ -419,6 +421,52 @@ def create_app(store: StateStore | None = None) -> FastAPI:
             if zc.id == zone_id:
                 return Schedule(zoneId=zone_id, days=list(zc.schedule))
         raise HTTPException(status_code=404, detail=f"zone {zone_id} not found")
+
+    @app.put(
+        "/v1/zones/{zone_id}/schedule",
+        response_model=Schedule,
+        tags=["zones"],
+    )
+    async def put_zone_schedule(zone_id: str, body: SchedulePut) -> Schedule:
+        """Overwrite a zone's 7-day schedule.
+
+        PUT (not PATCH) because the body is the full program — all seven
+        days, each with 1-5 periods. Duplicate or missing day names are
+        rejected at 422 so a client bug doesn't silently drop a day.
+        Period ids must be unique within a day for the same reason.
+        """
+        stored = store.get_config()
+        if stored is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        if not any(zc.id == zone_id for zc in stored.config.zones):
+            raise HTTPException(status_code=404, detail=f"zone {zone_id} not found")
+        day_names = [d.day for d in body.days]
+        if len(set(day_names)) != 7:
+            raise HTTPException(
+                status_code=422,
+                detail="days must contain each day of the week exactly once",
+            )
+        for d in body.days:
+            period_ids = [p.id for p in d.periods]
+            if len(set(period_ids)) != len(period_ids):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"duplicate period id in day {d.day}",
+                )
+        payload = {"zone_id": zone_id, "days": body.model_dump()["days"]}
+        updated = await store.mutate_config(
+            apply_schedule_set,
+            serial=stored.serial,
+            kind="schedule_set",
+            target=f"zone:{zone_id}:schedule",
+            payload=payload,
+        )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        updated_zone = next(
+            zc for zc in updated.config.zones if zc.id == zone_id
+        )
+        return Schedule(zoneId=zone_id, days=list(updated_zone.schedule))
 
     @app.get("/v1/system", response_model=System, tags=["system"])
     def get_system() -> System:

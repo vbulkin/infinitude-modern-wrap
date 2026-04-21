@@ -191,6 +191,15 @@ class Schedule(BaseModel):
     days: Annotated[list[ScheduleDay], Field(min_length=7, max_length=7)]
 
 
+class SchedulePut(BaseModel):
+    """Full-schedule overwrite. Zone id comes from the path, not the body —
+    keeping it out avoids silent path/body mismatches. Must supply all seven
+    days (list min_length=7); endpoint additionally validates uniqueness of
+    day names so no day is duplicated or omitted."""
+    model_config = ConfigDict(extra="forbid", use_enum_values=True)
+    days: Annotated[list[ScheduleDay], Field(min_length=7, max_length=7)]
+
+
 # ── System-level equipment config ────────────────────────────────────
 
 class VacationConfig(BaseModel):
