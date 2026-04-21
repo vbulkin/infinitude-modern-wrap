@@ -203,6 +203,22 @@ class VacationConfig(BaseModel):
     fan: FanSpeed
 
 
+class VacationPatch(BaseModel):
+    """Writable subset of VacationConfig. All fields optional — sparse
+    update. At least one must be supplied (empty body rejected at
+    endpoint). `start`/`end` may be cleared by sending `null`; other
+    fields are left alone when absent and cleared only when explicitly
+    null (which pydantic's optional-with-None allows).
+    """
+    model_config = ConfigDict(extra="forbid", use_enum_values=True)
+    active: bool | None = None
+    start: datetime | None = None
+    end: datetime | None = None
+    heatSetpoint: Temperature | None = None
+    coolSetpoint: Temperature | None = None
+    fan: FanSpeed | None = None
+
+
 class HumidityConfig(BaseModel):
     """Humidifier equipment + per-mode target RH.
 

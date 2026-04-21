@@ -44,6 +44,7 @@ from .models import (
     SystemPatch,
     ThermostatHealth,
     VacationConfig,
+    VacationPatch,
     Version,
     WholeHouseHoldRequest,
     Zone,
@@ -57,6 +58,7 @@ from .mutations import (
     apply_system_hold_clear,
     apply_system_hold_set,
     apply_system_mode_set,
+    apply_vacation_set,
     apply_zone_hold_clear,
     apply_zone_hold_set,
     apply_zone_setpoints_set,
@@ -397,6 +399,43 @@ def create_app(store: StateStore | None = None) -> FastAPI:
         if stored is None:
             raise HTTPException(status_code=404, detail="no config received yet")
         return VacationConfig.model_validate(stored.config.vacation)
+
+    @app.patch(
+        "/v1/system/vacation",
+        response_model=VacationConfig,
+        tags=["system"],
+    )
+    async def patch_vacation(body: VacationPatch) -> VacationConfig:
+        """Update vacation fields — sparse update.
+
+        Supports enabling/disabling via `active`, scheduling via
+        `start`/`end`, and vacation-specific setpoints + fan. To exit
+        vacation early, send `{"active": false}` — this leaves the
+        window in place for "next time" (matching thermostat UX).
+        """
+        stored = store.get_config()
+        if stored is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        supplied = body.model_dump(exclude_none=True)
+        if not supplied:
+            raise HTTPException(
+                status_code=422, detail="at least one field must be supplied"
+            )
+        # datetime → ISO string so the payload is JSON-serializable in
+        # pending_writes; apply_vacation_set re-parses as needed.
+        for k in ("start", "end"):
+            if k in supplied and isinstance(supplied[k], datetime):
+                supplied[k] = supplied[k].isoformat()
+        updated = await store.mutate_config(
+            apply_vacation_set,
+            serial=stored.serial,
+            kind="vacation_set",
+            target="vacation",
+            payload=supplied,
+        )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        return VacationConfig.model_validate(updated.config.vacation)
 
     @app.get(
         "/v1/system/humidity", response_model=HumidityConfig, tags=["system"]

@@ -173,6 +173,60 @@ def apply_system_mode_set(tree: etree._Element, payload: dict) -> None:
     _set_or_create(tree, "mode", payload["mode"])
 
 
+# ── Vacation ─────────────────────────────────────────────────────────
+
+def _iso_for_vacation(dt: datetime) -> str:
+    """Render a datetime in the ISO format the thermostat expects.
+
+    Observed configs use `YYYY-MM-DDTHH:MM:SS` (no tz suffix); Python's
+    isoformat is compatible when we strip the microseconds. Naive
+    datetimes are assumed UTC (same convention as datetime_to_wall_time)
+    but we strip tz before serializing because the thermostat's config
+    tree is tz-naive — its own clock is local-wall time.
+    """
+    if dt.tzinfo is not None:
+        dt = dt.astimezone().replace(tzinfo=None)
+    return dt.replace(microsecond=0).isoformat()
+
+
+def apply_vacation_set(tree: etree._Element, payload: dict) -> None:
+    """Write vacation fields — sparse update, only supplied keys touch
+    the tree.
+
+    Payload keys (any subset):
+      active: True|False   → <vacat>on|off</vacat>
+      start: ISO datetime  → <vacstart>...</vacstart>
+      end: ISO datetime    → <vacend>...</vacend>
+      heatSetpoint: int    → <vacmint>NN.0</vacmint>
+      coolSetpoint: int    → <vacmaxt>NN.0</vacmaxt>
+      fan: FanSpeed str    → <vacfan>...</vacfan>
+
+    Clearing dates is deliberately not supported — to exit vacation,
+    set active=False. Thermostat behavior: disabling leaves the window
+    in place for "next time"; clearing it requires a rewrite of both
+    dates anyway, so keeping the cleared-value contract out of this
+    sparse surface keeps the payload unambiguous.
+    """
+    if "active" in payload and payload["active"] is not None:
+        _set_or_create(tree, "vacat", "on" if payload["active"] else "off")
+    if "start" in payload and payload["start"] is not None:
+        start = payload["start"]
+        if isinstance(start, str):
+            start = datetime.fromisoformat(start.replace("Z", "+00:00"))
+        _set_or_create(tree, "vacstart", _iso_for_vacation(start))
+    if "end" in payload and payload["end"] is not None:
+        end = payload["end"]
+        if isinstance(end, str):
+            end = datetime.fromisoformat(end.replace("Z", "+00:00"))
+        _set_or_create(tree, "vacend", _iso_for_vacation(end))
+    if "heatSetpoint" in payload and payload["heatSetpoint"] is not None:
+        _set_or_create(tree, "vacmint", _format_setpoint(int(payload["heatSetpoint"])))
+    if "coolSetpoint" in payload and payload["coolSetpoint"] is not None:
+        _set_or_create(tree, "vacmaxt", _format_setpoint(int(payload["coolSetpoint"])))
+    if "fan" in payload and payload["fan"] is not None:
+        _set_or_create(tree, "vacfan", str(payload["fan"]))
+
+
 # ── Humidity targets ─────────────────────────────────────────────────
 
 def apply_humidity_set(tree: etree._Element, payload: dict) -> None:
@@ -240,4 +294,5 @@ REPLAY_REGISTRY: dict[str, MutationFn] = {
     "system_mode_set": apply_system_mode_set,
     "zone_setpoints_set": apply_zone_setpoints_set,
     "humidity_set": apply_humidity_set,
+    "vacation_set": apply_vacation_set,
 }
