@@ -43,11 +43,14 @@ from .models import (
     ThermostatHealth,
     VacationConfig,
     Version,
+    WholeHouseHoldRequest,
     Zone,
     ZoneHold,
     ZoneHoldRequest,
 )
 from .mutations import (
+    apply_system_hold_clear,
+    apply_system_hold_set,
     apply_zone_hold_clear,
     apply_zone_hold_set,
     datetime_to_wall_time,
@@ -479,6 +482,49 @@ def create_app(store: StateStore | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="no config received yet")
         return _zone_response(updated, store.get_telemetry(), zone_id)
 
+    @app.put("/v1/system/hold", response_model=System, tags=["system"])
+    async def set_system_hold(body: WholeHouseHoldRequest) -> System:
+        """Enable the whole-house hold.
+
+        Same shape as zone hold but narrower activity set (home/away/
+        sleep/wake — no "manual") and nested under <wholeHouse> instead
+        of a zone element. Response is the System view, which uses the
+        freshly-updated config for the hold fields.
+        """
+        stored = store.get_config()
+        if stored is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        otmr = datetime_to_wall_time(body.until) if body.until else ""
+        activity = body.activity.value if hasattr(body.activity, "value") else body.activity
+        payload = {"activity": activity, "otmr": otmr}
+        updated = await store.mutate_config(
+            apply_system_hold_set,
+            serial=stored.serial,
+            kind="system_hold_set",
+            target="system",
+            payload=payload,
+        )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        return _system_response(updated, store.get_telemetry())
+
+    @app.delete("/v1/system/hold", response_model=System, tags=["system"])
+    async def clear_system_hold() -> System:
+        """Release the whole-house hold. Idempotent, like the zone DELETE."""
+        stored = store.get_config()
+        if stored is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        updated = await store.mutate_config(
+            apply_system_hold_clear,
+            serial=stored.serial,
+            kind="system_hold_clear",
+            target="system",
+            payload={},
+        )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        return _system_response(updated, store.get_telemetry())
+
     return app
 
 
@@ -517,6 +563,41 @@ def _zone_response(
         conditioning=HvacAction(tz.conditioning) if tz else (base_zone.conditioning if base_zone else HvacAction.IDLE),
         currentActivity=ActivityId(tz.currentActivity) if tz else (base_zone.currentActivity if base_zone else ActivityId.HOME),
         hold=zone_config.hold,
+    )
+
+
+def _system_response(
+    stored_config: StoredConfig,
+    stored_telemetry: StoredTelemetry | None,
+) -> System:
+    """Build a System response after a whole-house hold mutation.
+
+    Mirrors _zone_response: config is authoritative for hold (it's the
+    value we just wrote, and telemetry doesn't carry whole-house hold
+    activity), while live fields (outdoor temp, humidifier, etc.) come
+    from the most recent telemetry snapshot when present.
+    """
+    cfg = stored_config.config
+    base = canned_state()
+    if stored_telemetry is not None:
+        snap = stored_telemetry.snapshot
+        return System(
+            mode=HvacMode(cfg.mode),
+            outdoorTemperature=snap.outdoorTemperature,
+            humidifierOn=snap.humidifierOn,
+            lastReportAt=snap.localTime,
+            operatingStatusMessage=snap.operatingStatusMessage,
+            serial=stored_config.serial,
+            hold=cfg.wholeHouseHold,
+        )
+    return System(
+        mode=HvacMode(cfg.mode),
+        outdoorTemperature=base.system.outdoorTemperature,
+        humidifierOn=base.system.humidifierOn,
+        lastReportAt=stored_config.receivedAt,
+        operatingStatusMessage=base.system.operatingStatusMessage,
+        serial=stored_config.serial,
+        hold=cfg.wholeHouseHold,
     )
 
 

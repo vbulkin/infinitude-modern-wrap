@@ -111,6 +111,39 @@ def apply_zone_hold_clear(tree: etree._Element, payload: dict) -> None:
     _set_or_create(zone, "otmr", "")
 
 
+# ── Whole-house (system) hold ────────────────────────────────────────
+
+def _find_whole_house(tree: etree._Element) -> etree._Element:
+    wh = tree.find("wholeHouse")
+    if wh is None:
+        raise ValueError("config is missing <wholeHouse>")
+    return wh
+
+
+def apply_system_hold_set(tree: etree._Element, payload: dict) -> None:
+    """Enable the whole-house hold.
+
+    Payload shape:
+      {"activity": "home", "otmr": "14:45"}
+    SystemHoldActivity is narrower than ActivityId — only home/away/
+    sleep/wake are valid at the whole-house level (no "manual"); we
+    rely on pydantic at the HTTP boundary to enforce that.
+    """
+    wh = _find_whole_house(tree)
+    _set_or_create(wh, "hold", "on")
+    _set_or_create(wh, "holdActivity", payload["activity"])
+    _set_or_create(wh, "otmr", payload.get("otmr", ""))
+
+
+def apply_system_hold_clear(tree: etree._Element, payload: dict) -> None:
+    """Release the whole-house hold. Mirrors apply_zone_hold_clear —
+    `<hold>off</hold>`, `<holdActivity>none</holdActivity>`, empty otmr."""
+    wh = _find_whole_house(tree)
+    _set_or_create(wh, "hold", "off")
+    _set_or_create(wh, "holdActivity", "none")
+    _set_or_create(wh, "otmr", "")
+
+
 # ── Replay dispatcher registry ───────────────────────────────────────
 
 MutationFn = Callable[[etree._Element, dict], None]
@@ -118,4 +151,6 @@ MutationFn = Callable[[etree._Element, dict], None]
 REPLAY_REGISTRY: dict[str, MutationFn] = {
     "zone_hold_set": apply_zone_hold_set,
     "zone_hold_clear": apply_zone_hold_clear,
+    "system_hold_set": apply_system_hold_set,
+    "system_hold_clear": apply_system_hold_clear,
 }
