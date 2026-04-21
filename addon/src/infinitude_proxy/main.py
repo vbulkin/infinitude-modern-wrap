@@ -40,6 +40,7 @@ from .models import (
     State,
     StateStoreHealth,
     System,
+    SystemPatch,
     ThermostatHealth,
     VacationConfig,
     Version,
@@ -51,6 +52,7 @@ from .models import (
 from .mutations import (
     apply_system_hold_clear,
     apply_system_hold_set,
+    apply_system_mode_set,
     apply_zone_hold_clear,
     apply_zone_hold_set,
     datetime_to_wall_time,
@@ -323,6 +325,40 @@ def create_app(store: StateStore | None = None) -> FastAPI:
             if zc.id == zone_id:
                 return Schedule(zoneId=zone_id, days=list(zc.schedule))
         raise HTTPException(status_code=404, detail=f"zone {zone_id} not found")
+
+    @app.get("/v1/system", response_model=System, tags=["system"])
+    def get_system() -> System:
+        """System snapshot: mode, hold, outdoor/humidifier, serial.
+
+        Same projection as /v1/state's `system` field but without zones.
+        Useful for clients that only care about whole-house state.
+        """
+        stored = store.get_config()
+        if stored is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        return _system_response(stored, store.get_telemetry())
+
+    @app.patch("/v1/system", response_model=System, tags=["system"])
+    async def patch_system(body: SystemPatch) -> System:
+        """Update system-wide settings. Currently only `mode` is writable."""
+        stored = store.get_config()
+        if stored is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        if body.mode is None:
+            raise HTTPException(
+                status_code=422, detail="no writable fields supplied"
+            )
+        mode = body.mode.value if hasattr(body.mode, "value") else body.mode
+        updated = await store.mutate_config(
+            apply_system_mode_set,
+            serial=stored.serial,
+            kind="system_mode_set",
+            target="system",
+            payload={"mode": mode},
+        )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="no config received yet")
+        return _system_response(updated, store.get_telemetry())
 
     @app.get(
         "/v1/system/vacation", response_model=VacationConfig, tags=["system"]

@@ -111,6 +111,20 @@ def apply_zone_hold_clear(tree: etree._Element, payload: dict) -> None:
     _set_or_create(zone, "otmr", "")
 
 
+# ── System mode ──────────────────────────────────────────────────────
+
+def apply_system_mode_set(tree: etree._Element, payload: dict) -> None:
+    """Set the HVAC mode — `<mode>off|heat|cool|auto|fanonly</mode>`.
+
+    Payload shape: {"mode": "heat"}. The mode element lives at the top
+    of <config> (sibling to <zones>/<wholeHouse>) and always exists in
+    captured configs; we use _set_or_create defensively for partial
+    fixtures. Validity of the enum value is enforced by pydantic at the
+    HTTP boundary (HvacMode).
+    """
+    _set_or_create(tree, "mode", payload["mode"])
+
+
 # ── Whole-house (system) hold ────────────────────────────────────────
 
 def _find_whole_house(tree: etree._Element) -> etree._Element:
@@ -153,4 +167,5 @@ REPLAY_REGISTRY: dict[str, MutationFn] = {
     "zone_hold_clear": apply_zone_hold_clear,
     "system_hold_set": apply_system_hold_set,
     "system_hold_clear": apply_system_hold_clear,
+    "system_mode_set": apply_system_mode_set,
 }
