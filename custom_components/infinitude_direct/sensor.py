@@ -15,7 +15,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DAMPER_RAW_MAX, DOMAIN, MANUFACTURER, MODEL
+from .const import DOMAIN, MANUFACTURER, MODEL
 from .coordinator import InfinitudeDataCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -63,8 +63,9 @@ class InfinitudeHumidifierSensor(CoordinatorEntity, SensorEntity):
         return super().available and not self.coordinator.data.get("stale", False)
 
     @property
-    def native_value(self) -> str | None:
-        return self.coordinator.data.get("humid", "off")
+    def native_value(self) -> str:
+        on = self.coordinator.data.get("system", {}).get("humidifierOn", False)
+        return "on" if on else "off"
 
     @property
     def icon(self) -> str:
@@ -120,12 +121,8 @@ class InfinitudeDamperSensor(InfinitudeZoneSensor):
     @property
     def native_value(self) -> int | None:
         z = self._zone_data
-        if z and z.get("damper"):
-            try:
-                return round(int(z["damper"]) / DAMPER_RAW_MAX * 100)
-            except (ValueError, TypeError):
-                _LOGGER.warning("Invalid damper value '%s' for zone %s", z["damper"], self._zone_id)
-                return None
+        if z and z.get("damperPercent") is not None:
+            return int(z["damperPercent"])
         return None
 
 
@@ -175,14 +172,14 @@ class InfinitudeOATSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self) -> float | None:
-        oat = self.coordinator.data.get("oat")
-        if oat is not None:
-            try:
-                return float(oat)
-            except (ValueError, TypeError):
-                _LOGGER.warning("Invalid outdoor temperature value: '%s'", oat)
-                return None
-        return None
+        oat = self.coordinator.data.get("system", {}).get("outdoorTemperature")
+        if oat is None:
+            return None
+        try:
+            return float(oat)
+        except (ValueError, TypeError):
+            _LOGGER.warning("Invalid outdoor temperature value: '%s'", oat)
+            return None
 
 
 class InfinitudeOperationStatusSensor(CoordinatorEntity, SensorEntity):
@@ -208,11 +205,20 @@ class InfinitudeOperationStatusSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self) -> str | None:
-        return self.coordinator.data.get("op_status") or None
+        return (
+            self.coordinator.data.get("system", {}).get("operatingStatusMessage")
+            or None
+        )
 
 
 class InfinitudeSystemInfoSensor(CoordinatorEntity, SensorEntity):
-    """System info sensor with schedule/profile data as attributes."""
+    """System info sensor with schedule/profile data as attributes.
+
+    `schedule` and `profiles` attributes are JSON-encoded in the legacy
+    HVAC card's wire shape (lowercase day ids, string setpoint values,
+    `enabled: "on"|"off"`) so the card JS continues to work without
+    changes.
+    """
 
     _attr_has_entity_name = True
     _attr_icon = "mdi:home-thermometer"
@@ -234,21 +240,40 @@ class InfinitudeSystemInfoSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self) -> str:
-        return self.coordinator.data.get("mode", "off")
+        return self.coordinator.data.get("system", {}).get("mode", "off")
 
     @property
     def extra_state_attributes(self) -> dict:
         data = self.coordinator.data
-        zones_summary = []
+        profiles = []
+        schedule_by_zone: dict[str, dict] = {}
         for z in data.get("zones", []):
-            zones_summary.append({
-                "id": z["id"],
-                "name": z["name"],
-                "activities": z.get("activities", {}),
-            })
+            activities_legacy = {
+                aid: {
+                    "htsp": str(a["heat"]),
+                    "clsp": str(a["cool"]),
+                    "fan": a["fan"],
+                }
+                for aid, a in z.get("activities", {}).items()
+            }
+            profiles.append(
+                {"id": z["id"], "name": z["name"], "activities": activities_legacy}
+            )
+            schedule_by_zone[z["id"]] = {
+                day.lower(): [
+                    {
+                        "id": str(p["id"]),
+                        "activity": p["activity"],
+                        "time": p["time"],
+                        "enabled": "on" if p.get("enabled") else "off",
+                    }
+                    for p in periods
+                ]
+                for day, periods in z.get("schedule", {}).items()
+            }
         return {
             "host": data.get("host", ""),
             "carrier_ok": data.get("carrier_ok"),
-            "schedule": json.dumps(data.get("schedule", {})),
-            "profiles": json.dumps(zones_summary),
+            "schedule": json.dumps(schedule_by_zone),
+            "profiles": json.dumps(profiles),
         }

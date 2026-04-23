@@ -1,0 +1,31 @@
+{
+  "id": "20260420T130633.607Z_0004_POST_systems_0000TEST0000",
+  "timestamp": "20260420T130633.607Z",
+  "duration_ms": 7997,
+  "upstream_url": "http://192.168.1.233:3000/systems/0000TEST0000",
+  "upstream_error": null,
+  "request": {
+    "method": "POST",
+    "path": "/systems/0000TEST0000",
+    "query": {},
+    "headers": {
+      "host": "www.api.eng.bryant.com",
+      "authorization": "OAuth realm=\"http://www.api.eng.bryant.com/systems/0000TEST0000\",oauth_consumer_key=\"9f73i0d2l9e7r587\",oauth_nonce=\"177669754536573\",oauth_signature_method=\"HMAC-SHA1\",oauth_timestamp=\"1776697545\",oauth_token=\"0000TEST0000\",oauth_version=\"1.0\",oauth_signature=\"qgHzgcNV2aFfqjrMLm3ddYg%2Bj5c%3D\"",
+      "content-type": "application/x-www-form-urlencoded",
+      "content-length": "53243"
+    },
+    "body_bytes": 53243,
+    "body_file": "20260420T130633.607Z_0004_POST_systems_0000TEST0000.request.bin"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-length": "0",
+      "content-type": "text/plain;charset=UTF-8",
+      "date": "Mon, 20 Apr 2026 13:06:42 GMT",
+      "server": "Mojolicious (Perl)"
+    },
+    "body_bytes": 0,
+    "body_file": "20260420T130633.607Z_0004_POST_systems_0000TEST0000.response.bin"
+  }
+}

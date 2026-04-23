@@ -1,24 +1,32 @@
-"""Data coordinator for Infinitude Direct."""
+"""Data coordinator for Infinitude Direct.
+
+Talks to the Python/FastAPI proxy's `/v1/*` API (typed JSON). The state
+shape returned here mirrors `/v1/state` verbatim (system + zones), with
+per-zone `activities` and `schedule` folded in and `host`/`carrier_ok`/
+`stale` synthesized from `/v1/healthz`.
+"""
 
 import asyncio
 import logging
-import time
-from datetime import datetime, timedelta
+import re
+from datetime import datetime, timedelta, timezone
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, SCAN_INTERVAL_SECONDS, STALE_THRESHOLD
+from .const import DOMAIN, SCAN_INTERVAL_SECONDS
 
 _LOGGER = logging.getLogger(__name__)
 
-_CARRIER_OK_INTERVAL = 300  # 5 min when ok
-_CARRIER_ERR_INTERVAL = 120  # 2 min when error
+_DAY_ORDER = [
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+]
 
 
 class InfinitudeDataCoordinator(DataUpdateCoordinator):
-    """Polls Infinitude's systems.json and status.json endpoints."""
+    """Polls the Python proxy's /v1/* endpoints."""
 
     def __init__(self, hass: HomeAssistant, host: str) -> None:
         super().__init__(
@@ -30,350 +38,243 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         self.host = host.rstrip("/")
         self._session = async_get_clientsession(hass)
         self.api_lock = asyncio.Lock()
-        self._last_local_time: str | None = None
-        self._stale_count: int = 0
-        self._carrier_ok: bool | None = None
-        self._carrier_last_check: float = 0
 
     async def _async_update_data(self) -> dict:
         try:
             async with asyncio.timeout(15):
-                systems_resp = await self._session.get(f"{self.host}/systems.json")
-                systems_resp.raise_for_status()
-                systems = await systems_resp.json(content_type=None)
-
-                status_resp = await self._session.get(f"{self.host}/status.json")
-                status_resp.raise_for_status()
-                status = await status_resp.json(content_type=None)
+                state, healthz = await asyncio.gather(
+                    self._get_obj("/v1/state"),
+                    self._get_obj("/v1/healthz"),
+                )
+                zone_ids = [
+                    z["id"] for z in state.get("zones", []) if z.get("enabled", True)
+                ]
+                activities_tasks = [
+                    self._get_list(f"/v1/zones/{zid}/activities") for zid in zone_ids
+                ]
+                schedule_tasks = [
+                    self._get_obj(f"/v1/zones/{zid}/schedule") for zid in zone_ids
+                ]
+                activities_results = await asyncio.gather(*activities_tasks)
+                schedule_results = await asyncio.gather(*schedule_tasks)
         except Exception as err:
             raise UpdateFailed(f"Error communicating with Infinitude: {err}") from err
 
-        parsed = self._parse(systems, status)
-        self._update_staleness(parsed.get("local_time"))
-        parsed["stale"] = self._stale_count >= STALE_THRESHOLD
-        await self._check_carrier()
-        parsed["carrier_ok"] = self._carrier_ok
-        return parsed
+        zone_aux: dict[str, dict] = {
+            zid: {
+                "activities": activities_results[i],
+                "schedule": schedule_results[i],
+            }
+            for i, zid in enumerate(zone_ids)
+        }
+        return self._shape(state, healthz, zone_aux)
 
-    def _update_staleness(self, local_time: str | None) -> None:
-        if not local_time:
-            return
-        if self._last_local_time and local_time == self._last_local_time:
-            self._stale_count += 1
-        else:
-            self._stale_count = 0
-        self._last_local_time = local_time
+    async def _get_obj(self, path: str) -> dict:
+        resp = await self._session.get(f"{self.host}{path}")
+        resp.raise_for_status()
+        data = await resp.json(content_type=None)
+        if not isinstance(data, dict):
+            raise UpdateFailed(f"Expected JSON object at {path}, got {type(data).__name__}")
+        return data
 
-    async def _check_carrier(self) -> None:
-        """Periodically check /Alive to see if Carrier cloud is reachable."""
-        now = time.monotonic()
-        interval = _CARRIER_OK_INTERVAL if self._carrier_ok else _CARRIER_ERR_INTERVAL
-        if now - self._carrier_last_check < interval:
-            return
-        self._carrier_last_check = now
-        try:
-            async with asyncio.timeout(10):
-                resp = await self._session.get(f"{self.host}/Alive")
-                text = await resp.text()
-                self._carrier_ok = resp.ok and "alive" in text.lower()
-        except Exception:
-            self._carrier_ok = False
+    async def _get_list(self, path: str) -> list:
+        resp = await self._session.get(f"{self.host}{path}")
+        resp.raise_for_status()
+        data = await resp.json(content_type=None)
+        if not isinstance(data, list):
+            raise UpdateFailed(f"Expected JSON array at {path}, got {type(data).__name__}")
+        return data
 
-    def _parse(self, systems: dict, status: dict) -> dict:
-        try:
-            cfg = systems["system"][0]["config"][0]
-        except (KeyError, IndexError, TypeError) as err:
-            raise UpdateFailed(f"Invalid systems.json structure: {err}") from err
-        try:
-            st = status["status"][0]
-        except (KeyError, IndexError, TypeError) as err:
-            raise UpdateFailed(f"Invalid status.json structure: {err}") from err
+    def _shape(self, state: dict, healthz: dict, zone_aux: dict) -> dict:
+        components = healthz.get("components", {})
+        thermostat_status = components.get("thermostat", {}).get("status", "unreachable")
+        carrier_status = components.get("carrierCloud", {}).get("status", "disabled")
 
-        raw_mode = self._v(cfg.get("mode")) or "off"
-        mode = "auto" if raw_mode == "heatcool" else raw_mode
-        op_mode = self._v(st.get("mode")) or ""
-        oat = self._v(st.get("oat"))
-
-        cfg_zones = self._force_array(
-            cfg.get("zones", [{}])[0].get("zone") if cfg.get("zones") else []
-        )
-        status_zones = self._force_array(
-            st.get("zones", [{}])[0].get("zone") if st.get("zones") else []
-        )
-
-        zone_map = {}
-        for cz in cfg_zones:
-            zone_map[cz["id"]] = cz
-
-        zones = []
-        for sz in status_zones:
-            if self._v(sz.get("enabled")) != "on":
+        zones: list[dict] = []
+        for z in state.get("zones", []):
+            if not z.get("enabled", True):
                 continue
-
-            cz = zone_map.get(sz["id"], {})
-
-            activities = {}
-            cz_activities = cz.get("activities")
-            if cz_activities:
-                for act in self._force_array(
-                    cz_activities[0].get("activity", []) if cz_activities else []
-                ):
-                    act_id = act.get("id")
-                    if act_id:
-                        activities[act_id] = {
-                            "htsp": self._v(act.get("htsp")),
-                            "clsp": self._v(act.get("clsp")),
-                            "fan": self._v(act.get("fan")),
-                        }
-
-            zones.append(
-                {
-                    "id": sz["id"],
-                    "name": self._v(sz.get("name")) or f"Zone {sz['id']}",
-                    "temp": self._v(sz.get("rt")),
-                    "rh": self._v(sz.get("rh")),
-                    "htsp": self._v(sz.get("htsp")),
-                    "clsp": self._v(sz.get("clsp")),
-                    "conditioning": self._v(sz.get("zoneconditioning")) or "idle",
-                    "currentActivity": self._v(sz.get("currentActivity")) or "home",
-                    "hold": self._v(cz.get("hold")) == "on",
-                    "holdActivity": self._v(cz.get("holdActivity")),
-                    "otmr": self._v(cz.get("otmr")),
-                    "fan": self._v(sz.get("fan")),
-                    "damper": self._v(sz.get("damperposition")),
-                    "activities": activities,
-                }
-            )
-
-        humid = self._v(st.get("humid")) or "off"
-        local_time = self._v(st.get("localTime"))
-        op_status = self._v(st.get("oprstsmsg")) or ""
-
-        # Parse schedule (program) data per zone
-        schedule = {}
-        for sz in zones:
-            cz = zone_map.get(sz["id"], {})
-            zone_sched = {}
-            if "program" in cz and cz["program"]:
-                days = self._force_array(cz["program"][0].get("day", []))
-                for day in days:
-                    day_id = day.get("id")
-                    if not day_id:
-                        continue
-                    periods = []
-                    for p in self._force_array(day.get("period", [])):
-                        periods.append({
-                            "id": self._v(p.get("id")) or p.get("id"),
-                            "activity": self._v(p.get("activity")) or "home",
-                            "time": self._v(p.get("time")) or "00:00",
-                            "enabled": self._v(p.get("enabled")) == "on",
-                        })
-                    zone_sched[day_id] = periods
-            schedule[sz["id"]] = zone_sched
+            aux = zone_aux.get(z["id"], {})
+            activities_map = {
+                a["id"]: {"heat": a["heat"], "cool": a["cool"], "fan": a["fan"]}
+                for a in aux.get("activities", [])
+            }
+            schedule_map = {
+                d["day"]: d.get("periods", [])
+                for d in aux.get("schedule", {}).get("days", [])
+            }
+            zones.append({**z, "activities": activities_map, "schedule": schedule_map})
 
         return {
-            "mode": mode,
-            "op_mode": op_mode,
-            "oat": oat,
-            "op_status": op_status,
-            "humid": humid,
-            "local_time": local_time,
-            "host": self.host,
+            "system": state.get("system", {}),
             "zones": zones,
-            "schedule": schedule,
-            "whole_house_hold": self._parse_whole_house(cfg),
+            "host": self.host,
+            "carrier_ok": carrier_status == "healthy",
+            "carrier_status": carrier_status,
+            "thermostat_status": thermostat_status,
+            "stale": thermostat_status != "healthy",
+            "lastUpdated": state.get("lastUpdated"),
         }
-
-    def _parse_whole_house(self, cfg: dict) -> dict:
-        wh = cfg.get("wholeHouse")
-        if not wh:
-            return {"hold": False, "holdActivity": None, "otmr": None}
-        wh = (wh[0] if wh else {}) if isinstance(wh, list) else wh
-        return {
-            "hold": self._v(wh.get("hold")) == "on",
-            "holdActivity": self._v(wh.get("holdActivity")),
-            "otmr": self._v(wh.get("otmr")),
-        }
-
-    @staticmethod
-    def _v(x):
-        """Extract a value from XML::Simple's single-element array wrapping.
-
-        XML::Simple encodes `<mode>auto</mode>` as `{"mode": ["auto"]}`
-        and empty elements as `{"tag": [{}]}`.  This unwraps the array
-        and returns None for missing / empty values.
-
-        NOT suitable for ID fields that may be plain strings in the JSON.
-        Use `_scalar()` for those.
-        """
-        if not isinstance(x, list) or len(x) == 0:
-            return None
-        val = x[0]
-        if val is None:
-            return None
-        if isinstance(val, dict) and len(val) == 0:
-            return None
-        return val
-
-    @staticmethod
-    def _scalar(x):
-        """Return a scalar value regardless of wrapping.
-
-        Unlike `_v()`, this passes plain strings/ints through unchanged
-        and only unwraps single-element lists.  Used for ID fields that
-        may or may not be array-wrapped depending on context.
-        """
-        if isinstance(x, list):
-            return x[0] if x else None
-        return x
-
-    @staticmethod
-    def _force_array(x):
-        if isinstance(x, list):
-            return x
-        return [x] if x else []
 
     # ── Write methods ──────────────────────────────────────────────────────
 
     @staticmethod
-    def otmr_from_now(hours: int = 2) -> str:
-        """Return an HH:MM string *hours* from now, rounded to 15 min."""
-        target = datetime.now() + timedelta(hours=hours)
-        minutes = round(target.minute / 15) * 15
-        if minutes == 60:
-            target = target.replace(minute=0) + timedelta(hours=1)
-        else:
-            target = target.replace(minute=minutes, second=0, microsecond=0)
-        return target.strftime("%H:%M")
+    def isotime_from_now(hours: int = 2) -> str:
+        """Return an ISO-8601 UTC timestamp `hours` from now (Z-suffixed)."""
+        target = datetime.now(timezone.utc) + timedelta(hours=hours)
+        return target.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     async def async_set_mode(self, mode: str) -> None:
-        resp = await self._session.put(
-            f"{self.host}/api/config",
-            params={"mode": mode, "set_changes": "true"},
-        )
-        resp.raise_for_status()
+        await self._patch("/v1/system", {"mode": mode})
 
     async def async_set_hold(
         self, zone_id: str, activity: str, until: str | None = None
     ) -> None:
-        if until is None:
-            until = self.otmr_from_now(2)
-        resp = await self._session.put(
-            f"{self.host}/api/{zone_id}/hold",
-            params={"activity": activity, "until": until},
-        )
-        resp.raise_for_status()
+        body = self._build_hold_body(activity, until)
+        await self._put(f"/v1/zones/{zone_id}/hold", body)
 
     async def async_cancel_hold(self, zone_id: str) -> None:
-        resp = await self._session.put(
-            f"{self.host}/api/{zone_id}/hold",
-            params={"hold": "off"},
-        )
-        resp.raise_for_status()
+        await self._delete(f"/v1/zones/{zone_id}/hold")
 
     async def async_set_activity_temps(
         self, zone_id: str, activity: str, htsp: int, clsp: int
     ) -> None:
-        resp = await self._session.put(
-            f"{self.host}/api/{zone_id}/activity/{activity}",
-            params={"htsp": str(htsp), "clsp": str(clsp)},
+        await self._patch(
+            f"/v1/zones/{zone_id}/activities/{activity}",
+            {"heat": int(htsp), "cool": int(clsp)},
         )
-        resp.raise_for_status()
-
-    async def async_set_whole_house_hold(
-        self, activity: str, otmr: str | None = None
-    ) -> None:
-        params = {
-            "hold": "on",
-            "holdActivity": activity,
-            "set_changes": "true",
-        }
-        if otmr:
-            params["otmr"] = otmr
-        resp = await self._session.put(
-            f"{self.host}/api/config/wholeHouse",
-            params=params,
-        )
-        resp.raise_for_status()
-
-    async def async_cancel_whole_house_hold(self) -> None:
-        resp = await self._session.put(
-            f"{self.host}/api/config/wholeHouse",
-            params={"hold": "off", "set_changes": "true"},
-        )
-        resp.raise_for_status()
-
-    async def async_save_schedule(self, zone_id: str, program: list) -> None:
-        """Save full schedule for a zone via GET-modify-POST.
-
-        The Infinitude proxy catch-all API reads query params only, not JSON
-        body, so complex nested writes must go through POST /systems/infinitude
-        which accepts a full JSON config and converts it back to XML.
-        """
-        async with self.api_lock:
-            # 1. Fetch current full config
-            resp = await self._session.get(f"{self.host}/systems.json")
-            resp.raise_for_status()
-            systems = await resp.json(content_type=None)
-
-            # 2. Navigate to target zone — mirrors _parse() navigation exactly
-            cfg = systems["system"][0]["config"][0]
-            cfg_zones = self._force_array(
-                cfg.get("zones", [{}])[0].get("zone") if cfg.get("zones") else []
-            )
-
-            target = None
-            for z in cfg_zones:
-                if str(self._scalar(z.get("id"))) == str(zone_id):
-                    target = z
-                    break
-
-            if not target:
-                _LOGGER.error("save_schedule: zone %s not found in config", zone_id)
-                return
-
-            # 3. Build day→period lookup from incoming data
-            new_sched: dict[str, dict[str, dict]] = {}
-            for d in program:
-                new_sched[d["id"]] = {
-                    str(p["id"]): p for p in d.get("period", [])
-                }
-
-            # 4. Patch periods in existing structure (preserves array wrapping)
-            # program is array-wrapped like all XML::Simple nodes
-            if not target.get("program"):
-                _LOGGER.error("save_schedule: zone %s has no program", zone_id)
-                return
-            days = self._force_array(target["program"][0].get("day", []))
-
-            for day in days:
-                day_id = self._scalar(day.get("id"))
-                if day_id not in new_sched:
-                    continue
-                day_periods = new_sched[day_id]
-                for period in self._force_array(day.get("period", [])):
-                    p_id = str(self._scalar(period.get("id")))
-                    if p_id not in day_periods:
-                        continue
-                    np = day_periods[p_id]
-                    # Preserve original wrapping style (list vs plain)
-                    wrap = isinstance(period.get("activity"), list)
-                    period["activity"] = [np["activity"]] if wrap else np["activity"]
-                    period["time"] = [np["time"]] if wrap else np["time"]
-                    period["enabled"] = [np["enabled"]] if wrap else np["enabled"]
-
-            # 5. POST full config back — triggers changes flag
-            resp = await self._session.post(
-                f"{self.host}/systems/infinitude",
-                json=systems,
-            )
-            resp.raise_for_status()
 
     async def async_set_activity_fan(
         self, zone_id: str, activity: str, fan: str
     ) -> None:
-        resp = await self._session.put(
-            f"{self.host}/api/{zone_id}/activity/{activity}",
-            params={"fan": fan},
+        await self._patch(
+            f"/v1/zones/{zone_id}/activities/{activity}", {"fan": fan}
         )
+
+    async def async_set_whole_house_hold(
+        self, activity: str, until: str | None = None
+    ) -> None:
+        body = self._build_hold_body(activity, until)
+        await self._put("/v1/system/hold", body)
+
+    async def async_cancel_whole_house_hold(self) -> None:
+        await self._delete("/v1/system/hold")
+
+    async def async_save_schedule(self, zone_id: str, program: list) -> None:
+        """Write a zone's weekly schedule.
+
+        Accepts the legacy HVAC card shape (lowercase day ids, string
+        period ids, `enabled: "on"|"off"`); translates to the typed
+        `PUT /v1/zones/{id}/schedule` body. Missing days are filled from
+        the current schedule so the card's partial-update UX still works.
+        """
+        async with self.api_lock:
+            current = await self._get_obj(f"/v1/zones/{zone_id}/schedule")
+            day_map: dict[str, dict] = {
+                d["day"]: d for d in current.get("days", [])
+            }
+
+            for d in program:
+                raw = (d.get("id") or d.get("day") or "").strip()
+                if not raw:
+                    continue
+                day_name = raw.capitalize()
+                if day_name not in day_map:
+                    continue
+                periods_in = d.get("period") or d.get("periods") or []
+                day_map[day_name]["periods"] = [
+                    _normalize_period(p) for p in periods_in
+                ]
+
+            body = {"days": [day_map[d] for d in _DAY_ORDER if d in day_map]}
+            resp = await self._session.put(
+                f"{self.host}/v1/zones/{zone_id}/schedule", json=body
+            )
+            resp.raise_for_status()
+
+    # ── HTTP helpers ───────────────────────────────────────────────────────
+
+    def _build_hold_body(self, activity: str, until: str | None) -> dict:
+        """Build a hold-request body. `until` semantics:
+          * None or "forever" → indefinite (omit `until` — spec allows).
+          * "auto"            → 2 h from now, ISO UTC.
+          * ISO string        → used as-is.
+          * "HH:MM"           → next local occurrence of that wall-clock
+                                time, converted to ISO UTC. The backend
+                                re-projects it back to HH:MM on the wire,
+                                so the thermostat still evaluates it
+                                against its own local clock.
+        """
+        body: dict = {"activity": activity}
+        if until is None or until == "forever":
+            return body
+        if until == "auto":
+            body["until"] = self.isotime_from_now(2)
+            return body
+        if "T" in until and until.endswith("Z"):
+            body["until"] = until
+            return body
+        iso = _wall_time_to_iso_utc(until)
+        if iso is None:
+            _LOGGER.warning(
+                "Unparseable hold 'until' value %r; falling back to 2h hold", until
+            )
+            body["until"] = self.isotime_from_now(2)
+        else:
+            body["until"] = iso
+        return body
+
+    async def _patch(self, path: str, body: dict) -> None:
+        resp = await self._session.patch(f"{self.host}{path}", json=body)
         resp.raise_for_status()
+
+    async def _put(self, path: str, body: dict) -> None:
+        resp = await self._session.put(f"{self.host}{path}", json=body)
+        resp.raise_for_status()
+
+    async def _delete(self, path: str) -> None:
+        resp = await self._session.delete(f"{self.host}{path}")
+        resp.raise_for_status()
+
+
+_HHMM_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
+
+
+def _wall_time_to_iso_utc(hhmm: str) -> str | None:
+    """Parse `HH:MM` as the next local occurrence of that wall-clock time
+    and return it as an ISO-8601 UTC timestamp (Z-suffixed).
+
+    Returns None if the input is not a valid HH:MM string.
+    """
+    m = _HHMM_RE.match(hhmm.strip())
+    if not m:
+        return None
+    hour, minute = int(m.group(1)), int(m.group(2))
+    if not (0 <= hour < 24 and 0 <= minute < 60):
+        return None
+    now_local = dt_util.now()
+    target = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= now_local:
+        target += timedelta(days=1)
+    return dt_util.as_utc(target).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _normalize_period(p: dict) -> dict:
+    pid = p["id"]
+    if isinstance(pid, str):
+        pid = int(pid)
+    enabled = p.get("enabled")
+    if isinstance(enabled, bool):
+        pass
+    elif isinstance(enabled, str):
+        enabled = enabled.lower() in ("on", "true", "1", "yes")
+    elif isinstance(enabled, int):
+        enabled = bool(enabled)
+    else:
+        enabled = False
+    return {
+        "id": pid,
+        "activity": p["activity"],
+        "time": p["time"],
+        "enabled": enabled,
+    }

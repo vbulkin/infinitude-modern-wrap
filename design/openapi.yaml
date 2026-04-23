@@ -1,0 +1,1544 @@
+openapi: 3.1.0
+info:
+  title: Infinitude Modern Proxy API
+  version: 1.0.0-draft
+  summary: Northbound HTTP API for the modernized Infinitude proxy.
+  description: |
+    First-class, OpenAPI-described HTTP API served by the Infinitude add-on
+    for consumption by the Home Assistant integration and the web UI.
+
+    Design goals:
+      * Typed resources (no array-wrapped scalars, no stringly-typed booleans).
+      * Resource-oriented paths with consistent verbs.
+      * Server-Sent Events push channel for state changes.
+      * Comprehensive health probe.
+
+    Out of scope for this API (handled elsewhere in the add-on):
+      * The southbound protocol the thermostat uses to POST telemetry and pull changes.
+      * The Carrier cloud passthrough on the `pass_reqs` cadence.
+
+    See DESIGN.md for architecture and migration plan.
+  license:
+    name: MIT
+    identifier: MIT
+  contact:
+    name: Infinitude Modern Wrap
+    url: https://github.com/vbulkin/infinitude-modern-wrap
+
+servers:
+  - url: http://{host}:{port}
+    description: Local add-on
+    variables:
+      host:
+        default: local-infinitude
+      port:
+        default: "3000"
+
+tags:
+  - name: health
+    description: Diagnostics and liveness.
+  - name: state
+    description: Aggregate state snapshot + event stream.
+  - name: system
+    description: System-wide settings (mode, outdoor temp, whole-house hold).
+  - name: zones
+    description: Per-zone control (setpoints, holds, activities, schedules).
+  - name: meta
+    description: Build info and runtime config.
+
+paths:
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Health & meta
+  # ──────────────────────────────────────────────────────────────────────
+
+  /v1/healthz:
+    get:
+      tags: [health]
+      summary: Comprehensive health snapshot.
+      description: |
+        Always returns HTTP 200. The `status` field in the body is the verdict.
+        Consumers should treat any non-`healthy` status as actionable.
+      operationId: getHealth
+      responses:
+        "200":
+          description: Health snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+
+  /v1/version:
+    get:
+      tags: [meta]
+      summary: Build info.
+      operationId: getVersion
+      responses:
+        "200":
+          description: Version snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Version"
+
+  /v1/config:
+    get:
+      tags: [meta]
+      summary: Runtime configuration (read-only).
+      description: |
+        Reflects the add-on options in effect. Read-only from the API;
+        to change, edit the HA add-on configuration and restart.
+      operationId: getConfig
+      responses:
+        "200":
+          description: Effective runtime config.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeConfig"
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Aggregate state & events
+  # ──────────────────────────────────────────────────────────────────────
+
+  /v1/state:
+    get:
+      tags: [state]
+      summary: Full current state snapshot.
+      description: |
+        Returns the system + all zones in one call. Use `/v1/events` to
+        subscribe to deltas rather than polling this endpoint.
+      operationId: getState
+      responses:
+        "200":
+          description: Current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/State"
+
+  /v1/events:
+    get:
+      tags: [state]
+      summary: Server-Sent Events stream.
+      description: |
+        `text/event-stream` channel emitting:
+          * `state.snapshot` — full state on connect (and on reconnect without `Last-Event-ID`).
+          * `state.update`   — incremental change.
+          * `health.changed` — health roll-up transition.
+          * `hold.changed`   — hold activated or cleared (zone or whole-house).
+
+        Clients should reconnect with `Last-Event-ID` to resume. Event IDs are monotonic integers.
+      operationId: subscribeEvents
+      parameters:
+        - in: header
+          name: Last-Event-ID
+          required: false
+          schema: { type: integer, minimum: 0 }
+          description: Monotonic event ID to resume from; if omitted, a `state.snapshot` is sent first.
+      responses:
+        "200":
+          description: SSE stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  Each event is encoded as documented in MDN / WHATWG EventSource.
+                  Event data payloads conform to the `EventEnvelope` schema.
+
+  # ──────────────────────────────────────────────────────────────────────
+  # System
+  # ──────────────────────────────────────────────────────────────────────
+
+  /v1/system:
+    get:
+      tags: [system]
+      summary: Get system-wide state.
+      operationId: getSystem
+      responses:
+        "200":
+          description: System snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/System"
+    patch:
+      tags: [system]
+      summary: Update system-wide settings.
+      description: |
+        Currently only `mode` is writable. Changes are queued for the
+        thermostat's next poll (same model as upstream Infinitude).
+      operationId: patchSystem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SystemPatch"
+      responses:
+        "200":
+          description: Updated system state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/System"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/system/hold:
+    put:
+      tags: [system]
+      summary: Set the whole-house hold.
+      description: |
+        Whole-house hold does **not** support the `manual` activity
+        (by thermostat design). Only `home`, `away`, `sleep`, `wake`.
+      operationId: setWholeHouseHold
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WholeHouseHoldRequest"
+      responses:
+        "200":
+          description: Updated system state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/System"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+    delete:
+      tags: [system]
+      summary: Clear the whole-house hold.
+      operationId: clearWholeHouseHold
+      responses:
+        "200":
+          description: Updated system state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/System"
+
+  /v1/system/vacation:
+    get:
+      tags: [system]
+      summary: Get vacation window + setpoints + fan.
+      operationId: getVacation
+      responses:
+        "200":
+          description: Vacation config.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VacationConfig"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [system]
+      summary: Update vacation fields (sparse).
+      description: |
+        Sparse update. Send any subset of fields; unsupplied keys are
+        left alone. To exit vacation early, send `{"active": false}` —
+        this leaves `start`/`end` intact for next time.
+      operationId: patchVacation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VacationPatch"
+      responses:
+        "200":
+          description: Updated vacation config.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VacationConfig"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/system/humidity:
+    get:
+      tags: [system]
+      summary: Get per-mode humidity targets + equipment flags.
+      operationId: getHumidity
+      responses:
+        "200":
+          description: Humidity config.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HumidityConfig"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [system]
+      summary: Update per-mode humidity targets (sparse).
+      description: |
+        Only target RH fields are writable. `equipmentInstalled` and
+        `humidifierFan` are commissioning facts, not user preferences.
+        At least one target must be supplied; empty body → 422.
+      operationId: patchHumidity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HumidityPatch"
+      responses:
+        "200":
+          description: Updated humidity config.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HumidityConfig"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/system/service:
+    get:
+      tags: [system]
+      summary: Service-reminder intervals/flags + life-remaining percentages.
+      description: |
+        Read-only. Intervals and reminder-enabled flags come from
+        commissioning config; `levelPercent` per component comes from
+        telemetry (None until telemetry has landed).
+      operationId: getServiceReminders
+      responses:
+        "200":
+          description: Service reminders.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceReminders"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/system/idu:
+    get:
+      tags: [system]
+      summary: Indoor-unit equipment identity + commissioning knobs.
+      operationId: getIdu
+      responses:
+        "200":
+          description: Indoor unit config.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IduConfig"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/system/odu:
+    get:
+      tags: [system]
+      summary: Outdoor-unit equipment identity + airflow/lockout config.
+      operationId: getOdu
+      responses:
+        "200":
+          description: Outdoor unit config.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OduConfig"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Notifications (ring-buffer backfill — not emitted on SSE)
+  # ──────────────────────────────────────────────────────────────────────
+
+  /v1/notifications:
+    get:
+      tags: [state]
+      summary: Recent thermostat notifications (ring buffer).
+      description: |
+        REST-backed ring buffer of raw thermostat notification events, for
+        SSE reconnect backfill. Oldest-first; the buffer holds up to 50
+        entries. Notifications are **not** emitted on `/v1/events` —
+        they don't fit the spec's `EventEnvelope` enum, so a separate
+        REST endpoint owns them. Clients reconnecting from a gap can
+        page here using `receivedAt` as the cursor.
+      operationId: getNotifications
+      parameters:
+        - in: query
+          name: since
+          required: false
+          schema:
+            $ref: "#/components/schemas/IsoDateTime"
+          description: |
+            Return only notifications whose `receivedAt` is strictly
+            greater than this timestamp. Intended cursor for reconnect
+            backfill.
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 50
+      responses:
+        "200":
+          description: Notifications (oldest-first).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/NotificationEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Zones
+  # ──────────────────────────────────────────────────────────────────────
+
+  /v1/zones:
+    get:
+      tags: [zones]
+      summary: List zones.
+      operationId: listZones
+      responses:
+        "200":
+          description: All zones (including disabled).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Zone"
+
+  /v1/zones/{zoneId}:
+    parameters:
+      - $ref: "#/components/parameters/ZoneId"
+    get:
+      tags: [zones]
+      summary: Get a single zone.
+      operationId: getZone
+      responses:
+        "200":
+          description: Zone snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Zone"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [zones]
+      summary: Update a zone's live settings.
+      description: |
+        Used to set the "manual" setpoints for a zone. Sending `heat` and/or `cool`
+        here updates the `manual` activity and (unless `hold` is explicitly false)
+        activates the `manual` hold — matching the UX of the HA climate integration.
+      operationId: patchZone
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ZonePatch"
+      responses:
+        "200":
+          description: Updated zone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Zone"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/zones/{zoneId}/hold:
+    parameters:
+      - $ref: "#/components/parameters/ZoneId"
+    put:
+      tags: [zones]
+      summary: Set a zone hold.
+      operationId: setZoneHold
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ZoneHoldRequest"
+      responses:
+        "200":
+          description: Updated zone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Zone"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+    delete:
+      tags: [zones]
+      summary: Clear a zone hold.
+      operationId: clearZoneHold
+      responses:
+        "200":
+          description: Updated zone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Zone"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/zones/{zoneId}/activities:
+    parameters:
+      - $ref: "#/components/parameters/ZoneId"
+    get:
+      tags: [zones]
+      summary: List activities for a zone.
+      operationId: listActivities
+      responses:
+        "200":
+          description: Activities.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Activity"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/zones/{zoneId}/activities/{activityId}:
+    parameters:
+      - $ref: "#/components/parameters/ZoneId"
+      - $ref: "#/components/parameters/ActivityId"
+    get:
+      tags: [zones]
+      summary: Get one activity's settings.
+      operationId: getActivity
+      responses:
+        "200":
+          description: Activity.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Activity"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [zones]
+      summary: Update an activity's setpoints and/or fan.
+      operationId: patchActivity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ActivityPatch"
+      responses:
+        "200":
+          description: Updated activity.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Activity"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/zones/{zoneId}/schedule:
+    parameters:
+      - $ref: "#/components/parameters/ZoneId"
+    get:
+      tags: [zones]
+      summary: Get the weekly schedule for a zone.
+      operationId: getSchedule
+      responses:
+        "200":
+          description: Weekly schedule.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Schedule"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [zones]
+      summary: Replace the weekly schedule for a zone (atomic).
+      description: |
+        Replaces all 7 days in a single call. The body must include every day;
+        omitting a day is a validation error. This matches the legacy flow
+        (`POST /systems/infinitude` with full config) but with an explicit,
+        typed shape. The zone id comes from the path, not the body, to
+        eliminate silent path/body mismatches.
+      operationId: putSchedule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScheduleInput"
+      responses:
+        "200":
+          description: Updated schedule.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Schedule"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+# ──────────────────────────────────────────────────────────────────────
+# Components
+# ──────────────────────────────────────────────────────────────────────
+
+components:
+
+  parameters:
+    ZoneId:
+      in: path
+      name: zoneId
+      required: true
+      schema:
+        type: string
+        pattern: "^[1-9][0-9]*$"
+      description: Numeric zone identifier as a string (1, 2, …).
+      example: "1"
+
+    ActivityId:
+      in: path
+      name: activityId
+      required: true
+      schema:
+        $ref: "#/components/schemas/ActivityId"
+
+  responses:
+    NotFound:
+      description: Resource does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ValidationError:
+      description: Request body failed validation.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    BadRequest:
+      description: Request parameters failed validation (e.g. unknown query keys).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+
+    # ── Error model ───────────────────────────────────────────────────
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Stable machine-readable error code.
+              examples: ["validation_error", "not_found", "conflict", "upstream_error"]
+            message:
+              type: string
+            details:
+              type: array
+              items:
+                type: object
+                required: [path, issue]
+                properties:
+                  path:
+                    type: string
+                    description: JSON pointer into the request body.
+                  issue:
+                    type: string
+
+    # ── Enums ─────────────────────────────────────────────────────────
+
+    HvacMode:
+      type: string
+      enum: ["off", "heat", "cool", "auto", "fanonly"]
+      description: |
+        System HVAC mode.
+          * `off`     — heating and cooling disabled.
+          * `heat`    — heat only.
+          * `cool`    — cool only.
+          * `auto`    — heat/cool (thermostat's "heatcool").
+          * `fanonly` — fan only.
+
+    HvacAction:
+      type: string
+      enum: ["idle", "heating", "cooling", "dehumidifying", "fan", "off"]
+      description: What the zone is actively doing right now.
+
+    FanSpeed:
+      type: string
+      enum: ["off", "low", "med", "high"]
+      description: |
+        Thermostat fan speeds. `off` means the fan is driven by the
+        HVAC cycle; `low/med/high` force continuous circulation.
+        Enum values are quoted because YAML 1.1 parses unquoted `off`
+        as the boolean `false`.
+
+    ActivityId:
+      type: string
+      enum: [home, away, sleep, wake, manual]
+      description: |
+        Named activity profile.
+          * `home|away|sleep|wake` — scheduled activities with user-defined setpoints.
+          * `manual`               — ephemeral activity written to on manual setpoint changes.
+
+    SystemHoldActivity:
+      type: string
+      enum: [home, away, sleep, wake]
+      description: |
+        Activities usable for a whole-house hold. Note: `manual` is
+        deliberately omitted — the thermostat does not accept it at
+        the system level.
+
+    DayOfWeek:
+      type: string
+      enum: [Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday]
+
+    Temperature:
+      type: integer
+      minimum: 45
+      maximum: 99
+      description: Integer degrees Fahrenheit.
+
+    IsoDateTime:
+      type: string
+      format: date-time
+      description: |
+        ISO 8601 timestamp with an explicit `Z` suffix (UTC).
+        The API always emits and accepts `Z`-suffixed UTC timestamps;
+        clients render local time for the user.
+      pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z$"
+      examples: ["2026-04-17T22:30:00Z"]
+
+    LocalWallTime:
+      type: string
+      pattern: "^(?:[01][0-9]|2[0-3]):(?:[0-5][0-9])$"
+      description: |
+        24-hour `HH:MM` **wall-clock time local to the thermostat**.
+        Used only for recurring schedule periods where the semantic is
+        "every day at this wall-clock time" — not a specific moment.
+        All other time fields use `IsoDateTime`.
+      examples: ["06:00", "17:30"]
+
+    # ── Core resources ────────────────────────────────────────────────
+
+    System:
+      type: object
+      required:
+        - mode
+        - outdoorTemperature
+        - humidifierOn
+        - lastReportAt
+        - operatingStatusMessage
+        - hold
+        - serial
+      properties:
+        mode:
+          $ref: "#/components/schemas/HvacMode"
+        outdoorTemperature:
+          type: integer
+          description: Outdoor air temperature (°F).
+          example: 72
+        humidifierOn:
+          type: boolean
+        lastReportAt:
+          allOf:
+            - $ref: "#/components/schemas/IsoDateTime"
+          description: |
+            Server-side timestamp (UTC) of the most recent telemetry POST
+            from the thermostat. Used for freshness / staleness detection.
+        operatingStatusMessage:
+          type: string
+          description: Free-form status string from the thermostat ("", "idle", error text).
+        serial:
+          type: string
+          description: |
+            Thermostat serial number as reported by the device in its
+            telemetry POSTs. Stable per physical unit; used by clients
+            as the canonical device identifier.
+          example: "1234A56789"
+        hold:
+          $ref: "#/components/schemas/WholeHouseHold"
+
+    SystemPatch:
+      type: object
+      description: |
+        System-wide settings update. `mode` is currently the only writable
+        field; it is required because there is nothing else to supply.
+      required: [mode]
+      properties:
+        mode:
+          $ref: "#/components/schemas/HvacMode"
+      additionalProperties: false
+
+    Zone:
+      type: object
+      required:
+        - id
+        - name
+        - enabled
+        - temperature
+        - humidity
+        - heatSetpoint
+        - coolSetpoint
+        - fan
+        - damperPercent
+        - conditioning
+        - currentActivity
+        - hold
+      properties:
+        id:
+          type: string
+          pattern: "^[1-9][0-9]*$"
+        name:
+          type: string
+        enabled:
+          type: boolean
+        temperature:
+          type: integer
+          description: Current temperature (°F).
+        humidity:
+          type: integer
+          minimum: 0
+          maximum: 100
+        heatSetpoint:
+          $ref: "#/components/schemas/Temperature"
+        coolSetpoint:
+          $ref: "#/components/schemas/Temperature"
+        fan:
+          $ref: "#/components/schemas/FanSpeed"
+        damperPercent:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: |
+            Zone damper position as a 0–100 percentage. The thermostat
+            natively reports 0–15 (where 15 = fully open); the add-on
+            normalizes to 0–100 at the API boundary so clients don't
+            have to know the Carrier-internal scale.
+        conditioning:
+          $ref: "#/components/schemas/HvacAction"
+        currentActivity:
+          $ref: "#/components/schemas/ActivityId"
+        hold:
+          $ref: "#/components/schemas/ZoneHold"
+
+    ZonePatch:
+      type: object
+      description: |
+        Patch a zone's manual setpoints. If `activateHold` is true (default
+        when `heat` or `cool` is provided), the `manual` activity becomes
+        the held activity. At least one of `heat` or `cool` must be
+        supplied; an empty body is a no-op (current zone returned
+        unchanged).
+      properties:
+        heat:
+          $ref: "#/components/schemas/Temperature"
+        cool:
+          $ref: "#/components/schemas/Temperature"
+        activateHold:
+          type: boolean
+          default: true
+      additionalProperties: false
+      anyOf:
+        - required: [heat]
+        - required: [cool]
+
+    Activity:
+      type: object
+      required: [id, heat, cool, fan]
+      properties:
+        id:
+          $ref: "#/components/schemas/ActivityId"
+        heat:
+          $ref: "#/components/schemas/Temperature"
+        cool:
+          $ref: "#/components/schemas/Temperature"
+        fan:
+          $ref: "#/components/schemas/FanSpeed"
+
+    ActivityPatch:
+      type: object
+      description: |
+        Sparse update of an activity's setpoints and/or fan. At least one
+        of `heat`, `cool`, or `fan` must be supplied; an empty body is a
+        no-op (current activity returned unchanged).
+      properties:
+        heat:
+          $ref: "#/components/schemas/Temperature"
+        cool:
+          $ref: "#/components/schemas/Temperature"
+        fan:
+          $ref: "#/components/schemas/FanSpeed"
+      additionalProperties: false
+      anyOf:
+        - required: [heat]
+        - required: [cool]
+        - required: [fan]
+
+    SchedulePeriod:
+      type: object
+      required: [id, activity, time, enabled]
+      properties:
+        id:
+          type: integer
+          minimum: 1
+          maximum: 5
+        activity:
+          $ref: "#/components/schemas/ActivityId"
+        time:
+          $ref: "#/components/schemas/LocalWallTime"
+        enabled:
+          type: boolean
+
+    ScheduleDay:
+      type: object
+      required: [day, periods]
+      properties:
+        day:
+          $ref: "#/components/schemas/DayOfWeek"
+        periods:
+          type: array
+          minItems: 1
+          maxItems: 5
+          items:
+            $ref: "#/components/schemas/SchedulePeriod"
+
+    Schedule:
+      type: object
+      required: [zoneId, days]
+      properties:
+        zoneId:
+          type: string
+          pattern: "^[1-9][0-9]*$"
+        days:
+          type: array
+          minItems: 7
+          maxItems: 7
+          description: Exactly 7 entries, Monday through Sunday in that order.
+          items:
+            $ref: "#/components/schemas/ScheduleDay"
+
+    ScheduleInput:
+      type: object
+      description: |
+        Request body for `PUT /v1/zones/{zoneId}/schedule`. Zone id is
+        not part of the body — it comes from the path. `days` must contain
+        exactly 7 entries, Monday through Sunday in that order; each day
+        may appear only once. `prefixItems` pins the order so the schema
+        itself rules out duplicates.
+      required: [days]
+      properties:
+        days:
+          type: array
+          minItems: 7
+          maxItems: 7
+          description: Exactly 7 entries, Monday through Sunday in that order.
+          prefixItems:
+            - allOf:
+                - $ref: "#/components/schemas/ScheduleDay"
+                - properties:
+                    day: { const: Monday }
+            - allOf:
+                - $ref: "#/components/schemas/ScheduleDay"
+                - properties:
+                    day: { const: Tuesday }
+            - allOf:
+                - $ref: "#/components/schemas/ScheduleDay"
+                - properties:
+                    day: { const: Wednesday }
+            - allOf:
+                - $ref: "#/components/schemas/ScheduleDay"
+                - properties:
+                    day: { const: Thursday }
+            - allOf:
+                - $ref: "#/components/schemas/ScheduleDay"
+                - properties:
+                    day: { const: Friday }
+            - allOf:
+                - $ref: "#/components/schemas/ScheduleDay"
+                - properties:
+                    day: { const: Saturday }
+            - allOf:
+                - $ref: "#/components/schemas/ScheduleDay"
+                - properties:
+                    day: { const: Sunday }
+          items: false
+      additionalProperties: false
+
+    # ── Holds ────────────────────────────────────────────────────────
+
+    ZoneHold:
+      type: object
+      required: [active]
+      properties:
+        active:
+          type: boolean
+        activity:
+          oneOf:
+            - $ref: "#/components/schemas/ActivityId"
+            - type: "null"
+          description: |
+            Activity being held. `null` when `active = false` (no hold
+            in effect).
+        until:
+          oneOf:
+            - $ref: "#/components/schemas/IsoDateTime"
+            - type: "null"
+          description: |
+            End of the hold as a UTC `IsoDateTime` (`Z`-suffixed), or `null`
+            for indefinite. Only present when `active = true`.
+            The add-on translates to the thermostat's wall-clock `HH:MM`
+            when writing to the device.
+
+    WholeHouseHold:
+      type: object
+      required: [active]
+      properties:
+        active:
+          type: boolean
+        activity:
+          oneOf:
+            - $ref: "#/components/schemas/SystemHoldActivity"
+            - type: "null"
+          description: |
+            Activity being held. `null` when `active = false` (no hold
+            in effect).
+        until:
+          oneOf:
+            - $ref: "#/components/schemas/IsoDateTime"
+            - type: "null"
+
+    ZoneHoldRequest:
+      type: object
+      required: [activity]
+      properties:
+        activity:
+          $ref: "#/components/schemas/ActivityId"
+        until:
+          oneOf:
+            - $ref: "#/components/schemas/IsoDateTime"
+            - type: "null"
+          description: |
+            UTC `IsoDateTime` at which the hold should end. Omit or pass
+            `null` for an indefinite hold.
+      additionalProperties: false
+
+    WholeHouseHoldRequest:
+      type: object
+      required: [activity]
+      properties:
+        activity:
+          $ref: "#/components/schemas/SystemHoldActivity"
+        until:
+          oneOf:
+            - $ref: "#/components/schemas/IsoDateTime"
+            - type: "null"
+      additionalProperties: false
+
+    # ── State + events ────────────────────────────────────────────────
+
+    State:
+      type: object
+      required: [system, zones, lastUpdated]
+      properties:
+        system:
+          $ref: "#/components/schemas/System"
+        zones:
+          type: array
+          items:
+            $ref: "#/components/schemas/Zone"
+        lastUpdated:
+          type: string
+          format: date-time
+          description: Server timestamp of the most recent state mutation.
+
+    EventEnvelope:
+      type: object
+      required: [id, event, data]
+      properties:
+        id:
+          type: integer
+          minimum: 0
+        event:
+          type: string
+          enum:
+            - state.snapshot
+            - state.update
+            - health.changed
+            - hold.changed
+        data:
+          description: Payload schema varies by event type.
+          oneOf:
+            - $ref: "#/components/schemas/State"                  # state.snapshot
+            - $ref: "#/components/schemas/StateUpdatePayload"     # state.update
+            - $ref: "#/components/schemas/HealthChangedPayload"   # health.changed
+            - $ref: "#/components/schemas/HoldChangedPayload"     # hold.changed
+
+    StateUpdatePayload:
+      type: object
+      required: [resource, changes]
+      properties:
+        resource:
+          type: string
+          description: Dotted or slashed path, e.g. `system` or `zones/1`.
+        changes:
+          type: object
+          description: Partial JSON object containing only the changed fields.
+          additionalProperties: true
+
+    HealthChangedPayload:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        reason:
+          type: string
+
+    HoldChangedPayload:
+      type: object
+      required: [resource, state]
+      properties:
+        resource:
+          type: string
+          description: e.g. `zones/1/hold` or `system/hold`.
+        state:
+          type: string
+          enum: [active, cleared]
+        activity:
+          $ref: "#/components/schemas/ActivityId"
+        until:
+          oneOf:
+            - $ref: "#/components/schemas/IsoDateTime"
+            - type: "null"
+
+    # ── Health ────────────────────────────────────────────────────────
+
+    Health:
+      type: object
+      required: [status, timestamp, components, version]
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        timestamp:
+          type: string
+          format: date-time
+        components:
+          type: object
+          required: [thermostat, carrierCloud, stateStore, api]
+          properties:
+            thermostat:
+              $ref: "#/components/schemas/ThermostatHealth"
+            carrierCloud:
+              $ref: "#/components/schemas/CarrierCloudHealth"
+            stateStore:
+              $ref: "#/components/schemas/StateStoreHealth"
+            api:
+              $ref: "#/components/schemas/ApiHealth"
+        version:
+          $ref: "#/components/schemas/Version"
+
+    ThermostatHealth:
+      type: object
+      required:
+        - status
+        - expectedIntervalSeconds
+        - staleThresholdSeconds
+      properties:
+        status:
+          type: string
+          enum: [healthy, stale, unreachable]
+        lastContact:
+          type: string
+          format: date-time
+          nullable: true
+        lastContactAgeSeconds:
+          type: integer
+          minimum: 0
+          nullable: true
+        expectedIntervalSeconds:
+          type: integer
+          minimum: 1
+        staleThresholdSeconds:
+          type: integer
+          minimum: 1
+
+    CarrierCloudHealth:
+      type: object
+      required: [status, passReqsIntervalSeconds, consecutiveFailures]
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unreachable, disabled]
+        lastSuccess:
+          type: string
+          format: date-time
+          nullable: true
+        lastAttempt:
+          type: string
+          format: date-time
+          nullable: true
+        lastError:
+          type: string
+          nullable: true
+        passReqsIntervalSeconds:
+          type: integer
+          minimum: 10
+          maximum: 3600
+        consecutiveFailures:
+          type: integer
+          minimum: 0
+
+    StateStoreHealth:
+      type: object
+      required: [status, zonesTracked, pendingPushes]
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded]
+        zonesTracked:
+          type: integer
+          minimum: 0
+        pendingPushes:
+          type: integer
+          minimum: 0
+        oldestPendingPushAgeSeconds:
+          type: integer
+          minimum: 0
+          nullable: true
+
+    ApiHealth:
+      type: object
+      required: [status, uptimeSeconds, activeSseSubscribers]
+      properties:
+        status:
+          type: string
+          enum: [healthy]
+        uptimeSeconds:
+          type: integer
+          minimum: 0
+        activeSseSubscribers:
+          type: integer
+          minimum: 0
+
+    # ── Meta ──────────────────────────────────────────────────────────
+
+    Version:
+      type: object
+      required: [proxy, api, commit, builtAt]
+      properties:
+        proxy:
+          type: string
+          description: Semantic version of the add-on.
+        api:
+          type: string
+          description: API version tag (e.g. `v1`).
+        commit:
+          type: string
+          description: Short commit SHA at build time.
+        builtAt:
+          type: string
+          format: date-time
+
+    RuntimeConfig:
+      type: object
+      required: [passReqsIntervalSeconds, logLevel]
+      properties:
+        passReqsIntervalSeconds:
+          type: integer
+          minimum: 10
+          maximum: 3600
+        logLevel:
+          type: string
+          enum: [debug, info, warning, error]
+
+    # ── Vacation ─────────────────────────────────────────────────────
+
+    VacationConfig:
+      type: object
+      required: [active, heatSetpoint, coolSetpoint, fan]
+      properties:
+        active:
+          type: boolean
+        start:
+          oneOf:
+            - $ref: "#/components/schemas/IsoDateTime"
+            - type: "null"
+          description: Start of the vacation window (UTC).
+        end:
+          oneOf:
+            - $ref: "#/components/schemas/IsoDateTime"
+            - type: "null"
+          description: End of the vacation window (UTC).
+        heatSetpoint:
+          $ref: "#/components/schemas/Temperature"
+        coolSetpoint:
+          $ref: "#/components/schemas/Temperature"
+        fan:
+          $ref: "#/components/schemas/FanSpeed"
+
+    VacationPatch:
+      type: object
+      description: |
+        Sparse update. At least one property must be supplied; empty
+        body → 422. `start`/`end` may be cleared by sending `null`.
+        `anyOf` (not `minProperties`) is what schemathesis's coverage
+        generator respects when deciding whether an empty body is
+        schema-compliant.
+      properties:
+        active:
+          type: boolean
+        start:
+          oneOf:
+            - $ref: "#/components/schemas/IsoDateTime"
+            - type: "null"
+        end:
+          oneOf:
+            - $ref: "#/components/schemas/IsoDateTime"
+            - type: "null"
+        heatSetpoint:
+          $ref: "#/components/schemas/Temperature"
+        coolSetpoint:
+          $ref: "#/components/schemas/Temperature"
+        fan:
+          $ref: "#/components/schemas/FanSpeed"
+      additionalProperties: false
+      anyOf:
+        - required: [active]
+        - required: [start]
+        - required: [end]
+        - required: [heatSetpoint]
+        - required: [coolSetpoint]
+        - required: [fan]
+
+    # ── Humidity ─────────────────────────────────────────────────────
+
+    HumidityConfig:
+      type: object
+      required: [equipmentInstalled, humidifierFan]
+      properties:
+        equipmentInstalled:
+          type: boolean
+          description: |
+            Reflects `<cfghumid>on</cfghumid>` — presence of humidifier
+            hardware, not whether any target is set.
+        humidifierFan:
+          type: boolean
+        targetHome:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+        targetAway:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+        targetVacation:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+
+    HumidityPatch:
+      type: object
+      description: |
+        Sparse update of per-mode target RH. At least one target must
+        be supplied; empty body → 422.
+      properties:
+        targetHome:
+          type: integer
+          minimum: 0
+          maximum: 100
+        targetAway:
+          type: integer
+          minimum: 0
+          maximum: 100
+        targetVacation:
+          type: integer
+          minimum: 0
+          maximum: 100
+      additionalProperties: false
+      anyOf:
+        - required: [targetHome]
+        - required: [targetAway]
+        - required: [targetVacation]
+
+    # ── Service reminders ────────────────────────────────────────────
+
+    ServiceReminderItem:
+      type: object
+      required: [reminderEnabled, intervalMonths]
+      properties:
+        reminderEnabled:
+          type: boolean
+          description: |
+            Whether the user has armed this reminder (the thermostat's
+            `<*rmd>` flag).
+        intervalMonths:
+          type: integer
+          minimum: 0
+          description: Installer-configured servicing cadence, in months.
+        levelPercent:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+          description: |
+            Life remaining (0 = due). Null until telemetry has landed.
+
+    FilterReminder:
+      allOf:
+        - $ref: "#/components/schemas/ServiceReminderItem"
+        - type: object
+          properties:
+            filterType:
+              type: string
+              nullable: true
+              description: |
+                Installer-set filter-type label (e.g. "air filter",
+                "media filter"). Null when unset.
+
+    ServiceReminders:
+      type: object
+      required: [filter, uv, humidifier, ventilator]
+      properties:
+        filter:
+          $ref: "#/components/schemas/FilterReminder"
+        uv:
+          $ref: "#/components/schemas/ServiceReminderItem"
+        humidifier:
+          $ref: "#/components/schemas/ServiceReminderItem"
+        ventilator:
+          $ref: "#/components/schemas/ServiceReminderItem"
+
+    # ── Indoor/outdoor unit equipment ────────────────────────────────
+
+    IduConfig:
+      type: object
+      required: [type, auxiliaryTerminalAvailable]
+      properties:
+        type:
+          type: string
+          description: |
+            Wire string for indoor-unit type (e.g. `fancoilelectric`,
+            `furnace`). Left open for forward-compat with future
+            `idutype` values.
+        elevationFeet:
+          type: integer
+          nullable: true
+          description: |
+            Installation elevation. Null means installer left it unset;
+            zero is a legitimate sea-level value.
+        auxiliaryTerminalAvailable:
+          type: boolean
+
+    OduConfig:
+      type: object
+      required:
+        - type
+        - coolAirflowProfile
+        - heatAirflowProfile
+        - dehumidifyAirflowProfile
+        - defrostInterval
+      properties:
+        type:
+          type: string
+          description: Wire string for outdoor-unit type.
+        coolAirflowProfile:
+          type: string
+          description: e.g. `comfort`, `efficiency`.
+        heatAirflowProfile:
+          type: string
+        dehumidifyAirflowProfile:
+          type: string
+        coolLockoutTemp:
+          type: integer
+          nullable: true
+          description: Null when the installer hasn't set a threshold.
+        heatLockoutTemp:
+          type: integer
+          nullable: true
+        defrostInterval:
+          type: string
+
+    # ── Notifications (REST-only; not on SSE) ────────────────────────
+
+    NotificationChangeEntry:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+        zone:
+          type: string
+          nullable: true
+
+    NotificationBody:
+      type: object
+      required: [type, code, message, timestamp, changes]
+      properties:
+        type:
+          type: string
+          description: |
+            Always `confirmation` in observed traffic, but left open for
+            future alert/warning shapes.
+        code:
+          type: integer
+        message:
+          type: string
+        timestamp:
+          allOf:
+            - $ref: "#/components/schemas/IsoDateTime"
+          description: Thermostat's wall-clock at emission.
+        changes:
+          type: array
+          items:
+            $ref: "#/components/schemas/NotificationChangeEntry"
+
+    NotificationEnvelope:
+      type: object
+      required: [serial, receivedAt, event]
+      description: |
+        Stored-and-served notification: a body plus our receive
+        metadata. Clients doing reconnect backfill use `receivedAt`
+        as their cursor — the thermostat's own `timestamp` can go
+        backwards across resets, so it's not a reliable ordering key.
+      properties:
+        serial:
+          type: string
+        receivedAt:
+          allOf:
+            - $ref: "#/components/schemas/IsoDateTime"
+          description: Server-side timestamp when the notification landed.
+        event:
+          $ref: "#/components/schemas/NotificationBody"

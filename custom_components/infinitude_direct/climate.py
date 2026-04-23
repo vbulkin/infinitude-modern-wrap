@@ -16,7 +16,6 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
-    DAMPER_RAW_MAX,
     DEFAULT_COOL_SP,
     DEFAULT_HEAT_SP,
     DOMAIN,
@@ -33,6 +32,15 @@ from .const import (
 from .coordinator import InfinitudeDataCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+_CONDITIONING_TO_ACTION = {
+    "heating": HVACAction.HEATING,
+    "cooling": HVACAction.COOLING,
+    "dehumidifying": HVACAction.DRYING,
+    "fan": HVACAction.FAN,
+    "off": HVACAction.OFF,
+    "idle": HVACAction.IDLE,
+}
 
 
 async def async_setup_entry(
@@ -91,14 +99,17 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
         return None
 
     @property
+    def _system_mode(self) -> str:
+        return self.coordinator.data.get("system", {}).get("mode", "off")
+
+    @property
     def available(self) -> bool:
         return super().available and not self.coordinator.data.get("stale", False)
 
     @property
     def supported_features(self) -> ClimateEntityFeature:
         features = ClimateEntityFeature.PRESET_MODE
-        mode = self.coordinator.data.get("mode", "off")
-        if mode == "auto":
+        if self._system_mode == "auto":
             features |= ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
         else:
             features |= ClimateEntityFeature.TARGET_TEMPERATURE
@@ -107,15 +118,15 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
     @property
     def current_temperature(self) -> float | None:
         z = self._zone_data
-        if z and z.get("temp"):
-            return float(z["temp"])
+        if z and z.get("temperature") is not None:
+            return float(z["temperature"])
         return None
 
     @property
     def current_humidity(self) -> int | None:
         z = self._zone_data
-        if z and z.get("rh"):
-            return int(z["rh"])
+        if z and z.get("humidity") is not None:
+            return int(z["humidity"])
         return None
 
     @property
@@ -123,33 +134,30 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
         z = self._zone_data
         if not z:
             return None
-        mode = self.coordinator.data.get("mode", "off")
-        if mode == "heat" and z.get("htsp"):
-            return float(z["htsp"])
-        if mode == "cool" and z.get("clsp"):
-            return float(z["clsp"])
+        mode = self._system_mode
+        if mode == "heat" and z.get("heatSetpoint") is not None:
+            return float(z["heatSetpoint"])
+        if mode == "cool" and z.get("coolSetpoint") is not None:
+            return float(z["coolSetpoint"])
         return None
 
     @property
     def target_temperature_high(self) -> float | None:
         z = self._zone_data
-        mode = self.coordinator.data.get("mode", "off")
-        if mode == "auto" and z and z.get("clsp"):
-            return float(z["clsp"])
+        if self._system_mode == "auto" and z and z.get("coolSetpoint") is not None:
+            return float(z["coolSetpoint"])
         return None
 
     @property
     def target_temperature_low(self) -> float | None:
         z = self._zone_data
-        mode = self.coordinator.data.get("mode", "off")
-        if mode == "auto" and z and z.get("htsp"):
-            return float(z["htsp"])
+        if self._system_mode == "auto" and z and z.get("heatSetpoint") is not None:
+            return float(z["heatSetpoint"])
         return None
 
     @property
     def hvac_mode(self) -> HVACMode:
-        mode = self.coordinator.data.get("mode", "off")
-        ha_mode = INFINITUDE_TO_HA_HVAC.get(mode, "off")
+        ha_mode = INFINITUDE_TO_HA_HVAC.get(self._system_mode, "off")
         return HVACMode(ha_mode)
 
     @property
@@ -158,57 +166,46 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
         if not z:
             return HVACAction.OFF
         cond = z.get("conditioning", "idle")
-        op_mode = self.coordinator.data.get("op_mode", "")
-        if cond == "active_heat":
-            return HVACAction.HEATING
-        if cond == "active_cool":
-            # Carrier reports active_cool for both cooling and dehum (compressor
-            # runs for both). The system's status-level mode distinguishes intent.
-            if op_mode == "dehumidify":
-                return HVACAction.DRYING
-            return HVACAction.COOLING
-        if "dehum" in cond:
-            return HVACAction.DRYING
-        mode = self.coordinator.data.get("mode", "off")
-        if mode == "off":
+        action = _CONDITIONING_TO_ACTION.get(cond, HVACAction.IDLE)
+        if action == HVACAction.IDLE and self._system_mode == "off":
             return HVACAction.OFF
-        return HVACAction.IDLE
+        return action
 
     @property
     def preset_mode(self) -> str | None:
         z = self._zone_data
         if not z:
             return None
-        if z.get("hold") and z.get("holdActivity"):
-            return z["holdActivity"]
+        hold = z.get("hold") or {}
+        if hold.get("active") and hold.get("activity"):
+            return hold["activity"]
         return z.get("currentActivity")
 
     @property
     def extra_state_attributes(self) -> dict:
-        attrs = {}
+        attrs: dict = {}
         z = self._zone_data
         if z:
-            if z.get("damper"):
-                try:
-                    attrs["damper_position"] = round(int(z["damper"]) / DAMPER_RAW_MAX * 100)
-                except (ValueError, TypeError):
-                    _LOGGER.warning("Invalid damper value '%s' for zone %s", z["damper"], self._zone_id)
+            if z.get("damperPercent") is not None:
+                attrs["damper_position"] = int(z["damperPercent"])
             if z.get("fan"):
                 attrs["fan_mode"] = z["fan"]
-            attrs["hold_active"] = z.get("hold", False)
-            if z.get("holdActivity"):
-                attrs["hold_activity"] = z["holdActivity"]
-            if z.get("otmr"):
-                attrs["hold_until"] = z["otmr"]
-        oat = self.coordinator.data.get("oat")
-        if oat:
+            hold = z.get("hold") or {}
+            attrs["hold_active"] = bool(hold.get("active"))
+            if hold.get("activity"):
+                attrs["hold_activity"] = hold["activity"]
+            if hold.get("until"):
+                attrs["hold_until"] = hold["until"]
+        system = self.coordinator.data.get("system", {})
+        oat = system.get("outdoorTemperature")
+        if oat is not None:
             attrs["outdoor_temperature"] = float(oat)
-        wh = self.coordinator.data.get("whole_house_hold", {})
-        attrs["whole_house_hold_active"] = wh.get("hold", False)
-        if wh.get("holdActivity"):
-            attrs["whole_house_hold_activity"] = wh["holdActivity"]
-        if wh.get("otmr"):
-            attrs["whole_house_hold_until"] = wh["otmr"]
+        wh = system.get("hold") or {}
+        attrs["whole_house_hold_active"] = bool(wh.get("active"))
+        if wh.get("activity"):
+            attrs["whole_house_hold_activity"] = wh["activity"]
+        if wh.get("until"):
+            attrs["whole_house_hold_until"] = wh["until"]
         return attrs
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
@@ -222,10 +219,10 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
             _LOGGER.warning("set_temperature: zone %s data not available", self._zone_id)
             return
 
-        current_htsp = int(float(z.get("htsp") or DEFAULT_HEAT_SP))
-        current_clsp = int(float(z.get("clsp") or DEFAULT_COOL_SP))
+        current_htsp = int(z.get("heatSetpoint") or DEFAULT_HEAT_SP)
+        current_clsp = int(z.get("coolSetpoint") or DEFAULT_COOL_SP)
 
-        mode = self.coordinator.data.get("mode", "off")
+        mode = self._system_mode
 
         if "target_temp_low" in kwargs and "target_temp_high" in kwargs:
             new_htsp = max(MIN_HEAT_TEMP, min(MAX_HEAT_TEMP, int(kwargs["target_temp_low"])))
@@ -247,9 +244,7 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
         await self.coordinator.async_set_activity_temps(
             self._zone_id, "manual", new_htsp, new_clsp
         )
-        await self.coordinator.async_set_hold(
-            self._zone_id, "manual"
-        )
+        await self.coordinator.async_set_hold(self._zone_id, "manual", "auto")
         await self.coordinator.async_request_refresh()
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:

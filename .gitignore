@@ -7,3 +7,14 @@ __pycache__/
 .venv/
 .claude/
 .mcp.json
+
+# Capture proxy output (raw, unscrubbed — see tools/capture/)
+captures/
+tools/scrub/_scratch_*.py
+
+# Burn-test / runtime artifacts from local development
+.coverage
+addon/.coverage
+addon/data/
+addon/metadata_samples/
+design/samples/
