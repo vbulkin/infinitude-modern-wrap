@@ -12,6 +12,8 @@ server settings and at what interval.
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
 from urllib.parse import unquote_to_bytes
 
 from fastapi import APIRouter, Request, Response
@@ -37,12 +39,40 @@ DIRECTIVE_PING_RATE_CLEAN = 12
 DIRECTIVE_PING_RATE_DIRTY = 20
 
 # TODO: metadata POSTs we currently accept-and-discard. Each one carries
-# data we may eventually surface northbound; logging hits at INFO lets us
-# confirm what a given thermostat actually sends before investing in a
-# parser. Known subpaths observed in live captures:
+# data we may eventually surface northbound. The fallback handler now
+# dumps the first body seen per subpath so we have a real sample for
+# parser work; subsequent hits just log byte count. Known subpaths
+# observed in live captures:
 #   profile          — hardware/firmware identity
 #   dealer           — dealer contact record
 #   utility_events   — utility-rate / demand-response schedule
+#   history          — observed 2026-04-21, ~1118 bytes per POST
+_METADATA_SAMPLE_DIR = Path(
+    os.getenv("INFINITUDE_METADATA_SAMPLE_DIR", "metadata_samples")
+)
+_SEEN_SUBPATHS: set[str] = set()
+
+
+def _capture_metadata_sample(subpath: str, raw: bytes) -> bool:
+    """First-seen dedupe: write the unwrapped XML body on first
+    encounter of a subpath so we have a payload sample to drive parser
+    work, then skip on subsequent hits. Returns True if a sample was
+    written this call. Write failures are non-fatal — we still 200 the
+    thermostat so it doesn't retry.
+    """
+    if subpath in _SEEN_SUBPATHS:
+        return False
+    _SEEN_SUBPATHS.add(subpath)
+    try:
+        _METADATA_SAMPLE_DIR.mkdir(parents=True, exist_ok=True)
+        safe = subpath.replace("/", "_") or "root"
+        (_METADATA_SAMPLE_DIR / f"{safe}.xml").write_bytes(raw)
+        return True
+    except OSError as e:
+        logger.warning(
+            "metadata sample write failed subpath=%s err=%s", subpath, e
+        )
+        return False
 
 
 def _directive_xml(config_has_changes: bool) -> bytes:
@@ -169,14 +199,31 @@ def create_southbound_router(store: StateStore) -> APIRouter:
         serial: str, subpath: str, request: Request
     ) -> Response:
         body = await request.body()
+        captured = _capture_metadata_sample(subpath, _unwrap_form(body))
         logger.info(
-            "unhandled thermostat POST serial=%s subpath=%s bytes=%d",
+            "unhandled thermostat POST serial=%s subpath=%s bytes=%d%s",
             serial, subpath, len(body),
+            " sample_captured" if captured else "",
         )
         return Response(status_code=200)
 
     @router.get("/Alive")
     async def heartbeat() -> Response:
         return Response(content=b"alive", media_type="text/plain")
+
+    # Stubs for thermostat GETs we don't implement but silence to keep
+    # logs clean. utility_events is a demand-response rate schedule the
+    # device polls from Carrier's cloud; manifest is a firmware-update
+    # check. Returning empty 200 bodies matches upstream Perl Infinitude.
+    @router.get("/systems/{serial}/utility_events")
+    async def get_utility_events(serial: str) -> Response:
+        return Response(
+            content=b'<?xml version="1.0" encoding="UTF-8"?>\n<utility_events/>',
+            media_type="application/xml",
+        )
+
+    @router.get("/manifest")
+    async def get_manifest() -> Response:
+        return Response(content=b"", media_type="application/octet-stream")
 
     return router
