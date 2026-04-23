@@ -6,7 +6,7 @@ MODEL = "Infinity"
 
 CONF_HOST = "host"
 
-DEFAULT_HOST = "http://local-infinitude:3000"
+DEFAULT_HOST = "http://local-infinitude:3001"
 SCAN_INTERVAL_SECONDS = 30
 
 # Temperature bounds (Fahrenheit)

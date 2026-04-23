@@ -32,7 +32,7 @@ servers:
       host:
         default: local-infinitude
       port:
-        default: "3000"
+        default: "3001"
 
 tags:
   - name: health

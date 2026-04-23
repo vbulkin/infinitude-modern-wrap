@@ -20,6 +20,6 @@ RUN pip install --no-cache-dir --break-system-packages .
 COPY run.sh /run.sh
 RUN chmod +x /run.sh
 
-EXPOSE 3000
+EXPOSE 3001
 
 CMD ["/run.sh"]

@@ -81,7 +81,7 @@ Features across cards:
 1. Add this repository to your Home Assistant Add-on Store.
 2. Install the **Infinitude Direct** add-on.
 3. Configure your thermostat's `pass_reqs` interval and optional `serial_tty` in the add-on settings.
-4. Start the add-on — the proxy will be available on port 3000.
+4. Start the add-on — the proxy will be available on port 3001.
 
 ### Integration (HACS)
 
@@ -89,7 +89,7 @@ Features across cards:
 2. Install **Infinitude Direct**.
 3. Restart Home Assistant.
 4. Go to **Settings → Devices & Services → Add Integration** and search for **Infinitude Direct**.
-5. Enter the Infinitude proxy URL (default: `http://local-infinitude:3000`).
+5. Enter the Infinitude proxy URL (default: `http://local-infinitude:3001`).
 6. The custom card, Lovelace resource, and HVAC dashboard are created automatically.
 
 ## Configuration
@@ -107,7 +107,7 @@ The integration is configured entirely through the UI. During setup you provide 
 
 ```
 Thermostat <──> Infinitude Proxy (Add-on) <──> HA Integration
-                     :3000                    (local polling)
+                     :3001                    (local polling)
 ```
 
 The integration polls `systems.json` and `status.json` from the Infinitude proxy every 30 seconds and parses zone data including temperatures, setpoints, activity schedules, and conditioning state.

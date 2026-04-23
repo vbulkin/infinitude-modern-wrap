@@ -80,8 +80,8 @@ Replay: if the proxy restarts or the thermostat reboots with stale state, pendin
 ```bash
 cd addon
 pip install -e '.[dev]'
-uvicorn infinitude_proxy.main:app --reload --port 3000
-# then: open http://localhost:3000/docs for the live OpenAPI UI
+uvicorn infinitude_proxy.main:app --reload --port 3001
+# then: open http://localhost:3001/docs for the live OpenAPI UI
 ```
 
 ## Running tests
@@ -97,5 +97,5 @@ Current coverage: 229 tests across parser, mutations, state store, persistence, 
 
 ```bash
 docker build --build-arg BUILD_FROM=ghcr.io/home-assistant/amd64-base:latest -t infinitude-modern .
-docker run --rm -p 3000:3000 infinitude-modern
+docker run --rm -p 3001:3001 infinitude-modern
 ```
