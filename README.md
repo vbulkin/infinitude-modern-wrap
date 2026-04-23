@@ -4,13 +4,15 @@ This repository contains two components for controlling Carrier Infinity/Bryant 
 
 ## What's Included
 
-### 1. Home Assistant Add-on — Infinitude Proxy (`infinitude/`)
+### 1. Home Assistant Add-on — Infinitude Modern Proxy (`addon/`)
 
-A Home Assistant add-on (app) that runs the [Infinitude](https://github.com/nebulous/infinitude) reverse-proxy inside HA. Carrier/Bryant Infinity thermostats must be configured to point to this proxy instead of the Carrier cloud, allowing local control and data access.
+A Home Assistant add-on (app) running a Python/FastAPI reverse-proxy for Carrier/Bryant Infinity thermostats. The thermostat is redirected at the LAN layer to this proxy instead of the Carrier cloud, enabling local control and a typed OpenAPI northbound API that the HACS integration below consumes.
 
-Built on the [`nebulous/infinitude`](https://hub.docker.com/r/nebulous/infinitude) Docker image ([source](https://github.com/nebulous/infinitude)).
+Ships as `Infinitude Modern Proxy` in the add-on store, binds port **3001**, and exposes `/v1/*` JSON + `/v1/events` SSE endpoints. OpenAPI spec lives at [`design/openapi.yaml`](design/openapi.yaml). Source lives under [`addon/`](addon/).
 
-The add-on includes a built-in web UI (`infinitude-ui.html`) for full thermostat management: per-zone temperature control, hold management, weekly schedule editing, and comfort profile configuration.
+### 1b. Legacy Add-on — Infinitude Direct (`infinitude/`)
+
+The prior Perl/Mojolicious add-on (built on [`nebulous/infinitude`](https://github.com/nebulous/infinitude)) is still in the repo under [`infinitude/`](infinitude/) as a rollback target during the cutover window ([design/CUTOVER.md](design/CUTOVER.md)). It binds port 3000. New installs should use the Modern Proxy above; the legacy add-on is scheduled for removal after two stable releases of the Python rewrite ([DESIGN.md §13 Phase 7](design/DESIGN.md#13-migration-plan)).
 
 ### 2. HACS Integration — Native HA Dashboard (`custom_components/infinitude_direct`)
 
@@ -76,12 +78,14 @@ Features across cards:
 
 ## Installation
 
-### Add-on (Infinitude Proxy)
+### Add-on (Infinitude Modern Proxy)
 
 1. Add this repository to your Home Assistant Add-on Store.
-2. Install the **Infinitude Direct** add-on.
-3. Configure your thermostat's `pass_reqs` interval and optional `serial_tty` in the add-on settings.
-4. Start the add-on — the proxy will be available on port 3001.
+2. Install the **Infinitude Modern Proxy** add-on.
+3. Configure `pass_reqs` (Carrier passthrough cadence) and `log_level` in the add-on options.
+4. Start the add-on — the proxy will be available on port **3001**, both on the LAN and through HA ingress.
+
+See [design/CUTOVER.md](design/CUTOVER.md) for redirecting the thermostat to the proxy at the LAN layer.
 
 ### Integration (HACS)
 
@@ -94,23 +98,23 @@ Features across cards:
 
 ## Configuration
 
-The integration is configured entirely through the UI. During setup you provide the Infinitude proxy host URL. The integration validates the connection by querying the `/status.json` endpoint.
+The integration is configured entirely through the UI. During setup you provide the Infinitude Modern Proxy URL; the integration validates the connection by calling `/v1/healthz` on the proxy.
 
 ### Add-on Options
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `pass_reqs` | int | 60 | Seconds between thermostat pass-through requests |
-| `serial_tty` | string | `""` | Serial device path (leave empty for network-only) |
+| `pass_reqs` | int | 60 | Seconds between Carrier cloud passthrough requests (10–3600) |
+| `log_level` | enum | `info` | Proxy log verbosity (`debug` / `info` / `warning` / `error`) |
 
 ## Architecture
 
 ```
-Thermostat <──> Infinitude Proxy (Add-on) <──> HA Integration
-                     :3001                    (local polling)
+Thermostat <──> Infinitude Modern Proxy (Add-on) <──> HA Integration
+                            :3001                       (local polling)
 ```
 
-The integration polls `systems.json` and `status.json` from the Infinitude proxy every 30 seconds and parses zone data including temperatures, setpoints, activity schedules, and conditioning state.
+The integration polls `/v1/state` and `/v1/healthz` on the proxy every 30 seconds and maps zones, setpoints, activities, schedules, and conditioning state onto HA entities. Server-side SSE (`/v1/events`) is live on the proxy; the integration's SSE client switch is tracked as [DESIGN.md §13 Phase 6](design/DESIGN.md#13-migration-plan).
 
 ## Development
 
@@ -149,7 +153,16 @@ Creates a GitHub Release with auto-generated notes (run separately when desired)
 
 ### Version Management
 
-- **Pre-commit hook** — Bumps the patch version in `manifest.json`, `config.yaml`, `infinitude-ui.html`, and `src/infinitude-hvac-card.js`, rebuilds the card via esbuild, and stages everything.
+The Python add-on and the HACS integration share a single version number; four files carry it:
+
+- `addon/config.yaml` (canonical source)
+- `addon/pyproject.toml`
+- `custom_components/infinitude_direct/manifest.json`
+- `src/shared.js` (Lovelace card banner)
+
+Hooks and scripts:
+
+- **Pre-commit hook** — On `main` only, and only for stable releases (no `-alpha.N` / `-beta.N` / `-rc.N` suffix), bumps the patch version in `addon/config.yaml`, `custom_components/infinitude_direct/manifest.json`, and `src/shared.js`; rebuilds the Lovelace card via `npm run build`; stages everything. Pre-release versions are bumped manually (including `addon/pyproject.toml`, which the hook does not touch).
 - **Post-commit hook** — Creates an annotated git tag `v{version}` from the manifest version.
 - **`npm run release`** — Pushes commits and tags to remote.
 - **`npm run gh-release`** — Creates a GitHub Release with auto-generated notes (manual, separate step).

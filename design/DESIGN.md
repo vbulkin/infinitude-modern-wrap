@@ -470,13 +470,13 @@ Phases, each shippable independently:
 3. **Phase 2 — New add-on scaffolding.** New top-level `addon/` directory with FastAPI app, Dockerfile, southbound stubs, generated Pydantic models. ✅
 4. **Phase 3 — Southbound re-implementation.** Thermostat POST handlers (`/status`, `/config` GET+POST, `/notifications`, `/idu_config`, `/odu_config`), SQLite persistence, replay dispatcher on proxy-restart/thermostat-reboot. ✅
 5. **Phase 4 — Northbound write endpoints.** Holds (zone + whole-house), setpoints, activities, schedules, vacation, humidity, mode, service reminders, spec-shape SSE events. ✅
-6. **Phase 5 — HA integration cutover.** A single PR updates the Python coordinator to the new API. Bump major version of the integration. Old add-on is deprecated in the README. ⏳
-7. **Phase 6 — SSE push client.** HA coordinator consumes `/v1/events` instead of polling; polling remains as a fallback. ⏳ (server-side SSE shipped in Phase 4; client switch is this phase.)
+6. **Phase 5 — HA integration cutover.** ✅ `custom_components/infinitude_direct/` hits `/v1/*` for state, healthz, zones, activities, schedules, and whole-house hold. Integration ships on the same `2.0.0-alpha.x` train as the add-on. Legacy `/api/*?mode=…` code path is gone.
+7. **Phase 6 — SSE push client.** ⏳ The coordinator still polls `/v1/state` + `/v1/healthz` on a 30 s cadence. Server-side SSE (`/v1/events`) is live from Phase 4; the client hasn't been switched yet.
 8. **Phase 7 — Legacy add-on removed.** After a deprecation window (~2 releases), the Perl add-on is removed from the repo. ⏳
 
-Carrier cloud passthrough (`pass_reqs` cadence) is not yet implemented — the proxy runs local-only today. It can ship alongside or after Phase 5; the northbound API surface does not depend on it.
+Carrier cloud passthrough (`pass_reqs` cadence) is not yet implemented — the proxy runs local-only today. It can ship alongside or after Phase 6; the northbound API surface does not depend on it.
 
-No dual-stack period is planned; the HA integration tracks the API version it knows.
+No dual-stack period is planned; the HA integration tracks the API version it knows. Because Phases 5 and 6 were telescoped onto the same alpha train as the add-on, both the add-on (`addon/pyproject.toml`) and the integration (`custom_components/infinitude_direct/manifest.json`) share a single version number (`2.0.0-alpha.x`) and are released together.
 
 ---
 

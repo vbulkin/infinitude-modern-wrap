@@ -7,56 +7,58 @@ Companion to [`DESIGN.md`](./DESIGN.md) §13 (migration phases). This doc answer
 ## Scope
 
 - **In scope:** switching a single HA host's thermostat from the Perl add-on to the Python add-on, including pre-cutover validation, rollback procedure, and post-cutover follow-ups.
-- **Out of scope:** HA integration rewrite and legacy HTML UI refresh. Those start *after* cutover lands; they're tracked separately and are explicitly sequenced post-cutover so we don't chase moving targets (see DESIGN.md §13 Phase 5/6).
+- **Out of scope:** the HA integration and the Lovelace cards. Both are being developed in parallel on the same alpha train as the add-on and are not gated on cutover; when cutover lands, they're already there waiting for live data (see "Post-cutover sequencing" below for current status, and DESIGN.md §13 Phase 5/6 for long-term).
 
 ## Key facts driving the plan
 
 - **Single thermostat, single HA host.** Not a fleet migration — no canary / percentage rollout.
-- **Thermostat addressing is redirect-based.** The thermostat speaks to whatever host/IP the LAN's DNS or hosts-override sends its Carrier hostnames to. Currently that's the HA IP on port 3000. Switching proxies means swapping what's bound to that port, not re-flashing the thermostat.
-- **Both add-ons claim port 3000.** Can't run both at once on the same port; parallel validation runs require the new add-on on a different port (e.g. 3001) and the tester to send traffic explicitly to that port.
+- **Thermostat addressing is redirect-based.** The thermostat speaks to whatever host/IP the LAN's DNS or hosts-override sends its Carrier hostnames to. A port-forward / iptables rule on the HA host (or router) then maps that inbound traffic to whichever add-on is serving. Cutover happens at the LAN redirect layer, not inside HA.
+- **The two add-ons live on different ports and coexist.** As of add-on `2.0.0-alpha.5`, the Python add-on binds `3001` (container + host + ingress) and the legacy Perl add-on binds `3000`. Both can run simultaneously; only the LAN-redirect rule decides which one the thermostat actually talks to. This replaces the earlier "swap what's bound to port 3000" plan.
 - **Persistence is local.** The Python add-on's SQLite lives in `/data/` (HA add-on convention). A full rehydrate from scratch takes one `<config>` POST (≤ a few seconds after the first thermostat tick). No data migration from the Perl add-on is required or possible — shapes differ.
+- **Cold-start is now a visible state.** As of alpha.8, `/v1/state` returns HTTP 503 (`error.code: upstream_unavailable`) until the first `<config>` POST arrives. Pre-alpha.8 returned demo/canned data; that is gone. Validation steps must account for the 503 window.
 - **Carrier cloud passthrough is not yet implemented** in the Python proxy. Cutover with passthrough-dependent features (e.g. MyInfinity app → thermostat changes) will delay those commands by up to the next manual hard-refresh. See §"Open items" below.
 
 ## Prerequisites (must be green before cutover)
 
-- [ ] **Full Python test suite green** (`pytest` in `addon/`). Current: 224 passing.
+- [ ] **Full Python test suite green** (`pytest` in `addon/`). Current: 229 passing.
 - [ ] **Schemathesis contract smoke** against a live Python add-on instance (openapi.yaml round-trip).
 - [ ] **Boot-sequence replay** — the Perl add-on's captured thermostat boot POSTs (`boot_01..06`) drive the Python southbound handler without error; state projects to the expected shape on `GET /v1/state`.
 - [ ] **Steady-state replay** — `telemetry_steady.xml` POSTed 10× in a row; state-store stays internally consistent, SSE emits one `state.update` per POST.
 - [ ] **Write round-trip** — PATCH `/v1/zones/1` → `config_dirty=true` → directive signals → manual GET `/systems/{serial}/config` serves mutated XML → pending row clears. Covered by tests; re-verify against a live instance.
 - [ ] **Restart replay** — kill/restart the add-on between a pending write and the thermostat's `GET /config`: on restart, the pending row survives, `apply_config` replays it onto the next thermostat POST, and the mutation is not lost.
 - [ ] **Docker image builds clean** for all four HA architectures listed in `config.yaml` (`aarch64 / amd64 / armhf / armv7`).
-- [ ] **Capture fixtures frozen** — `addon/tests/fixtures/thermostat/` contains one full boot sequence + one user-action telemetry delta + one notifications batch from the actual thermostat that's about to be cut over. Pull fresh captures if the on-device firmware has moved since the last snapshot.
+- [ ] **Capture fixtures frozen** — `tests/fixtures/thermostat/` contains one full boot sequence + one user-action telemetry delta + one notifications batch from the actual thermostat that's about to be cut over. Pull fresh captures if the on-device firmware has moved since the last snapshot.
 - [ ] **`/v1/healthz` returns `status: healthy`** once live telemetry is flowing (stale threshold 300 s).
+- [ ] **`/v1/state` returns 503 before first config POST**, and shape-correct JSON with non-null live fields after. Confirm the 503 envelope is `{"error": {"code": "upstream_unavailable", "message": "..."}}`.
 
-## Pre-cutover: parallel-run validation window
+## Pre-cutover: smoke check
 
-Goal: prove the Python proxy handles the specific thermostat's traffic before retiring the Perl one.
+Goal: prove the Python proxy is serving cleanly on `:3001` before anything is asked to talk to it over the wire.
 
-1. **Install both add-ons, different ports.** Reconfigure the Python add-on's `config.yaml` to bind `3001/tcp: 3001` and `ingress_port: 3001`. Leave the Perl add-on on 3000 as the live serving path.
-2. **Mirror-capture from the thermostat.** Use `mitmproxy` / `tcpdump` on the HA host (or at the LAN boundary) to record the next ~24 h of thermostat traffic landing on port 3000. This is the replay corpus for step 3. Store under `captures/cutover_window_<date>/`.
-3. **Replay into the Python add-on on 3001.** Write a one-shot script that POSTs the captured bodies at their recorded cadence against `http://127.0.0.1:3001/systems/...`. Compare:
-   - Response status codes (both must be 200).
-   - `<directive>` element contents for status POSTs (both must make the same `configHasChanges` / `pingRate` decisions given the same dirty state).
-   - `GET /config` byte-for-byte when no pending writes are queued.
-   - `/v1/state` on the Python add-on is sensible after each replay tick.
-4. **Drive the northbound API live.** Hit every mutating endpoint on the Python add-on during the validation window. A shell script walking each PATCH/PUT/DELETE with realistic payloads is sufficient.
-5. **Observe SSE for 1 h.** Subscribe with `curl -N http://127.0.0.1:3001/v1/events`; confirm `state.snapshot` on connect, `state.update` on each replay tick, `hold.changed` on each hold PATCH, and SSE comment pings every 15 s.
+Both add-ons are already bound to different ports (Perl `:3000`, Python `:3001`) and coexist on the same HA host. The Perl add-on continues to serve the live thermostat; the Python add-on is reachable but idle from the thermostat's point of view.
 
-Any discrepancy in steps 3–5 is a cutover blocker. File, fix, re-run validation.
+Protocol correctness against captured thermostat traffic is covered by the frozen fixtures under `tests/fixtures/thermostat/` — boot sequence (`boot_01..06`), steady telemetry, and three user-action deltas (setpoint, opmode, schedule). The pytest suite (229 tests) replays these on every commit. The pre-cutover checklist below is about the *running add-on on the HA host*, not about re-deriving protocol coverage.
+
+1. **Both add-ons installed and running.** Perl add-on on port 3000 continues to serve the live thermostat. Python add-on on port 3001 reachable at `http://<ha>:3001/` (landing page) and `http://<ha>:3001/v1/healthz` (200, `status: degraded` or `unknown` until first thermostat tick).
+2. **Cold `/v1/state` returns 503.** Confirm `GET http://<ha>:3001/v1/state` returns HTTP 503 with `error.code: upstream_unavailable`. This confirms the cold-start path and that no stale demo data is being served.
+3. **Replay one boot sequence manually.** POST `tests/fixtures/thermostat/boot_01_system_config.xml` (as `/systems/<serial>/config`) to `:3001` from the HA host shell. `/v1/state` should flip to a populated body with the fixture's zones and serial.
+4. **Observe SSE briefly.** After step 3, subscribe with `curl -N http://<ha>:3001/v1/events`; confirm `state.snapshot` on connect and `state.update` on a subsequent replay of `telemetry_steady.xml`. Subscribing *before* step 3 should fail with 503, not open a stream.
+5. **Hit one NB API mutation.** PATCH `/v1/zones/1` with a setpoint change. Confirm 200, and `/v1/state` reflects it. No thermostat is involved — this validates the write path end-to-end against the replay store.
+
+Any failure here is a cutover blocker. Mirror-capture against the live thermostat's port-3000 traffic for multi-hour validation was planned in earlier drafts and is no longer required — the fixture suite supersedes it.
 
 ## Cutover procedure
 
-Once the validation window closes green:
+Once the smoke check above passes. The add-on ports do **not** change — cutover flips the LAN-redirect rule that decides which add-on the thermostat reaches.
 
 1. **Announce downtime** to housemates: "thermostat proxy offline, ~2 min." In practice the thermostat continues to run locally; only the HA UI loses fresh data during the gap.
 2. **Back up the Perl add-on's state.** From the HA host: copy the legacy add-on's data directory to a safe location. Belt-and-suspenders — the Python add-on won't read it, but if rollback is needed this data is what the Perl add-on boots from.
-3. **Stop the Perl add-on.** HA → Add-ons → Infinitude Direct → Stop.
-4. **Reconfigure the Python add-on back to port 3000.** Edit `addon/config.yaml` (or the HA options UI if schema allows): `ingress_port: 3000`, `3000/tcp: 3000`.
-5. **Start the Python add-on.** HA → Add-ons → Infinitude Modern Proxy → Start.
-6. **Watch the first thermostat tick.** Tail add-on logs. Within ~90 s (one telemetry cadence) the thermostat will POST `/status`; logs should show parser success and state-store update. Within the next few minutes the boot-shaped POSTs (`/config`, `/idu_config`, `/odu_config`, `/notifications`) will flow as part of steady-state operation or a forced reboot.
-7. **Force a thermostat reboot** (at the wall panel or via a power-cycle) if step 6 doesn't produce a full boot sequence within 10 minutes — the state store rehydrates cleanly on boot and this reduces the post-cutover warm-up window.
-8. **Validate.** Hit `/v1/healthz` — `thermostat.status` should be `healthy`. Confirm `/v1/state` shows accurate live values. Try one PATCH (e.g. `/v1/system/hold`) from `/docs`; confirm within ~30 s the thermostat reflects it at the panel.
+3. **Confirm the Python add-on is running on `:3001`.** HA → Add-ons → Infinitude Modern Proxy → status is "Started", `/v1/healthz` returns 200.
+4. **Flip the LAN redirect from `:3000` to `:3001`.** Whichever mechanism gets Carrier-destined traffic to the HA host (router port-forward, iptables rule on the HA host, DNAT on an edge device, etc.), change the destination port from 3000 to 3001. Keep the destination host the same. The Perl add-on stays running — it just stops receiving traffic.
+5. **Watch the first thermostat tick.** Tail the Python add-on logs. Within ~90 s (one telemetry cadence) the thermostat will POST `/status`; logs should show parser success and state-store update. `/v1/state` flips from 503 to a populated body on the first `<config>` POST. Within the next few minutes the boot-shaped POSTs (`/config`, `/idu_config`, `/odu_config`, `/notifications`) will flow as part of steady-state operation or a forced reboot.
+6. **Force a thermostat reboot** (at the wall panel or via a power-cycle) if step 5 doesn't produce a full boot sequence within 10 minutes — the state store rehydrates cleanly on boot and this reduces the post-cutover warm-up window.
+7. **Validate.** Hit `/v1/healthz` — `thermostat.status` should be `healthy`. Confirm `/v1/state` shows accurate live values. Try one PATCH (e.g. `/v1/system/hold`) from `/docs`; confirm within ~30 s the thermostat reflects it at the panel.
+8. **Stop the Perl add-on** once the Python add-on has held steady for at least one full day of normal operation. Stopping it earlier is fine for freeing memory; keeping it running longer costs nothing and shortens rollback to a single rule-flip.
 
 ## Rollback procedure
 
@@ -69,27 +71,26 @@ Triggers (any one of these mandates rollback):
 
 Procedure:
 
-1. Stop the Python add-on.
-2. Change its port binding back to 3001 (or whatever non-conflicting port) in `config.yaml`.
-3. Start the Perl add-on.
-4. Confirm `/api/status` on the Perl add-on returns within ~90 s of thermostat activity.
+1. **Flip the LAN redirect back from `:3001` to `:3000`.** Single rule change — same mechanism used for cutover, reversed. The Perl add-on is already running (per cutover step 8), so traffic resumes immediately.
+2. **If the Perl add-on had been stopped:** start it (`Add-ons → Infinitude Direct → Start`). Port 3000 is still claimed by its config and no other service has taken it.
+3. Confirm `/api/status` on the Perl add-on returns within ~90 s of thermostat activity.
+4. Leave the Python add-on running on 3001 for post-mortem inspection; do not uninstall.
 5. File a bug with the captured trigger state for triage.
 
 Rollback window: unlimited. The Perl add-on remains in the repo until DESIGN.md Phase 7. No data-format changes lock us out.
 
 ## Post-cutover sequencing
 
-In order, each shippable independently:
+In order, each shippable independently. Items marked **in progress** are already underway in parallel with the cutover plan — the original strict post-cutover ordering has loosened because the HA integration and card work are on the same alpha release train as the add-on (`2.0.0-alpha.x`) rather than waiting behind it.
 
 1. **Capture live-traffic fixtures.** Immediately after cutover, with the Python proxy live, record another 24 h of traffic and extend the fixture suite. These are high-value regression anchors for all future slices.
-2. **HA integration cutover.** Single PR updating the HA coordinator (`custom_components/infinitude/`) to hit the `/v1/*` endpoints. Major-version bump on the integration. Legacy `/api/*?mode=…` query-string calls are deleted in the same commit.
-3. **Legacy HTML UI refresh.** Expose the new surfaces the legacy UI doesn't have today: humidity targets (`/v1/system/humidity`), vacation scheduling (`/v1/system/vacation`), service-reminder levels (`/v1/system/service`). These may or may not go into `infinitude/infinitude-ui.html` depending on whether that UI is retained or replaced wholesale.
+2. **HA integration cutover.** *(in progress)* `custom_components/infinitude_direct/` has already been rewritten to hit the `/v1/*` endpoints and ships alongside the add-on under the same alpha version. Post-cutover work here is narrowing to bug-fix + live-data validation rather than a net-new rewrite.
+3. **Legacy HTML UI refresh.** *(in progress for humidity/vacation/service surfaces via the integration's Lovelace cards; `infinitude/infinitude-ui.html` itself is not being updated.)* The Python add-on does not serve the legacy Perl `infinitude-ui.html`; users get the new surfaces through the HACS integration's cards.
 4. **Carrier passthrough implementation.** Not a cutover blocker for local-only use. Lands when needed by MyInfinity-app users.
 5. **Perl add-on removal.** After 2 stable releases of the Python add-on. Final removal closes DESIGN.md Phase 7.
 
 ## Open items (decide before running the plan)
 
-- **Validation window length.** 24 h is the default above. Longer (48–72 h) gives more confidence at low cost; shorter is risky if the thermostat has infrequent event types we miss.
-- **Parallel run vs. hard cut.** This plan uses a parallel-run validation window with the Python add-on on a non-serving port. An alternative is a hard cut with no prior live validation — cheaper operationally, higher risk. Default: parallel run.
-- **Carrier passthrough status at cutover time.** If Phase 7-ish Carrier passthrough ships *before* cutover, users of the MyInfinity app retain command-propagation parity. If it ships *after*, there is a gap where app-initiated changes rely solely on the thermostat's own Carrier polling (which still works — it's just no longer locally observed or rate-limited through the proxy). Default: accept the gap.
+- **Carrier passthrough status at cutover time.** If Carrier passthrough ships *before* cutover, users of the MyInfinity app retain command-propagation parity. If it ships *after*, there is a gap where app-initiated changes rely solely on the thermostat's own Carrier polling (which still works — it's just no longer locally observed or rate-limited through the proxy). Default: accept the gap.
+- **LAN-redirect mechanism.** Whether the port mapping lives on the home router, an edge DNAT device, or an iptables rule on the HA host itself determines whose change window the cutover fits into. Document the specific mechanism in use before the cutover day so the rule-flip isn't improvised.
 - **Who executes the cutover?** Assumes the repo owner. No operational runbook for a third party.
