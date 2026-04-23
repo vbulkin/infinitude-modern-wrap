@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from sse_starlette.sse import EventSourceResponse
 
 from . import __version__
@@ -945,6 +945,25 @@ def create_app(store: StateStore | None = None) -> FastAPI:
         if updated is None:
             raise HTTPException(status_code=404, detail="no config received yet")
         return _system_response(updated, store.get_telemetry())
+
+    @app.get(
+        "/v1/debug/state/{serial}/{kind}",
+        include_in_schema=False,
+        responses={200: {"content": {"application/xml": {}}}},
+    )
+    async def debug_state_blob(serial: str, kind: str) -> Response:
+        if kind not in ("config", "idu", "odu"):
+            raise HTTPException(status_code=404, detail="kind must be config|idu|odu")
+        persistence = getattr(store, "_persistence", None)
+        if persistence is None:
+            raise HTTPException(status_code=503, detail="persistence not attached")
+        snap = await persistence.load(serial)
+        if snap is None:
+            raise HTTPException(status_code=404, detail=f"no snapshot for {serial}")
+        blob = getattr(snap, f"{kind}_xml")
+        if blob is None:
+            raise HTTPException(status_code=404, detail=f"{kind}_xml is null")
+        return Response(content=blob, media_type="application/xml")
 
     return app
 
