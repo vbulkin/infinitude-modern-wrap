@@ -255,10 +255,10 @@ def create_app(store: StateStore | None = None) -> FastAPI:
             f"<h1>Infinitude Modern Proxy</h1>"
             f'<p class="muted">v{__version__} &middot; typed OpenAPI proxy for Carrier/Bryant Infinity thermostats.</p>'
             "<ul>"
-            '<li><a href="/v1/healthz">/v1/healthz</a> &mdash; health + thermostat last-contact</li>'
-            '<li><a href="/v1/state">/v1/state</a> &mdash; current composed state</li>'
-            '<li><a href="/docs">/docs</a> &mdash; Swagger UI</li>'
-            '<li><a href="/openapi.json">/openapi.json</a> &mdash; OpenAPI schema</li>'
+            '<li><a href="v1/healthz">/v1/healthz</a> &mdash; health + thermostat last-contact</li>'
+            '<li><a href="v1/state">/v1/state</a> &mdash; current composed state</li>'
+            '<li><a href="docs">/docs</a> &mdash; Swagger UI</li>'
+            '<li><a href="openapi.json">/openapi.json</a> &mdash; OpenAPI schema</li>'
             "</ul>"
             "</body></html>"
         )
