@@ -13,6 +13,7 @@ WORKDIR /opt/infinitude-proxy
 
 COPY pyproject.toml ./
 COPY src/ ./src/
+COPY log_config.yaml ./
 
 RUN pip install --no-cache-dir --break-system-packages .
 
