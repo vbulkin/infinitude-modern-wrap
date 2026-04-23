@@ -87,10 +87,16 @@ def test_v1_state_overlays_telemetry():
     app = create_app(store=store)
     client = TestClient(app)
 
-    # Before any telemetry — canned defaults come through.
-    r0 = client.get("/v1/state").json()
-    assert r0["system"]["operatingStatusMessage"] == "idle"
+    # Cold start — no config, no telemetry. Endpoint is 503.
+    r0 = client.get("/v1/state")
+    assert r0.status_code == 503
 
+    # Seed config, then telemetry (natural boot order).
+    client.post(
+        "/systems/0000TEST0000",
+        content=_read("boot_01_system_config.xml"),
+        headers={"content-type": "application/xml"},
+    )
     client.post(
         "/systems/0000TEST0000/status",
         content=_read("telemetry_steady.xml"),

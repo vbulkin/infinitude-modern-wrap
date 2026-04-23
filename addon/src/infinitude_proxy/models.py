@@ -218,10 +218,10 @@ class WholeHouseHoldRequest(BaseModel):
 class System(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
     mode: HvacMode
-    outdoorTemperature: int
-    humidifierOn: bool
-    lastReportAt: IsoDatetimeOut
-    operatingStatusMessage: str
+    outdoorTemperature: int | None = None
+    humidifierOn: bool | None = None
+    lastReportAt: IsoDatetimeOut | None = None
+    operatingStatusMessage: str | None = None
     serial: str
     hold: WholeHouseHold
 
@@ -241,14 +241,14 @@ class Zone(BaseModel):
     id: ZoneIdStr
     name: str
     enabled: bool
-    temperature: int
-    humidity: PercentInt
-    heatSetpoint: Temperature
-    coolSetpoint: Temperature
-    fan: FanSpeed
-    damperPercent: PercentInt
-    conditioning: HvacAction
-    currentActivity: ActivityId
+    temperature: int | None = None
+    humidity: PercentInt | None = None
+    heatSetpoint: Temperature | None = None
+    coolSetpoint: Temperature | None = None
+    fan: FanSpeed | None = None
+    damperPercent: PercentInt | None = None
+    conditioning: HvacAction | None = None
+    currentActivity: ActivityId | None = None
     hold: ZoneHold
 
 

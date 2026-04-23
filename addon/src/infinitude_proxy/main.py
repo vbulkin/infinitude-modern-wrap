@@ -18,7 +18,6 @@ from fastapi.responses import HTMLResponse
 from sse_starlette.sse import EventSourceResponse
 
 from . import __version__
-from .canned_state import canned_state
 from .models import (
     Activity,
     ActivityId,
@@ -127,75 +126,61 @@ def _compose_state(
 ) -> State:
     """Assemble /v1/state from the latest config + telemetry snapshots.
 
-    Config sets the skeleton (mode, hold, zone identity). Telemetry
-    fills the live values. If neither has landed we fall back to the
-    canned demo state so the endpoint stays useful on a cold start.
+    Config is authoritative for the skeleton (zone identity, mode, hold).
+    Telemetry fills live fields (temperatures, fan, conditioning). Until
+    config has landed, there is nothing truthful to return — callers
+    raise 503 on a None result.
     """
-    if stored_config is None and stored_telemetry is None:
-        return canned_state()
+    if stored_config is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Thermostat has not reported yet",
+        )
 
-    base = canned_state()
+    cfg = stored_config.config
+    serial = stored_config.serial
     telemetry_zones = (
         {z.id: z for z in stored_telemetry.snapshot.zones}
         if stored_telemetry else {}
     )
 
-    if stored_config is not None:
-        cfg = stored_config.config
-        serial = stored_config.serial
-        zone_skeletons = [(zc.id, zc.name, zc.enabled, zc.hold) for zc in cfg.zones]
-        system_mode = HvacMode(cfg.mode)
-        whole_hold = cfg.wholeHouseHold
-    else:
-        serial = stored_telemetry.serial if stored_telemetry else base.system.serial
-        zone_skeletons = [(z.id, z.name, z.enabled, z.hold) for z in base.zones]
-        system_mode = base.system.mode
-        whole_hold = base.system.hold
-
-    base_zone_by_id = {z.id: z for z in base.zones}
     zones: list[Zone] = []
-    for zid, zname, zenabled, zhold in zone_skeletons:
-        tz = telemetry_zones.get(zid)
-        b = base_zone_by_id.get(zid)
+    for zc in cfg.zones:
+        tz = telemetry_zones.get(zc.id)
         zones.append(
             Zone(
-                id=zid,
-                name=zname,
-                enabled=zenabled,
-                temperature=tz.temperature if tz else (b.temperature if b else 70),
-                humidity=tz.humidity if tz else (b.humidity if b else 50),
-                heatSetpoint=tz.heatSetpoint if tz else (b.heatSetpoint if b else 68),
-                coolSetpoint=tz.coolSetpoint if tz else (b.coolSetpoint if b else 76),
-                fan=FanSpeed(tz.fan) if tz else (b.fan if b else FanSpeed.OFF),
-                damperPercent=tz.damperPercent if tz else (b.damperPercent if b else 100),
-                conditioning=HvacAction(tz.conditioning) if tz else (b.conditioning if b else HvacAction.IDLE),
-                currentActivity=ActivityId(tz.currentActivity) if tz else (b.currentActivity if b else ActivityId.HOME),
-                hold=ZoneHold(active=tz.holdActive) if tz else zhold,
+                id=zc.id,
+                name=zc.name,
+                enabled=zc.enabled,
+                temperature=tz.temperature if tz else None,
+                humidity=tz.humidity if tz else None,
+                heatSetpoint=tz.heatSetpoint if tz else None,
+                coolSetpoint=tz.coolSetpoint if tz else None,
+                fan=FanSpeed(tz.fan) if tz else None,
+                damperPercent=tz.damperPercent if tz else None,
+                conditioning=HvacAction(tz.conditioning) if tz else None,
+                currentActivity=ActivityId(tz.currentActivity) if tz else None,
+                hold=ZoneHold(active=tz.holdActive) if tz else zc.hold,
             )
         )
 
     if stored_telemetry is not None:
         snap = stored_telemetry.snapshot
         system = System(
-            mode=system_mode,
+            mode=HvacMode(cfg.mode),
             outdoorTemperature=snap.outdoorTemperature,
             humidifierOn=snap.humidifierOn,
             lastReportAt=snap.localTime,
             operatingStatusMessage=snap.operatingStatusMessage,
             serial=serial,
-            hold=whole_hold,
+            hold=cfg.wholeHouseHold,
         )
         last_updated = stored_telemetry.receivedAt
     else:
-        assert stored_config is not None
         system = System(
-            mode=system_mode,
-            outdoorTemperature=base.system.outdoorTemperature,
-            humidifierOn=base.system.humidifierOn,
-            lastReportAt=stored_config.receivedAt,
-            operatingStatusMessage=base.system.operatingStatusMessage,
+            mode=HvacMode(cfg.mode),
             serial=serial,
-            hold=whole_hold,
+            hold=cfg.wholeHouseHold,
         )
         last_updated = stored_config.receivedAt
 
@@ -780,22 +765,25 @@ def create_app(store: StateStore | None = None) -> FastAPI:
             else:
                 replay = buffered
 
+        # Compose the snapshot eagerly (before entering the generator)
+        # so _compose_state's 503 for a cold thermostat reaches the
+        # client as a proper HTTP error, not a mid-stream disconnect.
+        snap_payload: dict | None = None
+        if need_snapshot:
+            snap_state = _compose_state(
+                store.get_config(), store.get_telemetry()
+            )
+            snap_payload = snap_state.model_dump(mode="json")
+
         queue = store.events.subscribe()
 
         async def event_gen():
             try:
-                if need_snapshot:
-                    # Snapshot is private to this client, not a broadcast.
-                    # Its id is the publisher's latest; the client resumes
-                    # with Last-Event-ID and gets anything newer from the
-                    # ring buffer next reconnect.
-                    snap_state = _compose_state(
-                        store.get_config(), store.get_telemetry()
-                    )
+                if snap_payload is not None:
                     yield {
                         "id": str(store.events.latest_id),
                         "event": "state.snapshot",
-                        "data": _event_json(snap_state.model_dump(mode="json")),
+                        "data": _event_json(snap_payload),
                     }
                 for ev in replay:
                     yield {
@@ -986,8 +974,6 @@ def _zone_response(
             (z for z in stored_telemetry.snapshot.zones if z.id == zone_id),
             None,
         )
-    base = canned_state()
-    base_zone = next((z for z in base.zones if z.id == zone_id), None)
 
     hold_heat: int | None = None
     hold_cool: int | None = None
@@ -1004,22 +990,22 @@ def _zone_response(
         id=zone_id,
         name=zone_config.name,
         enabled=zone_config.enabled,
-        temperature=tz.temperature if tz else (base_zone.temperature if base_zone else 70),
-        humidity=tz.humidity if tz else (base_zone.humidity if base_zone else 50),
+        temperature=tz.temperature if tz else None,
+        humidity=tz.humidity if tz else None,
         heatSetpoint=(
             hold_heat
             if hold_heat is not None
-            else (tz.heatSetpoint if tz else (base_zone.heatSetpoint if base_zone else 68))
+            else (tz.heatSetpoint if tz else None)
         ),
         coolSetpoint=(
             hold_cool
             if hold_cool is not None
-            else (tz.coolSetpoint if tz else (base_zone.coolSetpoint if base_zone else 76))
+            else (tz.coolSetpoint if tz else None)
         ),
-        fan=FanSpeed(tz.fan) if tz else (base_zone.fan if base_zone else FanSpeed.OFF),
-        damperPercent=tz.damperPercent if tz else (base_zone.damperPercent if base_zone else 100),
-        conditioning=HvacAction(tz.conditioning) if tz else (base_zone.conditioning if base_zone else HvacAction.IDLE),
-        currentActivity=ActivityId(tz.currentActivity) if tz else (base_zone.currentActivity if base_zone else ActivityId.HOME),
+        fan=FanSpeed(tz.fan) if tz else None,
+        damperPercent=tz.damperPercent if tz else None,
+        conditioning=HvacAction(tz.conditioning) if tz else None,
+        currentActivity=ActivityId(tz.currentActivity) if tz else None,
         hold=zone_config.hold,
     )
 
@@ -1036,7 +1022,6 @@ def _system_response(
     from the most recent telemetry snapshot when present.
     """
     cfg = stored_config.config
-    base = canned_state()
     if stored_telemetry is not None:
         snap = stored_telemetry.snapshot
         return System(
@@ -1050,10 +1035,6 @@ def _system_response(
         )
     return System(
         mode=HvacMode(cfg.mode),
-        outdoorTemperature=base.system.outdoorTemperature,
-        humidifierOn=base.system.humidifierOn,
-        lastReportAt=stored_config.receivedAt,
-        operatingStatusMessage=base.system.operatingStatusMessage,
         serial=stored_config.serial,
         hold=cfg.wholeHouseHold,
     )

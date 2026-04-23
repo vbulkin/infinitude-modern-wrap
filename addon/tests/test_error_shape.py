@@ -59,8 +59,6 @@ def test_error_body_omits_empty_details():
 
 def test_404_no_config_uses_spec_envelope():
     client = _client()
-    resp = client.get("/v1/state")  # no precondition — state has fallback
-    # /v1/state falls back to canned_state, so pick something that 404s:
     resp = client.get("/v1/system")
     assert resp.status_code == 404
     body = resp.json()

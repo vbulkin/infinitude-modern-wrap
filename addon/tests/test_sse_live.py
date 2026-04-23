@@ -95,6 +95,17 @@ def test_sse_delivers_state_update_over_wire(live_server):
     This test asserts the same end-to-end path for the new event shape.
     """
     store, base_url = live_server
+    # Seed config first — /v1/events requires the thermostat to have
+    # reported before it can emit a state.snapshot (cold = 503).
+    boot_config = (FIXTURES / "boot_01_system_config.xml").read_bytes()
+    resp0 = httpx.post(
+        f"{base_url}/systems/0000TEST0000",
+        content=boot_config,
+        headers={"content-type": "application/xml"},
+        timeout=5.0,
+    )
+    assert resp0.status_code == 200
+
     body = (FIXTURES / "telemetry_steady.xml").read_bytes()
     collected: list[dict] = []
     reader_ready = threading.Event()

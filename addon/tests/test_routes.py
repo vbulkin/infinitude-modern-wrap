@@ -1,15 +1,11 @@
-"""Smoke tests — every scaffolded route must return schema-valid JSON.
-
-Phase 2 coverage. When Phase 3 replaces canned_state with real telemetry,
-these tests become contract tests instead.
-"""
+"""Smoke tests — every scaffolded route must return schema-valid JSON."""
 
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
 from infinitude_proxy.main import app
-from infinitude_proxy.models import Health, RuntimeConfig, State, Version
+from infinitude_proxy.models import Health, RuntimeConfig, Version
 
 client = TestClient(app)
 
@@ -33,12 +29,12 @@ def test_config_returns_valid_runtime_config():
     RuntimeConfig.model_validate(r.json())
 
 
-def test_state_returns_valid_state_with_zones():
+def test_state_returns_503_when_thermostat_has_not_reported():
     r = client.get("/v1/state")
-    assert r.status_code == 200
-    s = State.model_validate(r.json())
-    assert len(s.zones) >= 1
-    assert all(z.id.isdigit() for z in s.zones)
+    assert r.status_code == 503
+    body = r.json()
+    assert body["error"]["code"] == "upstream_unavailable"
+    assert "not reported" in body["error"]["message"].lower()
 
 
 def test_openapi_includes_v1_paths():

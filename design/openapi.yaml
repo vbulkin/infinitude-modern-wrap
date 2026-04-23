@@ -108,6 +108,10 @@ paths:
       description: |
         Returns the system + all zones in one call. Use `/v1/events` to
         subscribe to deltas rather than polling this endpoint.
+
+        Returns 503 while the thermostat has not yet reported (no config
+        received). Live fields inside the State may be null if config
+        has arrived but the first telemetry POST has not.
       operationId: getState
       responses:
         "200":
@@ -116,6 +120,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/State"
+        "503":
+          description: Thermostat has not reported yet.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /v1/events:
     get:
@@ -129,6 +139,9 @@ paths:
           * `hold.changed`   — hold activated or cleared (zone or whole-house).
 
         Clients should reconnect with `Last-Event-ID` to resume. Event IDs are monotonic integers.
+
+        Returns 503 on first-connect if the thermostat has not reported
+        yet (cannot compose an initial snapshot).
       operationId: subscribeEvents
       parameters:
         - in: header
@@ -146,6 +159,12 @@ paths:
                 description: |
                   Each event is encoded as documented in MDN / WHATWG EventSource.
                   Event data payloads conform to the `EventEnvelope` schema.
+        "503":
+          description: Thermostat has not reported yet.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   # ──────────────────────────────────────────────────────────────────────
   # System
@@ -750,12 +769,14 @@ components:
 
     System:
       type: object
+      description: |
+        Config-sourced fields (mode, serial, hold) are always present once
+        the thermostat has reported. Live fields (outdoorTemperature,
+        humidifierOn, lastReportAt, operatingStatusMessage) are null until
+        the first telemetry POST arrives — the state endpoint returns 503
+        while config is missing entirely.
       required:
         - mode
-        - outdoorTemperature
-        - humidifierOn
-        - lastReportAt
-        - operatingStatusMessage
         - hold
         - serial
       properties:
@@ -763,18 +784,23 @@ components:
           $ref: "#/components/schemas/HvacMode"
         outdoorTemperature:
           type: integer
-          description: Outdoor air temperature (°F).
+          nullable: true
+          description: Outdoor air temperature (°F). Null until first telemetry.
           example: 72
         humidifierOn:
           type: boolean
+          nullable: true
         lastReportAt:
           allOf:
             - $ref: "#/components/schemas/IsoDateTime"
+          nullable: true
           description: |
             Server-side timestamp (UTC) of the most recent telemetry POST
             from the thermostat. Used for freshness / staleness detection.
+            Null until the first telemetry POST arrives.
         operatingStatusMessage:
           type: string
+          nullable: true
           description: Free-form status string from the thermostat ("", "idle", error text).
         serial:
           type: string
@@ -799,18 +825,15 @@ components:
 
     Zone:
       type: object
+      description: |
+        Config-sourced fields (id, name, enabled, hold) are always present
+        once the thermostat has reported. Live fields (temperature,
+        humidity, setpoints, fan, damperPercent, conditioning,
+        currentActivity) are null until telemetry arrives.
       required:
         - id
         - name
         - enabled
-        - temperature
-        - humidity
-        - heatSetpoint
-        - coolSetpoint
-        - fan
-        - damperPercent
-        - conditioning
-        - currentActivity
         - hold
       properties:
         id:
@@ -822,30 +845,43 @@ components:
           type: boolean
         temperature:
           type: integer
-          description: Current temperature (°F).
+          nullable: true
+          description: Current temperature (°F). Null until first telemetry.
         humidity:
           type: integer
+          nullable: true
           minimum: 0
           maximum: 100
         heatSetpoint:
-          $ref: "#/components/schemas/Temperature"
+          allOf:
+            - $ref: "#/components/schemas/Temperature"
+          nullable: true
         coolSetpoint:
-          $ref: "#/components/schemas/Temperature"
+          allOf:
+            - $ref: "#/components/schemas/Temperature"
+          nullable: true
         fan:
-          $ref: "#/components/schemas/FanSpeed"
+          allOf:
+            - $ref: "#/components/schemas/FanSpeed"
+          nullable: true
         damperPercent:
           type: integer
+          nullable: true
           minimum: 0
           maximum: 100
           description: |
             Zone damper position as a 0–100 percentage. The thermostat
             natively reports 0–15 (where 15 = fully open); the add-on
             normalizes to 0–100 at the API boundary so clients don't
-            have to know the Carrier-internal scale.
+            have to know the Carrier-internal scale. Null until first telemetry.
         conditioning:
-          $ref: "#/components/schemas/HvacAction"
+          allOf:
+            - $ref: "#/components/schemas/HvacAction"
+          nullable: true
         currentActivity:
-          $ref: "#/components/schemas/ActivityId"
+          allOf:
+            - $ref: "#/components/schemas/ActivityId"
+          nullable: true
         hold:
           $ref: "#/components/schemas/ZoneHold"
 
