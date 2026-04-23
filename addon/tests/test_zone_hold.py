@@ -115,6 +115,11 @@ def test_apply_zone_hold_set_hold_forever_leaves_otmr_empty():
     assert _text(z1, "hold") == "on"
     assert _text(z1, "holdActivity") == "away"
     assert _text(z1, "otmr") == ""
+    # Wire-shape check: hold-forever renders <otmr/> self-closing, not
+    # <otmr></otmr>. Thermostat silently rejects the empty-content shape.
+    xml = etree.tostring(z1)
+    assert b"<otmr/>" in xml
+    assert b"<otmr></otmr>" not in xml
 
 
 def test_apply_zone_hold_clear_wipes_fields():
@@ -126,8 +131,19 @@ def test_apply_zone_hold_clear_wipes_fields():
     apply_zone_hold_clear(tree, {"zone_id": "1"})
     z1 = _zone_elem(tree, "1")
     assert _text(z1, "hold") == "off"
-    assert _text(z1, "holdActivity") == "none"
+    # Cleared zone hold renders <holdActivity/> (self-closing), matching
+    # the boot-capture wire shape — _text returns "" for both text=None
+    # and text="", so the assertion is the same either way.
+    assert _text(z1, "holdActivity") == ""
     assert _text(z1, "otmr") == ""
+    # Byte-shape check: serialize and verify the cleared fields use
+    # self-closing tags, not empty-content pairs. The thermostat's XML
+    # parser silently rejects `<otmr></otmr>`.
+    xml = etree.tostring(z1)
+    assert b"<holdActivity/>" in xml
+    assert b"<otmr/>" in xml
+    assert b"<holdActivity></holdActivity>" not in xml
+    assert b"<otmr></otmr>" not in xml
 
 
 def test_apply_zone_hold_set_unknown_zone_raises():

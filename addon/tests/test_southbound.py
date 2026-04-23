@@ -13,7 +13,9 @@ from infinitude_proxy.parser import (
     parse_notifications,
     parse_odu_config,
     parse_system_config,
+    parse_system_config_with_tree,
     parse_telemetry,
+    serialize_config_tree,
 )
 from infinitude_proxy.state_store import StateStore
 
@@ -147,6 +149,38 @@ def test_parse_system_config_boot_dump():
     # 8 zones in XML; 2 enabled (id=1, id=2) — matches the live household.
     ids = {z.id for z in cfg.zones}
     assert ids == {"1", "2"}
+
+
+def test_config_parse_serialize_is_byte_identical():
+    """Regression anchor: parse → serialize must not alter the inner
+    <config> bytes for any captured thermostat payload.
+
+    The thermostat's XML parser is strict — a self-closing `<otmr/>`
+    round-tripped to `<otmr></otmr>` (or vice versa) causes it to
+    silently reject the next /config pull and stick with its prior
+    state. Mutations are always applied on a parsed tree and the tree
+    is serialized back to the thermostat, so any asymmetry in the
+    parser/serializer pair is a latent write-path bug across every
+    REPLAY_REGISTRY handler. This test holds the invariant tight.
+
+    The boot capture wraps as `<system version="1.7"><config>…</config></system>`;
+    we compare the inner `<config>` subtree (which is what GET /systems/{serial}/config
+    actually emits over the wire).
+    """
+    import re
+    orig = _read("boot_01_system_config.xml")
+    tree, _ = parse_system_config_with_tree(orig)
+    ser = serialize_config_tree(tree)
+    m = re.search(rb"<config>.*</config>", orig, re.S)
+    assert m is not None, "fixture must contain a <config> subtree"
+    orig_inner = m.group(0)
+    ser_inner = ser.split(b"?>\n", 1)[1]
+    assert ser_inner == orig_inner, (
+        "parse→serialize is not byte-identical — "
+        "a shape divergence will cause the thermostat to silently reject "
+        "the next config pull. Look for lxml serialization flags or a "
+        "parser step that rewrites element text."
+    )
 
 
 def test_parse_system_config_opmode_change():

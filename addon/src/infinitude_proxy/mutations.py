@@ -75,11 +75,18 @@ def _set_or_create(parent: etree._Element, tag: str, text: str) -> None:
     Preserves child ordering for existing elements — we only append when
     the tag wasn't there, which shouldn't happen for standard thermostat
     configs but guards against partial captures in tests.
+
+    Empty-string `text` is stored as None so lxml serializes the element
+    self-closing (`<tag/>`) rather than with an empty content pair
+    (`<tag></tag>`). The thermostat's XML parser is strict about this —
+    live captures always use self-closing for optional fields (otmr on an
+    unheld zone, holdActivity on an unheld zone), and feeding it the
+    empty-content shape causes silent rejection of the config pull.
     """
     el = parent.find(tag)
     if el is None:
         el = etree.SubElement(parent, tag)
-    el.text = text
+    el.text = text if text else None
 
 
 # ── Zone manual setpoints (composite: activity edit + hold) ──────────
@@ -216,14 +223,17 @@ def apply_zone_hold_set(tree: etree._Element, payload: dict) -> None:
 def apply_zone_hold_clear(tree: etree._Element, payload: dict) -> None:
     """Release a zone hold — `<hold>off</hold>`, clear activity + otmr.
 
-    The thermostat reads `holdActivity=none` as "no hold currently
-    selected", mirroring what the boot fixture shows for unheld zones.
-    Clearing `<otmr>` keeps the element present but empty so the wire
-    shape doesn't change.
+    Wire shape for an unheld zone is `<holdActivity/>` (empty self-
+    closing) and `<otmr/>`, per live captures. The whole-house hold
+    uses `<holdActivity>none</holdActivity>` for the cleared state, but
+    at zone level the literal "none" is not a valid ActivityId and the
+    thermostat silently rejects the whole config pull when we send it.
+    `_set_or_create` with empty text writes self-closing, matching what
+    the thermostat emits when the wall panel releases a hold.
     """
     zone = _find_zone(tree, payload["zone_id"])
     _set_or_create(zone, "hold", "off")
-    _set_or_create(zone, "holdActivity", "none")
+    _set_or_create(zone, "holdActivity", "")
     _set_or_create(zone, "otmr", "")
 
 
