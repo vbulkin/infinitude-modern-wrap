@@ -524,11 +524,39 @@ class CarrierCloudHealth(BaseModel):
     consecutiveFailures: Annotated[int, Field(ge=0)]
 
 
+class MutationDriftEvent(BaseModel):
+    detectedAt: IsoDatetimeOut
+    kind: str
+    target: str
+    field: str
+    expected: str
+    observed: str
+
+
+class MutationDrift(BaseModel):
+    """Mutation drift telemetry.
+
+    A drift event fires when a northbound mutation cleared through the
+    config channel (pending-applied on GET /config) but the telemetry
+    kept reporting the pre-mutation value past the grace window — the
+    signal for a silent-reject class of bug. `driftCount` is monotonic
+    for the process lifetime; `recentEvents` is a bounded ring, oldest
+    first, last entry is the most recent.
+    """
+
+    driftCount: Annotated[int, Field(ge=0)]
+    armedIntents: Annotated[int, Field(ge=0)]
+    lastDriftAt: IsoDatetimeOut | None = None
+    graceSeconds: Annotated[int, Field(ge=1)]
+    recentEvents: list[MutationDriftEvent]
+
+
 class StateStoreHealth(BaseModel):
     status: Literal["healthy", "degraded"]
     zonesTracked: Annotated[int, Field(ge=0)]
     pendingPushes: Annotated[int, Field(ge=0)]
     oldestPendingPushAgeSeconds: Annotated[int, Field(ge=0)] | None = None
+    mutationDrift: MutationDrift
 
 
 class ApiHealth(BaseModel):

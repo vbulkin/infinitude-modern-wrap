@@ -1,14 +1,17 @@
-"""Unit tests for DriftTracker and intents_for_mutation.
+"""Unit + integration tests for mutation drift detection.
 
-Tests the detector in isolation — no FastAPI app, no StateStore, no
-persistence. Integration with mutate_config / apply_telemetry is covered
-separately once drift wiring lands in state_store.py.
+Unit section covers DriftTracker and intents_for_mutation in isolation.
+Integration section exercises the StateStore wiring (mutate_config arms
+intents, apply_telemetry observes, healthz exposes counters) against the
+FastAPI app.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from fastapi.testclient import TestClient
 
 from infinitude_proxy.drift import (
     EVENT_HISTORY,
@@ -17,7 +20,14 @@ from infinitude_proxy.drift import (
     _make_intent,
     intents_for_mutation,
 )
-from infinitude_proxy.parser import TelemetrySnapshot, parse_telemetry
+from infinitude_proxy.main import create_app
+from infinitude_proxy.mutations import apply_zone_setpoints_set
+from infinitude_proxy.parser import (
+    TelemetrySnapshot,
+    parse_system_config_with_tree,
+    parse_telemetry,
+)
+from infinitude_proxy.state_store import StateStore
 
 FIXTURES = Path(__file__).parent / "fixtures" / "thermostat"
 
@@ -285,3 +295,136 @@ def test_observe_with_grace_override():
     events = tracker.observe(snap, now=t0 + timedelta(seconds=31))
     assert len(events) == 1
     assert tracker.drift_count == 1
+
+
+# ── StateStore integration tests ──────────────────────────────────────
+
+
+def _seed_config(store: StateStore) -> None:
+    """Prime the store with the fixture config so mutate_config can run."""
+    import asyncio
+    xml = (FIXTURES / "boot_01_system_config.xml").read_bytes()
+    tree, cfg = parse_system_config_with_tree(xml)
+    asyncio.get_event_loop().run_until_complete(
+        store.apply_config("0000TEST0000", cfg, tree)
+    )
+
+
+async def test_mutate_config_arms_drift_intents():
+    store = StateStore()
+    xml = (FIXTURES / "boot_01_system_config.xml").read_bytes()
+    tree, cfg = parse_system_config_with_tree(xml)
+    await store.apply_config("0000TEST0000", cfg, tree)
+
+    assert store.drift.armed_count == 0
+    await store.mutate_config(
+        apply_zone_setpoints_set,
+        serial="0000TEST0000",
+        kind="zone_setpoints_set",
+        target="zone:1",
+        payload={"zone_id": "1", "cool": 78, "heat": None, "activate_hold": True},
+    )
+    # Intent fan-out: coolSetpoint + holdActive (heat omitted).
+    assert store.drift.armed_count == 2
+
+
+async def test_apply_telemetry_disarms_matching_intents():
+    store = StateStore()
+    xml = (FIXTURES / "boot_01_system_config.xml").read_bytes()
+    tree, cfg = parse_system_config_with_tree(xml)
+    await store.apply_config("0000TEST0000", cfg, tree)
+    await store.mutate_config(
+        apply_zone_setpoints_set,
+        serial="0000TEST0000",
+        kind="zone_setpoints_set",
+        target="zone:1",
+        payload={"zone_id": "1", "cool": 78, "heat": None, "activate_hold": True},
+    )
+    assert store.drift.armed_count == 2
+
+    # Build a telemetry snapshot matching the mutation.
+    base = parse_telemetry((FIXTURES / "telemetry_steady.xml").read_bytes())
+    matched_zones = [
+        z.model_copy(update={"coolSetpoint": 78, "holdActive": True})
+        if z.id == "1" else z
+        for z in base.zones
+    ]
+    matched = base.model_copy(update={"zones": matched_zones})
+    await store.apply_telemetry("0000TEST0000", matched)
+
+    assert store.drift.armed_count == 0
+    assert store.drift.drift_count == 0
+
+
+async def test_apply_telemetry_fires_drift_past_grace():
+    store = StateStore()
+    # Shrink grace so the test doesn't have to wait 180 seconds.
+    store.drift = DriftTracker(grace=timedelta(seconds=0))
+
+    xml = (FIXTURES / "boot_01_system_config.xml").read_bytes()
+    tree, cfg = parse_system_config_with_tree(xml)
+    await store.apply_config("0000TEST0000", cfg, tree)
+    await store.mutate_config(
+        apply_zone_setpoints_set,
+        serial="0000TEST0000",
+        kind="zone_setpoints_set",
+        target="zone:1",
+        payload={"zone_id": "1", "cool": 78, "heat": None, "activate_hold": False},
+    )
+    # One intent for cool, none for hold (activate_hold=False).
+    assert store.drift.armed_count == 1
+
+    # Telemetry reports pre-mutation value → drift fires.
+    base = parse_telemetry((FIXTURES / "telemetry_steady.xml").read_bytes())
+    drifted_zones = [
+        z.model_copy(update={"coolSetpoint": 75}) if z.id == "1" else z
+        for z in base.zones
+    ]
+    drifted = base.model_copy(update={"zones": drifted_zones})
+    await store.apply_telemetry("0000TEST0000", drifted)
+
+    assert store.drift.armed_count == 0
+    assert store.drift.drift_count == 1
+    events = store.drift.recent_events()
+    assert len(events) == 1
+    assert events[0].field == "coolSetpoint"
+    assert events[0].expected == 78
+    assert events[0].observed == 75
+
+
+def test_healthz_exposes_mutation_drift_with_zero_counters():
+    store = StateStore()
+    app = create_app(store=store)
+    client = TestClient(app)
+
+    resp = client.get("/v1/healthz")
+    assert resp.status_code == 200
+    drift_field = resp.json()["components"]["stateStore"]["mutationDrift"]
+    assert drift_field["driftCount"] == 0
+    assert drift_field["armedIntents"] == 0
+    assert drift_field["lastDriftAt"] is None
+    assert drift_field["graceSeconds"] == 180
+    assert drift_field["recentEvents"] == []
+
+
+def test_healthz_reflects_armed_intents_after_patch():
+    store = StateStore()
+    app = create_app(store=store)
+    client = TestClient(app)
+
+    client.post(
+        "/systems/0000TEST0000",
+        content=(FIXTURES / "boot_01_system_config.xml").read_bytes(),
+        headers={"content-type": "application/xml"},
+    )
+    resp = client.patch(
+        "/v1/zones/1", json={"cool": 78, "activateHold": True}
+    )
+    assert resp.status_code == 200
+
+    health = client.get("/v1/healthz").json()
+    drift_field = health["components"]["stateStore"]["mutationDrift"]
+    assert drift_field["driftCount"] == 0
+    # coolSetpoint + holdActive.
+    assert drift_field["armedIntents"] == 2
+    assert drift_field["recentEvents"] == []

@@ -33,6 +33,8 @@ from .models import (
     HvacMode,
     IduConfig,
     FilterReminder,
+    MutationDrift,
+    MutationDriftEvent,
     NotificationBody,
     NotificationChangeEntry,
     NotificationEnvelope,
@@ -278,6 +280,18 @@ def create_app(store: StateStore | None = None) -> FastAPI:
             raw_age = await store.persistence.oldest_pending_age_seconds()
             oldest_age = int(raw_age) if raw_age is not None else None
         zones_tracked = len(store.get_config().config.zones) if store.get_config() else 0
+        drift = store.drift
+        drift_events = [
+            MutationDriftEvent(
+                detectedAt=ev.detected_at,
+                kind=ev.kind,
+                target=ev.target,
+                field=ev.field,
+                expected=str(ev.expected),
+                observed=str(ev.observed),
+            )
+            for ev in drift.recent_events()
+        ]
         return Health(
             status=overall,  # type: ignore[arg-type]
             timestamp=now,
@@ -296,6 +310,13 @@ def create_app(store: StateStore | None = None) -> FastAPI:
                     zonesTracked=zones_tracked,
                     pendingPushes=pending_count,
                     oldestPendingPushAgeSeconds=oldest_age,
+                    mutationDrift=MutationDrift(
+                        driftCount=drift.drift_count,
+                        armedIntents=drift.armed_count,
+                        lastDriftAt=drift.last_drift_at,
+                        graceSeconds=int(drift.grace.total_seconds()),
+                        recentEvents=drift_events,
+                    ),
                 ),
                 api=ApiHealth(
                     status="healthy",

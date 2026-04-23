@@ -1256,7 +1256,7 @@ components:
 
     StateStoreHealth:
       type: object
-      required: [status, zonesTracked, pendingPushes]
+      required: [status, zonesTracked, pendingPushes, mutationDrift]
       properties:
         status:
           type: string
@@ -1271,6 +1271,53 @@ components:
           type: integer
           minimum: 0
           nullable: true
+        mutationDrift:
+          $ref: "#/components/schemas/MutationDrift"
+
+    MutationDriftEvent:
+      type: object
+      required: [detectedAt, kind, target, field, expected, observed]
+      properties:
+        detectedAt:
+          type: string
+          format: date-time
+        kind:
+          type: string
+        target:
+          type: string
+        field:
+          type: string
+        expected:
+          type: string
+        observed:
+          type: string
+
+    MutationDrift:
+      type: object
+      description: >-
+        Silent-reject signal. `driftCount` increments when a mutation
+        cleared through the config channel but telemetry kept reporting
+        the pre-mutation value past `graceSeconds`. `recentEvents` is a
+        bounded ring, oldest first.
+      required: [driftCount, armedIntents, graceSeconds, recentEvents]
+      properties:
+        driftCount:
+          type: integer
+          minimum: 0
+        armedIntents:
+          type: integer
+          minimum: 0
+        lastDriftAt:
+          type: string
+          format: date-time
+          nullable: true
+        graceSeconds:
+          type: integer
+          minimum: 1
+        recentEvents:
+          type: array
+          items:
+            $ref: "#/components/schemas/MutationDriftEvent"
 
     ApiHealth:
       type: object

@@ -24,6 +24,7 @@ from typing import Callable
 
 from lxml import etree
 
+from .drift import DriftTracker, intents_for_mutation
 from .events import EventPublisher
 from .models import IduConfig, OduConfig
 from .mutations import REPLAY_REGISTRY
@@ -142,6 +143,7 @@ class StateStore:
         self._lock = asyncio.Lock()
         self._persistence = persistence
         self.events = EventPublisher()
+        self.drift = DriftTracker()
 
     def attach_persistence(self, persistence: Persistence | None) -> None:
         """Attach (or detach) the persistence handle after construction.
@@ -216,12 +218,17 @@ class StateStore:
         )
 
     async def apply_telemetry(self, serial: str, snapshot: TelemetrySnapshot) -> None:
+        now = datetime.now(timezone.utc)
         async with self._lock:
             self._telemetry = StoredTelemetry(
                 serial=serial,
                 snapshot=snapshot,
-                receivedAt=datetime.now(timezone.utc),
+                receivedAt=now,
             )
+            # Evaluate drift inside the lock so a racing mutate_config
+            # can't arm an intent mid-observe and then watch this same
+            # (pre-arm) snapshot disarm it.
+            self.drift.observe(snapshot, now=now)
         # Empty `changes` is the re-fetch hint: telemetry touches many
         # fields and enumerating them here would duplicate the parser.
         # Clients that care replay from /v1/state on the event.
@@ -336,13 +343,17 @@ class StateStore:
                 return None
             fn(self._config.tree, payload)
             new_config = reparse_config_tree(self._config.tree)
+            now = datetime.now(timezone.utc)
             self._config = StoredConfig(
                 serial=serial,
                 config=new_config,
                 tree=self._config.tree,
-                receivedAt=datetime.now(timezone.utc),
+                receivedAt=now,
             )
             self._config_dirty = True
+            # Arm drift intents under the state lock so the next
+            # telemetry tick (also under the lock) sees them.
+            self.drift.arm(intents_for_mutation(kind, payload, now=now))
             if self._persistence is not None:
                 await self._try_persist(
                     self._persistence.save_config(
