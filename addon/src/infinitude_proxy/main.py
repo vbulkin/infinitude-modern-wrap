@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
 from sse_starlette.sse import EventSourceResponse
 
 from . import __version__
@@ -242,6 +243,25 @@ def create_app(store: StateStore | None = None) -> FastAPI:
     )
     register_error_handlers(app)
     app.include_router(create_southbound_router(store))
+
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    async def root_landing() -> str:
+        return (
+            "<!doctype html><html><head><title>Infinitude Modern Proxy</title>"
+            "<style>body{font-family:system-ui,sans-serif;margin:2rem;max-width:40rem}"
+            "h1{margin-bottom:0.25rem}.muted{color:#666}"
+            "ul{line-height:1.8}code{background:#f2f2f2;padding:0.1rem 0.3rem;border-radius:3px}"
+            "</style></head><body>"
+            f"<h1>Infinitude Modern Proxy</h1>"
+            f'<p class="muted">v{__version__} &middot; typed OpenAPI proxy for Carrier/Bryant Infinity thermostats.</p>'
+            "<ul>"
+            '<li><a href="/v1/healthz">/v1/healthz</a> &mdash; health + thermostat last-contact</li>'
+            '<li><a href="/v1/state">/v1/state</a> &mdash; current composed state</li>'
+            '<li><a href="/docs">/docs</a> &mdash; Swagger UI</li>'
+            '<li><a href="/openapi.json">/openapi.json</a> &mdash; OpenAPI schema</li>'
+            "</ul>"
+            "</body></html>"
+        )
 
     @app.get("/v1/healthz", response_model=Health, tags=["health"])
     async def get_health() -> Health:
