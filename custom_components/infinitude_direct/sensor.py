@@ -214,10 +214,9 @@ class InfinitudeOperationStatusSensor(CoordinatorEntity, SensorEntity):
 class InfinitudeSystemInfoSensor(CoordinatorEntity, SensorEntity):
     """System info sensor with schedule/profile data as attributes.
 
-    `schedule` and `profiles` attributes are JSON-encoded in the legacy
-    HVAC card's wire shape (lowercase day ids, string setpoint values,
-    `enabled: "on"|"off"`) so the card JS continues to work without
-    changes.
+    JSON-encoded in the HVAC card's expected shape: schedule keyed by
+    zone id then capitalized day name (matches shared.js DAYS); profiles
+    as a list with string-valued setpoints (the card coerces to Number).
     """
 
     _attr_has_entity_name = True
@@ -260,12 +259,12 @@ class InfinitudeSystemInfoSensor(CoordinatorEntity, SensorEntity):
                 {"id": z["id"], "name": z["name"], "activities": activities_legacy}
             )
             schedule_by_zone[z["id"]] = {
-                day.lower(): [
+                day: [
                     {
                         "id": str(p["id"]),
                         "activity": p["activity"],
                         "time": p["time"],
-                        "enabled": "on" if p.get("enabled") else "off",
+                        "enabled": bool(p.get("enabled")),
                     }
                     for p in periods
                 ]
