@@ -226,4 +226,14 @@ def create_southbound_router(store: StateStore) -> APIRouter:
     async def get_manifest() -> Response:
         return Response(content=b"", media_type="application/octet-stream")
 
+    # Firmware-release-notes probe. Thermostat polls
+    # `/releaseNotes/{model}-{firmware}.txt` (e.g. systxbbec-14.02.txt)
+    # directly at the proxy; a 404 triggers a tight retry loop, a 200
+    # (even empty) quiets it. Matches upstream Perl Infinitude. The
+    # forward-proxy form (`/http%3A//www.ota.ing.carrier.com/releaseNotes/...`)
+    # is a separate concern handled by the future Carrier passthrough.
+    @router.get("/releaseNotes/{path:path}")
+    async def get_release_notes(path: str) -> Response:
+        return Response(content=b"", media_type="text/plain")
+
     return router

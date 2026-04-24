@@ -142,6 +142,19 @@ def test_alive_heartbeat():
     assert r.content == b"alive"
 
 
+def test_release_notes_stub_returns_empty_200():
+    """Thermostat polls /releaseNotes/{model}-{firmware}.txt; a 404 triggers
+    a tight retry loop, so we answer empty 200 like upstream Perl."""
+    client = TestClient(create_app())
+    r = client.get("/releaseNotes/systxbbec-14.02.txt")
+    assert r.status_code == 200
+    assert r.content == b""
+    # Nested paths too — the firmware occasionally uses subdirectories
+    # and the path parameter must pass them through intact.
+    r2 = client.get("/releaseNotes/sub/path/file.txt")
+    assert r2.status_code == 200
+
+
 def test_parse_system_config_boot_dump():
     cfg = parse_system_config(_read("boot_01_system_config.xml"))
     assert cfg.mode == "cool"
