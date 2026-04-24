@@ -9,7 +9,7 @@ per-zone `activities` and `schedule` folded in and `host`/`carrier_ok`/
 import asyncio
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -23,6 +23,12 @@ _LOGGER = logging.getLogger(__name__)
 _DAY_ORDER = [
     "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
 ]
+
+# Optimistic-hold lifetime: write → thermostat pull → addon state reflect
+# can take a full config-poll cycle (~30 s). Overlay expected state until
+# the real state catches up, with a generous upper bound so a failed
+# round-trip doesn't leave the UI stuck on a phantom hold.
+_OPTIMISTIC_TTL = timedelta(seconds=90)
 
 
 class InfinitudeDataCoordinator(DataUpdateCoordinator):
@@ -38,6 +44,8 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         self.host = host.rstrip("/")
         self._session = async_get_clientsession(hass)
         self.api_lock = asyncio.Lock()
+        # zone_id → {"hold": {...}, "expires": datetime}. "system" for whole-house.
+        self._optimistic: dict[str, dict] = {}
 
     async def _async_update_data(self) -> dict:
         try:
@@ -90,6 +98,9 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         thermostat_status = components.get("thermostat", {}).get("status", "unreachable")
         carrier_status = components.get("carrierCloud", {}).get("status", "disabled")
 
+        system = dict(state.get("system", {}))
+        self._apply_optimistic_system(system)
+
         zones: list[dict] = []
         for z in state.get("zones", []):
             if not z.get("enabled", True):
@@ -103,10 +114,12 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
                 d["day"]: d.get("periods", [])
                 for d in aux.get("schedule", {}).get("days", [])
             }
-            zones.append({**z, "activities": activities_map, "schedule": schedule_map})
+            zone = {**z, "activities": activities_map, "schedule": schedule_map}
+            self._apply_optimistic_zone(zone)
+            zones.append(zone)
 
         return {
-            "system": state.get("system", {}),
+            "system": system,
             "zones": zones,
             "host": self.host,
             "carrier_ok": carrier_status == "healthy",
@@ -116,13 +129,60 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
             "lastUpdated": state.get("lastUpdated"),
         }
 
-    # ── Write methods ──────────────────────────────────────────────────────
+    # ── Optimistic hold overlay ────────────────────────────────────────────
 
-    @staticmethod
-    def isotime_from_now(hours: int = 2) -> str:
-        """Return an ISO-8601 UTC timestamp `hours` from now (Z-suffixed)."""
-        target = datetime.now(timezone.utc) + timedelta(hours=hours)
-        return target.strftime("%Y-%m-%dT%H:%M:%SZ")
+    def _set_optimistic(self, key: str, hold: dict) -> None:
+        """Stash an expected hold shape for overlay until the real state
+        catches up, then immediately reflect it in `self.data` and
+        notify listeners — so the UI flips on write completion rather
+        than waiting for the next poll (write→thermostat pull→state
+        reflect is ~30 s worst case).
+        """
+        self._optimistic[key] = {
+            "hold": hold,
+            "expires": dt_util.utcnow() + _OPTIMISTIC_TTL,
+        }
+        if not isinstance(self.data, dict):
+            return
+        if key == "system":
+            system = self.data.get("system") or {}
+            system["hold"] = dict(hold)
+            self.data["system"] = system
+        else:
+            for z in self.data.get("zones", []):
+                if z.get("id") == key:
+                    z["hold"] = dict(hold)
+                    break
+        self.async_update_listeners()
+
+    def _apply_optimistic_zone(self, zone: dict) -> None:
+        override = self._pop_expired(zone["id"])
+        if override is None:
+            return
+        if _hold_matches(zone.get("hold") or {}, override):
+            self._optimistic.pop(zone["id"], None)
+            return
+        zone["hold"] = dict(override)
+
+    def _apply_optimistic_system(self, system: dict) -> None:
+        override = self._pop_expired("system")
+        if override is None:
+            return
+        if _hold_matches(system.get("hold") or {}, override):
+            self._optimistic.pop("system", None)
+            return
+        system["hold"] = dict(override)
+
+    def _pop_expired(self, key: str) -> dict | None:
+        entry = self._optimistic.get(key)
+        if entry is None:
+            return None
+        if dt_util.utcnow() >= entry["expires"]:
+            self._optimistic.pop(key, None)
+            return None
+        return entry["hold"]
+
+    # ── Write methods ──────────────────────────────────────────────────────
 
     async def async_set_mode(self, mode: str) -> None:
         await self._patch("/v1/system", {"mode": mode})
@@ -132,9 +192,19 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
     ) -> None:
         body = self._build_hold_body(activity, until)
         await self._put(f"/v1/zones/{zone_id}/hold", body)
+        self._set_optimistic(zone_id, {
+            "active": True,
+            "activity": activity,
+            "until": body.get("until"),
+        })
 
     async def async_cancel_hold(self, zone_id: str) -> None:
         await self._delete(f"/v1/zones/{zone_id}/hold")
+        self._set_optimistic(zone_id, {
+            "active": False,
+            "activity": None,
+            "until": None,
+        })
 
     async def async_set_activity_temps(
         self, zone_id: str, activity: str, htsp: int, clsp: int
@@ -156,9 +226,19 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
     ) -> None:
         body = self._build_hold_body(activity, until)
         await self._put("/v1/system/hold", body)
+        self._set_optimistic("system", {
+            "active": True,
+            "activity": activity,
+            "until": body.get("until"),
+        })
 
     async def async_cancel_whole_house_hold(self) -> None:
         await self._delete("/v1/system/hold")
+        self._set_optimistic("system", {
+            "active": False,
+            "activity": None,
+            "until": None,
+        })
 
     async def async_save_schedule(self, zone_id: str, program: list) -> None:
         """Write a zone's weekly schedule.
@@ -196,32 +276,29 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
 
     def _build_hold_body(self, activity: str, until: str | None) -> dict:
         """Build a hold-request body. `until` semantics:
-          * None or "forever" → indefinite (omit `until` — spec allows).
-          * "auto"            → 2 h from now, ISO UTC.
-          * ISO string        → used as-is.
-          * "HH:MM"           → next local occurrence of that wall-clock
-                                time, converted to ISO UTC. The backend
-                                re-projects it back to HH:MM on the wire,
-                                so the thermostat still evaluates it
-                                against its own local clock.
+          * None or "forever" → indefinite (omit `until`).
+          * "auto"            → 2 h from now, as HH:MM in HA's local tz.
+          * "HH:MM"           → passed through verbatim.
+
+        The addon treats `until` as a bare wall-clock time (HH:MM) that
+        the thermostat will evaluate against its own local clock — no
+        timezone round-trip involved, which avoided a UTC-vs-local drift
+        when the addon container and the HA host were in different
+        zones.
         """
         body: dict = {"activity": activity}
         if until is None or until == "forever":
             return body
         if until == "auto":
-            body["until"] = self.isotime_from_now(2)
+            body["until"] = _hhmm_from_now(2)
             return body
-        if "T" in until and until.endswith("Z"):
-            body["until"] = until
+        if _HHMM_RE.match(until.strip()):
+            body["until"] = until.strip()
             return body
-        iso = _wall_time_to_iso_utc(until)
-        if iso is None:
-            _LOGGER.warning(
-                "Unparseable hold 'until' value %r; falling back to 2h hold", until
-            )
-            body["until"] = self.isotime_from_now(2)
-        else:
-            body["until"] = iso
+        _LOGGER.warning(
+            "Unparseable hold 'until' value %r; falling back to 2h hold", until
+        )
+        body["until"] = _hhmm_from_now(2)
         return body
 
     async def _patch(self, path: str, body: dict) -> None:
@@ -240,23 +317,33 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
 _HHMM_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
 
 
-def _wall_time_to_iso_utc(hhmm: str) -> str | None:
-    """Parse `HH:MM` as the next local occurrence of that wall-clock time
-    and return it as an ISO-8601 UTC timestamp (Z-suffixed).
+def _hhmm_from_now(hours: int) -> str:
+    """Return HH:MM `hours` from now in HA's configured timezone.
 
-    Returns None if the input is not a valid HH:MM string.
+    The thermostat's <otmr> is a bare wall-clock time compared against
+    its own local clock, so we hand it HH:MM matching the user's
+    actual local time (via HA's tz config), not the addon container's
+    process tz.
     """
-    m = _HHMM_RE.match(hhmm.strip())
-    if not m:
-        return None
-    hour, minute = int(m.group(1)), int(m.group(2))
-    if not (0 <= hour < 24 and 0 <= minute < 60):
-        return None
-    now_local = dt_util.now()
-    target = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if target <= now_local:
-        target += timedelta(days=1)
-    return dt_util.as_utc(target).strftime("%Y-%m-%dT%H:%M:%SZ")
+    target = dt_util.now() + timedelta(hours=hours)
+    return f"{target.hour:02d}:{target.minute:02d}"
+
+
+def _hold_matches(real: dict, expected: dict) -> bool:
+    """True when the real hold shape has converged to the optimistic one.
+
+    Only compares the keys we set optimistically (active/activity) plus
+    the presence of `until` — exact HH:MM can drift by a quarter-hour
+    due to server-side snap_quarter_hour, so we treat any non-None
+    `until` as matching a non-None optimistic `until`.
+    """
+    if bool(real.get("active")) != bool(expected.get("active")):
+        return False
+    if (real.get("activity") or None) != (expected.get("activity") or None):
+        return False
+    if bool(real.get("until")) != bool(expected.get("until")):
+        return False
+    return True
 
 
 def _normalize_period(p: dict) -> dict:

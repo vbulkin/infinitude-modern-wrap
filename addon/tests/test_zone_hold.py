@@ -14,7 +14,6 @@ to the thermostat.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -24,7 +23,6 @@ from infinitude_proxy.main import create_app
 from infinitude_proxy.mutations import (
     apply_zone_hold_clear,
     apply_zone_hold_set,
-    datetime_to_wall_time,
     snap_quarter_hour,
 )
 from infinitude_proxy.parser import (
@@ -76,19 +74,6 @@ def test_snap_quarter_hour_wraps_midnight():
 def test_snap_quarter_hour_empty_is_forever():
     # Empty otmr = thermostat's "hold indefinitely" semantic — must pass through.
     assert snap_quarter_hour("") == ""
-
-
-def test_datetime_to_wall_time_snaps_local_minutes():
-    # Same local clock regardless of zone: compute the expected local HH:MM
-    # and compare. (The test can't hard-code HH without knowing the host TZ.)
-    dt = datetime(2026, 4, 20, 14, 7, 0, tzinfo=timezone.utc)
-    local_mm = dt.astimezone().minute
-    local_hh = dt.astimezone().hour
-    total = local_hh * 60 + local_mm
-    snapped = ((total + 7) // 15) * 15
-    snapped %= 24 * 60
-    expected = f"{snapped // 60:02d}:{snapped % 60:02d}"
-    assert datetime_to_wall_time(dt) == expected
 
 
 # ── Tree edits ────────────────────────────────────────────────────────
@@ -251,16 +236,16 @@ def test_put_zone_hold_mutates_config_and_signals_dirty():
         headers={"content-type": "application/xml"},
     )
 
-    until = (datetime(2026, 4, 20, 16, 0, 0, tzinfo=timezone.utc))
     resp = client.put(
         "/v1/zones/1/hold",
-        json={"activity": "manual", "until": until.isoformat()},
+        json={"activity": "manual", "until": "16:00"},
     )
     assert resp.status_code == 200
     body = resp.json()
     assert body["id"] == "1"
     assert body["hold"]["active"] is True
     assert body["hold"]["activity"] == "manual"
+    assert body["hold"]["until"] == "16:00"
 
     # Tree has been mutated — serving GET /config returns the new hold.
     cfg_resp = client.get("/systems/0000TEST0000/config")

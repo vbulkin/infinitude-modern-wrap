@@ -17,7 +17,7 @@ Conventions:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Callable
 
 from lxml import etree
@@ -39,21 +39,6 @@ def snap_quarter_hour(hhmm: str) -> str:
     total = ((total + 7) // 15) * 15
     total %= 24 * 60
     return f"{total // 60:02d}:{total % 60:02d}"
-
-
-def datetime_to_wall_time(dt: datetime) -> str:
-    """Project an ISO datetime to HH:MM in the server's local wall time.
-
-    The thermostat has no concept of timezone — its `<otmr>` is a bare
-    HH:MM that it compares against its own local clock. We render into
-    the server's local zone (Home Assistant sets this correctly on the
-    host) and quarter-hour-snap. Naive datetimes are assumed UTC for
-    forward-safety against JSON parsers that drop the tzinfo.
-    """
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    local = dt.astimezone()
-    return snap_quarter_hour(f"{local.hour:02d}:{local.minute:02d}")
 
 
 # ── Tree-edit helpers ────────────────────────────────────────────────
@@ -258,9 +243,9 @@ def _iso_for_vacation(dt: datetime) -> str:
 
     Observed configs use `YYYY-MM-DDTHH:MM:SS` (no tz suffix); Python's
     isoformat is compatible when we strip the microseconds. Naive
-    datetimes are assumed UTC (same convention as datetime_to_wall_time)
-    but we strip tz before serializing because the thermostat's config
-    tree is tz-naive — its own clock is local-wall time.
+    datetimes are assumed local-wall time and written as-is; aware
+    datetimes are projected to the process-local zone first, since the
+    thermostat's config tree is tz-naive — its own clock is local-wall.
     """
     if dt.tzinfo is not None:
         dt = dt.astimezone().replace(tzinfo=None)

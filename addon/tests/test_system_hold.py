@@ -9,7 +9,6 @@ Layers covered — unit (mutation), store (mutate_config), HTTP, replay.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -126,15 +125,15 @@ def test_put_system_hold_mutates_config_and_signals_dirty():
         headers={"content-type": "application/xml"},
     )
 
-    until = datetime(2026, 4, 20, 16, 0, 0, tzinfo=timezone.utc)
     resp = client.put(
         "/v1/system/hold",
-        json={"activity": "home", "until": until.isoformat()},
+        json={"activity": "home", "until": "16:00"},
     )
     assert resp.status_code == 200
     body = resp.json()
     assert body["hold"]["active"] is True
     assert body["hold"]["activity"] == "home"
+    assert body["hold"]["until"] == "16:00"
 
     cfg_resp = client.get("/systems/0000TEST0000/config")
     assert cfg_resp.status_code == 200

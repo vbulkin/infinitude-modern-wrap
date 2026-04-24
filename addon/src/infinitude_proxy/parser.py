@@ -157,7 +157,8 @@ def _parse_whole_house_hold(wh: etree._Element | None) -> WholeHouseHold:
             activity = SystemHoldActivity(raw)
         except ValueError:
             activity = None
-    return WholeHouseHold(active=active, activity=activity, until=None)
+    until = _text(wh, "otmr") or None
+    return WholeHouseHold(active=active, activity=activity, until=until)
 
 
 def _parse_vacation(config_el: etree._Element) -> VacationConfig:
@@ -366,7 +367,8 @@ def _parse_zone_hold(zone_el: etree._Element) -> ZoneHold:
             activity = ActivityId(raw)
         except ValueError:
             activity = None
-    return ZoneHold(active=active, activity=activity, until=None)
+    until = _text(zone_el, "otmr") or None
+    return ZoneHold(active=active, activity=activity, until=until)
 
 
 def _config_from_element(config: etree._Element) -> SystemConfig:

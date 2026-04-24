@@ -73,7 +73,7 @@ from .mutations import (
     apply_zone_hold_clear,
     apply_zone_hold_set,
     apply_zone_setpoints_set,
-    datetime_to_wall_time,
+    snap_quarter_hour,
 )
 from .persistence import Persistence
 from .settings import load_settings
@@ -871,7 +871,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="no config received yet")
         if not any(zc.id == zone_id for zc in stored.config.zones):
             raise HTTPException(status_code=404, detail=f"zone {zone_id} not found")
-        otmr = datetime_to_wall_time(body.until) if body.until else ""
+        otmr = snap_quarter_hour(body.until) if body.until else ""
         activity = body.activity.value if hasattr(body.activity, "value") else body.activity
         payload = {"zone_id": zone_id, "activity": activity, "otmr": otmr}
         updated = await store.mutate_config(
@@ -958,7 +958,7 @@ def create_app(
         stored = store.get_config()
         if stored is None:
             raise HTTPException(status_code=404, detail="no config received yet")
-        otmr = datetime_to_wall_time(body.until) if body.until else ""
+        otmr = snap_quarter_hour(body.until) if body.until else ""
         activity = body.activity.value if hasattr(body.activity, "value") else body.activity
         payload = {"activity": activity, "otmr": otmr}
         updated = await store.mutate_config(

@@ -191,26 +191,26 @@ class ZoneHold(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
     active: bool
     activity: ActivityId | None = None
-    until: IsoDatetimeOut | None = None
+    until: LocalWallTime | None = None
 
 
 class WholeHouseHold(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
     active: bool
     activity: SystemHoldActivity | None = None
-    until: IsoDatetimeOut | None = None
+    until: LocalWallTime | None = None
 
 
 class ZoneHoldRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", use_enum_values=True)
     activity: ActivityId
-    until: StrictIsoDatetime | None = None
+    until: LocalWallTime | None = None
 
 
 class WholeHouseHoldRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", use_enum_values=True)
     activity: SystemHoldActivity
-    until: StrictIsoDatetime | None = None
+    until: LocalWallTime | None = None
 
 
 # ── System / zones / activities / schedule ───────────────────────────
