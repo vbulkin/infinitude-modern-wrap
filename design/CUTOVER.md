@@ -100,7 +100,22 @@ In order, each shippable independently. Items marked **in progress** are already
 
 1. **Capture live-traffic fixtures (24 h).** Regression-anchor work: capture-middleware tee of southbound POSTs + northbound reads for 24 h, curated into `addon/tests/fixtures/thermostat/live_YYYYMMDD/`. Replaces fixture serial `0000TEST0000` with real-shape fixtures across all mutation kinds and long-tail subpaths. Valuable but **not a prerequisite for the write-path fix** — that fix needs one real config, not a corpus.
 
-   **Tooling shipped (alpha.11):** the capture middleware, `capture_traffic` SQLite table, and `/v1/debug/capture/*` control API are live. `addon/scripts/export_capture.py` pulls rows from a running addon's debug API and writes them out to a fixture-ready directory tree (organized by direction, one file per request body + one per response body, id zero-padded for lexical sort, `_index.tsv` summary). What remains is the ops sequence: `POST /v1/debug/capture/start` → let traffic accumulate → `python export_capture.py --base-url http://ha.local:3001 --out-dir captures/live_YYYYMMDD/` → `POST /v1/debug/capture/stop` → hand-curate the interesting bodies into `addon/tests/fixtures/thermostat/`.
+   **Tooling shipped (alpha.11):** the capture middleware, `capture_traffic` SQLite table, and `/v1/debug/capture/*` control API are live. Two scripts:
+
+   - `addon/scripts/export_capture.py` — pulls rows from a running addon's debug API and writes them to a fixture-ready directory tree (organized by direction, one file per request body + one per response body, id zero-padded for lexical sort, `_index.tsv` summary).
+   - `addon/scripts/exercise_mutations.py` — walks every `/v1/*` mutation kind in each direction (set + reverse), defaulting to fan-only for mode flips so HVAC doesn't swing during the run. Schedule_set is opt-in via `--include-schedule`. Doubles as a post-cutover API smoke test.
+
+   **Ops sequence:**
+   1. Power-cycle the thermostat (captures boot sequence — `/systems/{serial}`, `/idu_config`, `/odu_config`, `/profile`, `/dealer`, `/energy`, etc.).
+   2. `POST /v1/debug/capture/start`.
+   3. Let ~15–30 min of steady-state telemetry accumulate.
+   4. `python exercise_mutations.py --base-url http://ha.local:3001 --zone-id 1` (14 steps × 60s ≈ 14 min). Paired reverses keep thermostat state near-original.
+   5. Leave overnight for long-tail metadata subpaths (`energy`, `odu_faults`, `root_cause`).
+   6. `python export_capture.py --base-url http://ha.local:3001 --out-dir captures/live_YYYYMMDD/`.
+   7. `POST /v1/debug/capture/stop` + `DELETE /v1/debug/capture`.
+   8. Hand-curate bodies from the export into `addon/tests/fixtures/thermostat/`, replacing `0000TEST0000` anchors.
+
+   Note: the 10 000-row cap (trim-oldest) means 24h+ of steady telemetry can roll over the boot sequence. Export after ~12h if boot fixtures are load-bearing.
 
    1a. **Write-path against live config — resolved in alpha.10 (2026-04-23).** Root cause: two wire-shape bugs in `mutations._set_or_create` and `apply_zone_hold_clear`. `text=""` rendered as `<tag></tag>` (lxml), but the thermostat's strict parser accepts only self-closing `<tag/>` for empty optional fields — any `<tag></tag>` occurrence caused a silent reject and a correction push of the previous config. Second bug: `apply_zone_hold_clear` wrote `<holdActivity>none</holdActivity>` for zones, but `"none"` is only valid at whole-house level; zones expect `<holdActivity/>` self-closing. Fix: `_set_or_create` now maps empty strings to `None` so lxml emits self-closing tags; `apply_zone_hold_clear` passes `""`. Byte-symmetry invariant `parse(x) → serialize → x` now proven against `boot_01_system_config.xml` as a regression anchor in `test_southbound.py`; explicit `<tag/>` shape assertions added to `test_zone_hold.py`. Live-fire confirmed round-trip on 2026-04-23 (see step 7 note above).
 2. **HA integration cutover.** *(in progress)* `custom_components/infinitude_direct/` has already been rewritten to hit the `/v1/*` endpoints and ships alongside the add-on under the same alpha version. Post-cutover work here is narrowing to bug-fix + live-data validation rather than a net-new rewrite.
