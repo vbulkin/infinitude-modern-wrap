@@ -7,6 +7,13 @@
         "data": {
           "host": "Infinitude URL"
         }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Infinitude",
+        "description": "Update the Infinitude proxy URL.",
+        "data": {
+          "host": "Infinitude URL"
+        }
       }
     },
     "error": {
@@ -15,7 +22,8 @@
       "unknown": "An unexpected error occurred."
     },
     "abort": {
-      "already_configured": "Infinitude is already configured."
+      "already_configured": "Infinitude is already configured.",
+      "reconfigure_successful": "Infinitude URL updated."
     }
   },
   "options": {

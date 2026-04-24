@@ -71,6 +71,36 @@ class InfinitudeDirectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def async_step_reconfigure(self, user_input=None):
+        """Reconfigure flow — available from the integration card even
+        when setup failed ("misconfigured"), so a wrong host URL doesn't
+        force a delete + re-add cycle."""
+        errors = {}
+        entry = self._get_reconfigure_entry()
+        current_host = entry.data.get(CONF_HOST, DEFAULT_HOST)
+
+        if user_input is not None:
+            host = user_input[CONF_HOST].rstrip("/")
+            session = async_get_clientsession(self.hass)
+            error = await _validate_connection(session, host)
+            if error:
+                errors["base"] = error
+            else:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data={**entry.data, CONF_HOST: host},
+                )
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_HOST, default=current_host): str,
+                }
+            ),
+            errors=errors,
+        )
+
 
 class InfinitudeOptionsFlow(config_entries.OptionsFlow):
     """Handle options for Infinitude Direct (change host URL)."""
