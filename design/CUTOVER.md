@@ -106,8 +106,8 @@ In order, each shippable independently. Items marked **in progress** are already
    - `addon/scripts/exercise_mutations.py` — walks every `/v1/*` mutation kind in each direction (set + reverse), defaulting to fan-only for mode flips so HVAC doesn't swing during the run. Schedule_set is opt-in via `--include-schedule`. Doubles as a post-cutover API smoke test.
 
    **Ops sequence:**
-   1. Power-cycle the thermostat (captures boot sequence — `/systems/{serial}`, `/idu_config`, `/odu_config`, `/profile`, `/dealer`, `/energy`, etc.).
-   2. `POST /v1/debug/capture/start`.
+   1. `POST /v1/debug/capture/start` — arm capture before any traffic we want recorded.
+   2. Power-cycle the thermostat (captures boot sequence — `/systems/{serial}`, `/idu_config`, `/odu_config`, `/profile`, `/dealer`, `/energy`, etc.). Must come after step 1 or the boot POSTs hit while capture is off.
    3. Let ~15–30 min of steady-state telemetry accumulate.
    4. `python exercise_mutations.py --base-url http://192.168.1.233:3001 --zone-id 1` (14 steps × 60s ≈ 14 min). Paired reverses keep thermostat state near-original.
    5. Leave overnight for long-tail metadata subpaths (`energy`, `odu_faults`, `root_cause`).
