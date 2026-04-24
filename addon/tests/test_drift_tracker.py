@@ -258,59 +258,26 @@ def test_intents_uninstrumented_kinds_return_empty():
         "humidity_set",
         "system_hold_set",
         "system_hold_clear",
+        "system_mode_set",
+        "vacation_set",
     ):
         assert intents_for_mutation(kind, {}, now=now) == []
 
 
-def test_intents_system_mode_set_arms_system_mode():
+def test_intents_system_mode_set_returns_empty_even_with_payload():
     now = datetime(2026, 4, 23, 19, 0, tzinfo=timezone.utc)
-    intents = intents_for_mutation("system_mode_set", {"mode": "heat"}, now=now)
-    assert len(intents) == 1
-    assert intents[0].target == "system"
-    assert intents[0].field == "systemMode"
-    assert intents[0].expected == "heat"
+    # /status <mode> is the currently-running mode, not the configured
+    # one — drift can't be derived from that signal. See drift.py docstring.
+    assert intents_for_mutation("system_mode_set", {"mode": "heat"}, now=now) == []
 
 
-def test_intents_system_mode_set_missing_mode_returns_empty():
+def test_intents_vacation_set_returns_empty_even_when_active():
     now = datetime(2026, 4, 23, 19, 0, tzinfo=timezone.utc)
-    assert intents_for_mutation("system_mode_set", {}, now=now) == []
-    assert intents_for_mutation(
-        "system_mode_set", {"mode": None}, now=now
-    ) == []
-
-
-def test_intents_vacation_set_active_arms_vacation_running():
-    now = datetime(2026, 4, 23, 19, 0, tzinfo=timezone.utc)
-    intents = intents_for_mutation(
-        "vacation_set", {"active": True}, now=now
-    )
-    assert len(intents) == 1
-    assert intents[0].target == "system"
-    assert intents[0].field == "vacationRunning"
-    assert intents[0].expected is True
-
-
-def test_intents_vacation_set_inactive_arms_false():
-    now = datetime(2026, 4, 23, 19, 0, tzinfo=timezone.utc)
-    intents = intents_for_mutation(
-        "vacation_set", {"active": False}, now=now
-    )
-    assert len(intents) == 1
-    assert intents[0].expected is False
-
-
-def test_intents_vacation_set_without_active_returns_empty():
-    now = datetime(2026, 4, 23, 19, 0, tzinfo=timezone.utc)
-    # Non-`active` keys have no telemetry signal — window/setpoints
-    # only become observable once the window engages.
-    assert intents_for_mutation(
-        "vacation_set",
-        {"heatSetpoint": 60, "coolSetpoint": 85},
-        now=now,
-    ) == []
-    assert intents_for_mutation(
-        "vacation_set", {"active": None}, now=now
-    ) == []
+    # <vacatrunning> only flips `on` when the window is live in
+    # thermostat-local time AND the system has demand — too narrow
+    # a signal to form a drift intent from a PATCH.
+    assert intents_for_mutation("vacation_set", {"active": True}, now=now) == []
+    assert intents_for_mutation("vacation_set", {"active": False}, now=now) == []
 
 
 def test_intents_missing_zone_id_returns_empty():
@@ -529,7 +496,11 @@ async def test_drift_event_publishes_health_changed_sse():
     assert fired["observed"] == "75"
 
 
-async def test_mutate_config_arms_system_mode_drift_intent():
+async def test_system_mode_and_vacation_set_never_arm_intents():
+    # Regression: /status <mode> and <vacatrunning> are the
+    # currently-running signals, not configured state — they false-
+    # positive on any idle healthy unit. Both kinds are uninstrumented;
+    # see drift.py module docstring.
     store = StateStore()
     xml = (FIXTURES / "boot_01_system_config.xml").read_bytes()
     tree, cfg = parse_system_config_with_tree(xml)
@@ -542,105 +513,20 @@ async def test_mutate_config_arms_system_mode_drift_intent():
         target="system",
         payload={"mode": "heat"},
     )
-    assert store.drift.armed_count == 1
-
-    # Matching telemetry (mode flipped to heat) disarms without firing.
-    base = parse_telemetry((FIXTURES / "telemetry_steady.xml").read_bytes())
-    matched = base.model_copy(update={"systemMode": "heat"})
-    await store.apply_telemetry("0000TEST0000", matched)
+    await store.mutate_config(
+        apply_vacation_set,
+        serial="0000TEST0000",
+        kind="vacation_set",
+        target="vacation",
+        payload={"active": True},
+    )
     assert store.drift.armed_count == 0
+
+    # An idle telemetry tick (mode=off, vacatrunning=off) must not
+    # produce any drift events for these mutations.
+    base = parse_telemetry((FIXTURES / "telemetry_steady.xml").read_bytes())
+    await store.apply_telemetry("0000TEST0000", base)
     assert store.drift.drift_count == 0
-
-
-async def test_system_mode_drift_fires_past_grace():
-    store = StateStore()
-    store.drift = DriftTracker(grace=timedelta(seconds=0))
-    xml = (FIXTURES / "boot_01_system_config.xml").read_bytes()
-    tree, cfg = parse_system_config_with_tree(xml)
-    await store.apply_config("0000TEST0000", cfg, tree)
-    await store.mutate_config(
-        apply_system_mode_set,
-        serial="0000TEST0000",
-        kind="system_mode_set",
-        target="system",
-        payload={"mode": "heat"},
-    )
-
-    # Fixture emits <mode>off</mode> — unchanged telemetry → drift fires.
-    base = parse_telemetry((FIXTURES / "telemetry_steady.xml").read_bytes())
-    await store.apply_telemetry("0000TEST0000", base)
-
-    assert store.drift.drift_count == 1
-    ev = store.drift.recent_events()[0]
-    assert ev.kind == "system_mode_set"
-    assert ev.target == "system"
-    assert ev.field == "systemMode"
-    assert ev.expected == "heat"
-    assert ev.observed == "off"
-
-
-async def test_mutate_config_arms_vacation_drift_intent():
-    store = StateStore()
-    xml = (FIXTURES / "boot_01_system_config.xml").read_bytes()
-    tree, cfg = parse_system_config_with_tree(xml)
-    await store.apply_config("0000TEST0000", cfg, tree)
-
-    await store.mutate_config(
-        apply_vacation_set,
-        serial="0000TEST0000",
-        kind="vacation_set",
-        target="vacation",
-        payload={"active": True},
-    )
-    assert store.drift.armed_count == 1
-    intent = next(iter(store.drift._armed.values()))
-    assert intent.field == "vacationRunning"
-    assert intent.expected is True
-
-
-async def test_vacation_set_without_active_arms_no_intents():
-    store = StateStore()
-    xml = (FIXTURES / "boot_01_system_config.xml").read_bytes()
-    tree, cfg = parse_system_config_with_tree(xml)
-    await store.apply_config("0000TEST0000", cfg, tree)
-
-    # Setpoint-only vacation update has no telemetry signal.
-    await store.mutate_config(
-        apply_vacation_set,
-        serial="0000TEST0000",
-        kind="vacation_set",
-        target="vacation",
-        payload={"heatSetpoint": 60, "coolSetpoint": 85},
-    )
-    assert store.drift.armed_count == 0
-
-
-async def test_vacation_running_drift_fires_past_grace():
-    store = StateStore()
-    store.drift = DriftTracker(grace=timedelta(seconds=0))
-    xml = (FIXTURES / "boot_01_system_config.xml").read_bytes()
-    tree, cfg = parse_system_config_with_tree(xml)
-    await store.apply_config("0000TEST0000", cfg, tree)
-    await store.mutate_config(
-        apply_vacation_set,
-        serial="0000TEST0000",
-        kind="vacation_set",
-        target="vacation",
-        payload={"active": True},
-    )
-
-    # Fixture emits <vacatrunning>off</vacatrunning>. The thermostat may
-    # legitimately defer engaging the window until start time — the drift
-    # counter surfaces the silent-reject case; consumers decide whether
-    # to suppress alerts for "future-dated vacation".
-    base = parse_telemetry((FIXTURES / "telemetry_steady.xml").read_bytes())
-    await store.apply_telemetry("0000TEST0000", base)
-
-    assert store.drift.drift_count == 1
-    ev = store.drift.recent_events()[0]
-    assert ev.field == "vacationRunning"
-    assert ev.expected is True
-    assert ev.observed is False
 
 
 async def test_matching_telemetry_does_not_publish_health_changed():

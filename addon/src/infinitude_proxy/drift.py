@@ -18,10 +18,6 @@ of regression into an observable rather than a user-reported surprise.
 Instrumented kinds (telemetry signal available):
   - zone_setpoints_set → TelemetryZone.coolSetpoint/heatSetpoint/holdActive
   - zone_hold_set / zone_hold_clear → TelemetryZone.holdActive
-  - system_mode_set → TelemetrySnapshot.systemMode (from <mode>)
-  - vacation_set → TelemetrySnapshot.vacationRunning (from <vacatrunning>),
-    only for the `active` flag — the thermostat exposes no telemetry
-    for the stored window/setpoints/fan until vacation actually engages.
 
 Uninstrumented kinds (no clean telemetry signal → intents_for_mutation
 returns [] and drift for these mutations is undetectable at this layer):
@@ -41,6 +37,14 @@ returns [] and drift for these mutations is undetectable at this layer):
     mirror — per-zone holdActive reflects zone-level hold only, and
     aggregating across zones would both over- and under-count the
     whole-house case. Covered by the pull-observed-clear path.
+  - system_mode_set: /status <mode> is the *currently running* mode
+    (goes to `off` whenever oprstsmsg=idle and nothing is conditioning),
+    not the *configured* mode. A walk against an idle healthy unit
+    would false-positive every mode set. Live-fire 2026-04-24 confirmed.
+  - vacation_set: /status <vacatrunning> only flips `on` when the
+    vacation window is live (start ≤ now ≤ end in thermostat local
+    time) AND the system has demand — too narrow a signal to form a
+    drift intent from a PATCH that may set a window hours or days out.
 """
 
 from __future__ import annotations
@@ -244,18 +248,5 @@ def intents_for_mutation(
             return []
         return [_make_intent(
             kind, f"zones/{zone_id}", "holdActive", False, now=now
-        )]
-    if kind == "system_mode_set":
-        mode = payload.get("mode")
-        if mode is None:
-            return []
-        return [_make_intent(kind, "system", "systemMode", str(mode), now=now)]
-    if kind == "vacation_set":
-        # Only the `active` flag has a telemetry signal; start/end/
-        # setpoints/fan only become observable once the window engages.
-        if "active" not in payload or payload["active"] is None:
-            return []
-        return [_make_intent(
-            kind, "system", "vacationRunning", bool(payload["active"]), now=now
         )]
     return []
