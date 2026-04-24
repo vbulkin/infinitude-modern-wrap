@@ -45,6 +45,11 @@ tags:
     description: Per-zone control (setpoints, holds, activities, schedules).
   - name: meta
     description: Build info and runtime config.
+  - name: debug
+    description: |
+      Operator-only debugging tools. Off by default; endpoints are
+      intended for incident diagnosis and pre-cutover fixture harvesting.
+      Not part of the stable consumer contract.
 
 paths:
 
@@ -617,6 +622,136 @@ paths:
           $ref: "#/components/responses/NotFound"
         "422":
           $ref: "#/components/responses/ValidationError"
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Debug / capture (operator-only)
+  # ──────────────────────────────────────────────────────────────────────
+
+  /v1/debug/capture/start:
+    post:
+      tags: [debug]
+      summary: Enable traffic capture.
+      description: |
+        Flips the in-memory capture flag on. Every subsequent non-excluded
+        request (southbound + northbound) has its request body, response
+        body, and metadata teed to the `capture_traffic` SQLite table.
+        Capture is off on process start; call this endpoint again to
+        re-enable after a restart.
+      operationId: startCapture
+      responses:
+        "200":
+          description: Current capture status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaptureStatus"
+        "503":
+          description: Persistence layer unavailable — capture cannot start.
+
+  /v1/debug/capture/stop:
+    post:
+      tags: [debug]
+      summary: Disable traffic capture.
+      operationId: stopCapture
+      responses:
+        "200":
+          description: Current capture status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaptureStatus"
+
+  /v1/debug/capture/status:
+    get:
+      tags: [debug]
+      summary: Current capture state + stored row stats.
+      operationId: getCaptureStatus
+      responses:
+        "200":
+          description: Current capture status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaptureStatus"
+
+  /v1/debug/capture/entries:
+    get:
+      tags: [debug]
+      summary: Paginated metadata listing of captured rows.
+      description: |
+        Metadata only (no bodies) so responses stay small. Use
+        `/v1/debug/capture/entries/{id}` for the full payload of a row.
+      operationId: listCaptureEntries
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+        - in: query
+          name: sinceId
+          description: Return rows with id strictly greater than this (cursor).
+          schema: { type: integer, minimum: 0 }
+        - in: query
+          name: direction
+          schema:
+            type: string
+            enum: [southbound, northbound, carrier_out]
+        - in: query
+          name: method
+          schema: { type: string }
+        - in: query
+          name: pathPrefix
+          schema: { type: string }
+      responses:
+        "200":
+          description: Entry metadata (newest first).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CaptureEntryMeta"
+
+  /v1/debug/capture/entries/{entry_id}:
+    get:
+      tags: [debug]
+      summary: Single capture row with bodies.
+      description: |
+        Bodies are returned either as a decoded UTF-8 string (for textual
+        content-types) or as base64-encoded bytes (for binary or
+        undecodable content). The `reqBodyEncoding` / `respBodyEncoding`
+        field tells the consumer which.
+      operationId: getCaptureEntry
+      parameters:
+        - in: path
+          name: entry_id
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Capture entry (metadata + bodies).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaptureEntry"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/debug/capture:
+    delete:
+      tags: [debug]
+      summary: Flush every captured row.
+      description: |
+        Drops the entire `capture_traffic` table's contents. The
+        `CaptureControl.submitted` / `errors` counters are not reset —
+        those span the lifetime of the process.
+      operationId: flushCapture
+      responses:
+        "200":
+          description: Flush result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlushResult"
 
 # ──────────────────────────────────────────────────────────────────────
 # Components
@@ -1625,3 +1760,95 @@ components:
           description: Server-side timestamp when the notification landed.
         event:
           $ref: "#/components/schemas/NotificationBody"
+
+    # ── Debug / capture ────────────────────────────────────────────────
+
+    CaptureStatus:
+      type: object
+      required:
+        [enabled, maxRows, rowCount, oldestAt, newestAt, totalBytes,
+         submitted, errors]
+      properties:
+        enabled: { type: boolean }
+        maxRows:
+          type: integer
+          description: Rolling-window cap — oldest rows trimmed on insert.
+        rowCount: { type: integer }
+        oldestAt:
+          oneOf:
+            - $ref: "#/components/schemas/IsoDateTime"
+            - type: "null"
+        newestAt:
+          oneOf:
+            - $ref: "#/components/schemas/IsoDateTime"
+            - type: "null"
+        totalBytes:
+          type: integer
+          description: Sum of stored request + response body bytes.
+        submitted:
+          type: integer
+          description: Rows attempted since process start (survives flush).
+        errors:
+          type: integer
+          description: Insertion failures since process start.
+
+    CaptureEntryMeta:
+      type: object
+      required:
+        [id, capturedAt, direction, method, path, statusCode,
+         reqBytes, respBytes]
+      properties:
+        id: { type: integer }
+        capturedAt: { $ref: "#/components/schemas/IsoDateTime" }
+        direction:
+          type: string
+          enum: [southbound, northbound, carrier_out]
+        method: { type: string }
+        path: { type: string }
+        query:
+          type: string
+          nullable: true
+        statusCode: { type: integer }
+        reqContentType:
+          type: string
+          nullable: true
+        reqBytes: { type: integer }
+        respContentType:
+          type: string
+          nullable: true
+        respBytes: { type: integer }
+        durationMs:
+          type: integer
+          nullable: true
+
+    CaptureEntry:
+      allOf:
+        - $ref: "#/components/schemas/CaptureEntryMeta"
+        - type: object
+          properties:
+            reqBody:
+              type: string
+              nullable: true
+              description: |
+                Request body. Encoding given by `reqBodyEncoding`: when
+                `utf-8`, the string is the decoded body; when `base64`,
+                the string is base64-encoded raw bytes.
+            reqBodyEncoding:
+              type: string
+              enum: ["utf-8", "base64"]
+              nullable: true
+            respBody:
+              type: string
+              nullable: true
+            respBodyEncoding:
+              type: string
+              enum: ["utf-8", "base64"]
+              nullable: true
+
+    FlushResult:
+      type: object
+      required: [deleted]
+      properties:
+        deleted:
+          type: integer
+          description: Row count removed by the flush.

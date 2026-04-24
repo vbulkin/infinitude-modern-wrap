@@ -30,7 +30,7 @@ import aiosqlite
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -59,6 +59,33 @@ CREATE TABLE IF NOT EXISTS pending_writes (
 CREATE INDEX IF NOT EXISTS idx_pending_unapplied
     ON pending_writes(serial, created_at)
     WHERE applied_at IS NULL;
+"""
+
+# v2: debug traffic capture. `direction` is the union of three values
+# set by the emitter: 'southbound' (thermostat → proxy), 'northbound'
+# (HA/browser → proxy), 'carrier_out' (proxy → carrier.com forward-proxy
+# passthrough, not yet wired). Body columns are BLOB so we retain raw
+# bytes regardless of content-type; NULL when empty. `captured_at` is
+# unix-seconds like state_cache.updated_at, not an ISO string, so range
+# filters are pure numeric compares.
+_SCHEMA_V2_ADD = """
+CREATE TABLE IF NOT EXISTS capture_traffic (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    captured_at       REAL NOT NULL,
+    direction         TEXT NOT NULL,
+    method            TEXT NOT NULL,
+    path              TEXT NOT NULL,
+    query             TEXT,
+    status_code       INTEGER NOT NULL,
+    req_content_type  TEXT,
+    req_body          BLOB,
+    resp_content_type TEXT,
+    resp_body         BLOB,
+    duration_ms       INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_capture_time ON capture_traffic(captured_at);
+CREATE INDEX IF NOT EXISTS idx_capture_path ON capture_traffic(path);
 """
 
 
@@ -124,21 +151,35 @@ class Persistence:
         ) as cursor:
             row = await cursor.fetchone()
         if row is None:
+            # Fresh DB: apply every version's additive DDL before
+            # stamping the version row.
+            await self._conn.executescript(_SCHEMA_V2_ADD)
             await self._conn.execute(
                 "INSERT INTO schema_version (version) VALUES (?)",
                 (SCHEMA_VERSION,),
             )
             await self._conn.commit()
             logger.info("persistence: initialized schema v%d", SCHEMA_VERSION)
-        else:
-            current = row[0]
-            if current != SCHEMA_VERSION:
-                # Forward-only migrations land here as elif-blocks per
-                # version when schema evolves. No downgrade path.
-                raise RuntimeError(
-                    f"persistence: unsupported schema version {current}"
-                    f" (this build expects {SCHEMA_VERSION})"
-                )
+            return
+        current = row[0]
+        if current > SCHEMA_VERSION:
+            raise RuntimeError(
+                f"persistence: db schema version {current} is newer than"
+                f" this build ({SCHEMA_VERSION}); downgrade not supported"
+            )
+        if current < SCHEMA_VERSION:
+            # Forward-only migrations. IF NOT EXISTS in the DDL makes
+            # each step idempotent if the upgrade is interrupted and
+            # retried on next startup.
+            if current < 2:
+                await self._conn.executescript(_SCHEMA_V2_ADD)
+            await self._conn.execute(
+                "UPDATE schema_version SET version = ?", (SCHEMA_VERSION,)
+            )
+            await self._conn.commit()
+            logger.info(
+                "persistence: migrated schema v%d → v%d", current, SCHEMA_VERSION
+            )
 
     # ── state_cache ──────────────────────────────────────────────────
 
@@ -349,6 +390,163 @@ class Persistence:
         async with self._conn.execute(query, args) as cursor:
             row = await cursor.fetchone()
         return int(row[0]) if row else 0
+
+    # ── capture_traffic ──────────────────────────────────────────────
+
+    async def capture_insert(
+        self,
+        *,
+        captured_at: float,
+        direction: str,
+        method: str,
+        path: str,
+        query: str | None,
+        status_code: int,
+        req_content_type: str | None,
+        req_body: bytes | None,
+        resp_content_type: str | None,
+        resp_body: bytes | None,
+        duration_ms: int | None,
+        max_rows: int | None = None,
+    ) -> int:
+        """Insert one traffic row and, when max_rows is set, trim the
+        oldest rows down to the cap in the same transaction.
+
+        The cap-trim is done here (not on a background timer) so callers
+        can't observe a window where the table exceeds the cap. Cost of
+        the extra DELETE on every insert is negligible at expected
+        cadences (~10/minute sustained).
+        """
+        cursor = await self._conn.execute(
+            """
+            INSERT INTO capture_traffic
+                (captured_at, direction, method, path, query,
+                 status_code, req_content_type, req_body,
+                 resp_content_type, resp_body, duration_ms)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                captured_at, direction, method, path, query,
+                status_code, req_content_type, req_body,
+                resp_content_type, resp_body, duration_ms,
+            ),
+        )
+        assert cursor.lastrowid is not None
+        row_id = cursor.lastrowid
+        if max_rows is not None and max_rows > 0:
+            # Delete everything older than the (max_rows)-th most recent.
+            await self._conn.execute(
+                """
+                DELETE FROM capture_traffic
+                WHERE id <= (
+                    SELECT id FROM capture_traffic
+                    ORDER BY id DESC
+                    LIMIT 1 OFFSET ?
+                )
+                """,
+                (max_rows,),
+            )
+        await self._conn.commit()
+        return row_id
+
+    async def capture_list(
+        self,
+        *,
+        limit: int = 100,
+        since_id: int | None = None,
+        direction: str | None = None,
+        method: str | None = None,
+        path_prefix: str | None = None,
+    ) -> list[dict]:
+        """Paginated metadata listing (no bodies — keeps responses small).
+
+        Filter semantics:
+          - since_id: return rows with id > since_id (exclusive). Pairs
+            with the max(id) of a prior page for cursor pagination.
+          - path_prefix: LIKE '<prefix>%' — useful for narrowing to e.g.
+            '/systems/' (southbound) or '/v1/' (northbound).
+
+        Returns newest-first. The debug UI can reverse client-side if
+        chronological order is preferred.
+        """
+        clauses: list[str] = []
+        args: list = []
+        if since_id is not None:
+            clauses.append("id > ?")
+            args.append(since_id)
+        if direction is not None:
+            clauses.append("direction = ?")
+            args.append(direction)
+        if method is not None:
+            clauses.append("method = ?")
+            args.append(method.upper())
+        if path_prefix is not None:
+            clauses.append("path LIKE ?")
+            args.append(path_prefix + "%")
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        args.append(limit)
+        query = (
+            "SELECT id, captured_at, direction, method, path, query, "
+            "       status_code, req_content_type, "
+            "       LENGTH(req_body) AS req_bytes, resp_content_type, "
+            "       LENGTH(resp_body) AS resp_bytes, duration_ms "
+            f"FROM capture_traffic {where} "
+            "ORDER BY id DESC LIMIT ?"
+        )
+        async with self._conn.execute(query, args) as cursor:
+            rows = await cursor.fetchall()
+        cols = [
+            "id", "captured_at", "direction", "method", "path", "query",
+            "status_code", "req_content_type", "req_bytes",
+            "resp_content_type", "resp_bytes", "duration_ms",
+        ]
+        return [dict(zip(cols, r)) for r in rows]
+
+    async def capture_get(self, row_id: int) -> dict | None:
+        """Full row including body BLOBs. Caller chooses how to encode
+        (text vs base64) based on content-type."""
+        async with self._conn.execute(
+            "SELECT id, captured_at, direction, method, path, query, "
+            "       status_code, req_content_type, req_body, "
+            "       resp_content_type, resp_body, duration_ms "
+            "FROM capture_traffic WHERE id = ?",
+            (row_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        cols = [
+            "id", "captured_at", "direction", "method", "path", "query",
+            "status_code", "req_content_type", "req_body",
+            "resp_content_type", "resp_body", "duration_ms",
+        ]
+        return dict(zip(cols, row))
+
+    async def capture_stats(self) -> dict:
+        """Summary for the debug status endpoint — cheap aggregate."""
+        async with self._conn.execute(
+            "SELECT COUNT(*), MIN(captured_at), MAX(captured_at), "
+            "       COALESCE(SUM(LENGTH(req_body)), 0) + "
+            "       COALESCE(SUM(LENGTH(resp_body)), 0) "
+            "FROM capture_traffic"
+        ) as cursor:
+            row = await cursor.fetchone()
+        count = int(row[0]) if row else 0
+        return {
+            "rowCount": count,
+            "oldestAt": row[1] if row and count else None,
+            "newestAt": row[2] if row and count else None,
+            "totalBytes": int(row[3]) if row else 0,
+        }
+
+    async def capture_flush(self) -> int:
+        """Delete every capture row. Returns how many were removed so the
+        debug endpoint can echo the effect."""
+        cursor = await self._conn.execute(
+            "DELETE FROM capture_traffic"
+        )
+        await self._conn.commit()
+        return cursor.rowcount or 0
 
     async def oldest_pending_age_seconds(
         self, serial: str | None = None

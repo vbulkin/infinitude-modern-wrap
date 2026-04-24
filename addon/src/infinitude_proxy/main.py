@@ -59,6 +59,8 @@ from .models import (
     ZoneHoldRequest,
     ZonePatch,
 )
+from .capture import CaptureControl, CaptureMiddleware
+from .debug_api import create_debug_router
 from .errors import register_error_handlers
 from .mutations import (
     apply_activity_set,
@@ -189,7 +191,11 @@ def _compose_state(
     return State(lastUpdated=last_updated, system=system, zones=zones)
 
 
-def create_app(store: StateStore | None = None) -> FastAPI:
+def create_app(
+    store: StateStore | None = None,
+    *,
+    capture_control: CaptureControl | None = None,
+) -> FastAPI:
     settings = load_settings()
     _configure_logging(settings.log_level)
     # When the caller supplies a store (tests), we trust it's pre-configured
@@ -197,6 +203,11 @@ def create_app(store: StateStore | None = None) -> FastAPI:
     # create_app() with no args → lifespan opens the DB at settings.db_path.
     owns_store = store is None
     store = store or StateStore()
+    # Single CaptureControl per app — holds the start/stop flag, max-rows
+    # cap, and the persistence handle for the middleware to reach. Tests
+    # can inject a pre-wired one (e.g., attached to a test persistence)
+    # to exercise capture without running the lifespan path.
+    control = capture_control if capture_control is not None else CaptureControl()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -206,6 +217,7 @@ def create_app(store: StateStore | None = None) -> FastAPI:
                 persistence = await Persistence.open(settings.db_path)
                 store.attach_persistence(persistence)
                 await store.restore_from_persistence()
+                control.attach_persistence(persistence)
             except Exception:
                 # A broken/locked DB shouldn't brick the proxy — degrade
                 # to in-memory-only mode and log. Operator can delete the
@@ -216,9 +228,13 @@ def create_app(store: StateStore | None = None) -> FastAPI:
                 )
                 persistence = None
                 store.attach_persistence(None)
+                control.attach_persistence(None)
         try:
             yield
         finally:
+            # Detach before close so any in-flight capture task sees a
+            # clean "no persistence" state rather than a closed handle.
+            control.attach_persistence(None)
             if persistence is not None:
                 await persistence.close()
 
@@ -228,8 +244,14 @@ def create_app(store: StateStore | None = None) -> FastAPI:
         description="Northbound HTTP API for the modernized Infinitude proxy.",
         lifespan=lifespan,
     )
+    # Middleware runs outside-in; installing capture last means it's the
+    # innermost wrapper, closest to the app. That's what we want — it
+    # needs to see the exact bytes the app receives and emits after all
+    # other middleware (CORS, error handlers) have done their work.
+    app.add_middleware(CaptureMiddleware, control=control)
     register_error_handlers(app)
     app.include_router(create_southbound_router(store))
+    app.include_router(create_debug_router(control))
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     async def root_landing() -> str:
