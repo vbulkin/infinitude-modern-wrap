@@ -228,13 +228,36 @@ class StateStore:
             # Evaluate drift inside the lock so a racing mutate_config
             # can't arm an intent mid-observe and then watch this same
             # (pre-arm) snapshot disarm it.
-            self.drift.observe(snapshot, now=now)
+            drift_events = self.drift.observe(snapshot, now=now)
+            drift_count = self.drift.drift_count
         # Empty `changes` is the re-fetch hint: telemetry touches many
         # fields and enumerating them here would duplicate the parser.
         # Clients that care replay from /v1/state on the event.
         await self.events.publish(
             "state.update", {"resource": "system", "changes": {}}
         )
+        if drift_events:
+            # One health.changed per batch of drift events, carrying just
+            # the fired ones rather than the full recent-events ring.
+            # Clients can poll /v1/healthz for the full picture on receipt.
+            await self.events.publish(
+                "health.changed",
+                {
+                    "reason": "mutation_drift",
+                    "driftCount": drift_count,
+                    "events": [
+                        {
+                            "detectedAt": ev.detected_at.isoformat(),
+                            "kind": ev.kind,
+                            "target": ev.target,
+                            "field": ev.field,
+                            "expected": str(ev.expected),
+                            "observed": str(ev.observed),
+                        }
+                        for ev in drift_events
+                    ],
+                },
+            )
 
     async def apply_config(
         self,

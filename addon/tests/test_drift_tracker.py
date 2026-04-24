@@ -428,3 +428,77 @@ def test_healthz_reflects_armed_intents_after_patch():
     # coolSetpoint + holdActive.
     assert drift_field["armedIntents"] == 2
     assert drift_field["recentEvents"] == []
+
+
+# ── SSE health.changed on drift ───────────────────────────────────────
+
+
+async def test_drift_event_publishes_health_changed_sse():
+    store = StateStore()
+    store.drift = DriftTracker(grace=timedelta(seconds=0))
+    xml = (FIXTURES / "boot_01_system_config.xml").read_bytes()
+    tree, cfg = parse_system_config_with_tree(xml)
+    await store.apply_config("0000TEST0000", cfg, tree)
+    await store.mutate_config(
+        apply_zone_setpoints_set,
+        serial="0000TEST0000",
+        kind="zone_setpoints_set",
+        target="zone:1",
+        payload={"zone_id": "1", "cool": 78, "heat": None, "activate_hold": False},
+    )
+
+    # Subscribe AFTER mutate_config so the state.update it publishes isn't
+    # in our queue. We want the telemetry-driven events only.
+    q = store.events.subscribe()
+
+    base = parse_telemetry((FIXTURES / "telemetry_steady.xml").read_bytes())
+    drifted_zones = [
+        z.model_copy(update={"coolSetpoint": 75}) if z.id == "1" else z
+        for z in base.zones
+    ]
+    drifted = base.model_copy(update={"zones": drifted_zones})
+    await store.apply_telemetry("0000TEST0000", drifted)
+
+    # apply_telemetry emits state.update first, then health.changed.
+    ev1 = q.get_nowait()
+    ev2 = q.get_nowait()
+    assert ev1.event == "state.update"
+    assert ev2.event == "health.changed"
+    assert ev2.data["reason"] == "mutation_drift"
+    assert ev2.data["driftCount"] == 1
+    assert len(ev2.data["events"]) == 1
+    fired = ev2.data["events"][0]
+    assert fired["kind"] == "zone_setpoints_set"
+    assert fired["target"] == "zones/1"
+    assert fired["field"] == "coolSetpoint"
+    assert fired["expected"] == "78"
+    assert fired["observed"] == "75"
+
+
+async def test_matching_telemetry_does_not_publish_health_changed():
+    store = StateStore()
+    xml = (FIXTURES / "boot_01_system_config.xml").read_bytes()
+    tree, cfg = parse_system_config_with_tree(xml)
+    await store.apply_config("0000TEST0000", cfg, tree)
+    await store.mutate_config(
+        apply_zone_setpoints_set,
+        serial="0000TEST0000",
+        kind="zone_setpoints_set",
+        target="zone:1",
+        payload={"zone_id": "1", "cool": 78, "heat": None, "activate_hold": True},
+    )
+    q = store.events.subscribe()
+
+    base = parse_telemetry((FIXTURES / "telemetry_steady.xml").read_bytes())
+    matched_zones = [
+        z.model_copy(update={"coolSetpoint": 78, "holdActive": True})
+        if z.id == "1" else z
+        for z in base.zones
+    ]
+    matched = base.model_copy(update={"zones": matched_zones})
+    await store.apply_telemetry("0000TEST0000", matched)
+
+    ev1 = q.get_nowait()
+    assert ev1.event == "state.update"
+    # No second event — drift didn't fire.
+    assert q.empty()
