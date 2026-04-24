@@ -15,10 +15,32 @@ next GET /config (pull-observed clear) yet telemetry kept reporting the
 pre-mutation values. Recording these as healthz counters turns that class
 of regression into an observable rather than a user-reported surprise.
 
-MVP instruments only the mutation kinds with an unambiguous telemetry
-signal (zone setpoints, zone hold). Extending to schedule/vacation/
-humidity/activity/system-mode/system-hold needs per-kind signal design —
-see project_backlog.md.
+Instrumented kinds (telemetry signal available):
+  - zone_setpoints_set → TelemetryZone.coolSetpoint/heatSetpoint/holdActive
+  - zone_hold_set / zone_hold_clear → TelemetryZone.holdActive
+  - system_mode_set → TelemetrySnapshot.systemMode (from <mode>)
+  - vacation_set → TelemetrySnapshot.vacationRunning (from <vacatrunning>),
+    only for the `active` flag — the thermostat exposes no telemetry
+    for the stored window/setpoints/fan until vacation actually engages.
+
+Uninstrumented kinds (no clean telemetry signal → intents_for_mutation
+returns [] and drift for these mutations is undetectable at this layer):
+  - activity_set: activity setpoints in telemetry are only visible as
+    the active zone's coolSetpoint/heatSetpoint when that activity is
+    the currentActivity. Editing `home` while the zone holds `manual`
+    has no observable wire effect.
+  - schedule_set: the program tree isn't echoed in telemetry; we'd
+    need to pull GET /config after a grace window to verify, which
+    duplicates the pull-observed-clear path that already covers the
+    same accept/reject question.
+  - humidity_set: per-mode humidity targets aren't in telemetry; the
+    `<humid>` field reports whether the humidifier is currently running,
+    not the stored target RH.
+  - system_hold_set / system_hold_clear: whole-house hold is derived
+    in config (<wholeHouse><hold>) but has no root-level telemetry
+    mirror — per-zone holdActive reflects zone-level hold only, and
+    aggregating across zones would both over- and under-count the
+    whole-house case. Covered by the pull-observed-clear path.
 """
 
 from __future__ import annotations
@@ -185,8 +207,8 @@ def intents_for_mutation(
 ) -> list[DriftIntent]:
     """Build DriftIntents for a mutation's payload.
 
-    MVP kinds only — everything else returns [] and is tracked as a
-    backlog item for per-kind signal design.
+    Kinds without a telemetry signal return [] — see module docstring
+    for the per-kind rationale.
     """
     if now is None:
         now = datetime.now(timezone.utc)
@@ -222,5 +244,18 @@ def intents_for_mutation(
             return []
         return [_make_intent(
             kind, f"zones/{zone_id}", "holdActive", False, now=now
+        )]
+    if kind == "system_mode_set":
+        mode = payload.get("mode")
+        if mode is None:
+            return []
+        return [_make_intent(kind, "system", "systemMode", str(mode), now=now)]
+    if kind == "vacation_set":
+        # Only the `active` flag has a telemetry signal; start/end/
+        # setpoints/fan only become observable once the window engages.
+        if "active" not in payload or payload["active"] is None:
+            return []
+        return [_make_intent(
+            kind, "system", "vacationRunning", bool(payload["active"]), now=now
         )]
     return []

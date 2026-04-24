@@ -88,6 +88,13 @@ class TelemetrySnapshot(BaseModel):
     outdoorTemperature: int
     operatingStatusMessage: str
     humidifierOn: bool
+    # Root-level thermostat state that drift detection observes to
+    # confirm system_mode_set / vacation_set mutations landed. `mode` is
+    # always emitted; `vacationRunning` reflects whether the active
+    # vacation window is currently in effect (independent of `vacat=on`,
+    # which only says one is scheduled).
+    systemMode: HvacMode
+    vacationRunning: bool
     zones: list[TelemetryZone]
     # Life-remaining percentages for the four reminder-tracked services.
     # None when the fixture/unit doesn't emit the field (pre-commission,
@@ -518,7 +525,6 @@ def parse_telemetry(xml_bytes: bytes) -> TelemetrySnapshot:
       <status>/zone/<vacation…>      zone-scoped vacation state
       <status>/zone/<currentProgram> active schedule period id
       <status>/<cfgem>/<cfgtype>     config echo fields (forensics only)
-      <status>/<vacatrunning>        vacation-in-progress flag
 
     Equipment identity (indoor/outdoor unit type, airflow profiles,
     lockouts) is NOT in this <status> payload — it arrives as separate
@@ -558,6 +564,8 @@ def parse_telemetry(xml_bytes: bytes) -> TelemetrySnapshot:
         outdoorTemperature=_int(root, "oat") or 0,
         operatingStatusMessage=_text(root, "oprstsmsg") or "",
         humidifierOn=_text(root, "humid") == "on",
+        systemMode=HvacMode(_text(root, "mode") or "off"),
+        vacationRunning=_text(root, "vacatrunning") == "on",
         zones=zones,
         filterLevelPercent=_int(root, "filtrlvl"),
         uvLevelPercent=_int(root, "uvlvl"),
