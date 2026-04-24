@@ -109,9 +109,9 @@ In order, each shippable independently. Items marked **in progress** are already
    1. Power-cycle the thermostat (captures boot sequence — `/systems/{serial}`, `/idu_config`, `/odu_config`, `/profile`, `/dealer`, `/energy`, etc.).
    2. `POST /v1/debug/capture/start`.
    3. Let ~15–30 min of steady-state telemetry accumulate.
-   4. `python exercise_mutations.py --base-url http://ha.local:3001 --zone-id 1` (14 steps × 60s ≈ 14 min). Paired reverses keep thermostat state near-original.
+   4. `python exercise_mutations.py --base-url http://192.168.1.233:3001 --zone-id 1` (14 steps × 60s ≈ 14 min). Paired reverses keep thermostat state near-original.
    5. Leave overnight for long-tail metadata subpaths (`energy`, `odu_faults`, `root_cause`).
-   6. `python export_capture.py --base-url http://ha.local:3001 --out-dir captures/live_YYYYMMDD/`.
+   6. `python export_capture.py --base-url http://192.168.1.233:3001 --out-dir captures/live_YYYYMMDD/`.
    7. `POST /v1/debug/capture/stop` + `DELETE /v1/debug/capture`.
    8. Hand-curate bodies from the export into `addon/tests/fixtures/thermostat/`, replacing `0000TEST0000` anchors.
 

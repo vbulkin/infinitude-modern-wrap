@@ -8,7 +8,7 @@ ordering and provenance survive curation.
 Typical workflow:
   1. POST /v1/debug/capture/start           (on the addon)
   2. (live traffic accumulates)
-  3. python export_capture.py --base-url http://ha.local:3001 \
+  3. python export_capture.py --base-url http://192.168.1.233:3001 \
                               --out-dir addon/tests/fixtures/thermostat/live_20260424
   4. POST /v1/debug/capture/stop            (when done)
   5. Hand-curate: copy/rename the interesting bodies into the fixture
