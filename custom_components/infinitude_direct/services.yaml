@@ -10,7 +10,7 @@ save_schedule:
         text:
     schedule:
       name: Schedule data
-      description: JSON array of day objects [{id, period: [{id, activity, time, enabled}]}].
+      description: "JSON array of day objects [{id, period: [{id, activity, time, enabled}]}]."
       required: true
       selector:
         text:

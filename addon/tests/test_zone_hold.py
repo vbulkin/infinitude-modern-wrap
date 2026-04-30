@@ -261,6 +261,16 @@ def test_put_zone_hold_mutates_config_and_signals_dirty():
     assert status_resp.status_code == 200
     assert b"<configHasChanges>true</configHasChanges>" in status_resp.content
 
+    # /v1/state must expose config-side activity + until even when
+    # telemetry is present. The HA card needs both fields to render the
+    # "Hold: <activity> · until HH:MM" banner; telemetry's holdActive
+    # bool is necessary but not sufficient.
+    state_resp = client.get("/v1/state")
+    assert state_resp.status_code == 200
+    state_zone = next(z for z in state_resp.json()["zones"] if z["id"] == "1")
+    assert state_zone["hold"]["activity"] == "manual"
+    assert state_zone["hold"]["until"] == "16:00"
+
 
 def test_put_zone_hold_forever_sends_empty_otmr():
     """No `until` = hold forever — thermostat reads empty <otmr/> as no expiry."""

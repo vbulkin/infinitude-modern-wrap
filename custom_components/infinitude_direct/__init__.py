@@ -119,11 +119,14 @@ async def _ensure_lovelace_resource(hass: HomeAssistant) -> None:
             await resources.async_load()
             resources.loaded = True
 
-        # Read version from manifest for cache-busting
+        # Read version from manifest for cache-busting (off-loop to keep
+        # HA happy — read_text in the event loop trips a blocking-call
+        # warning on recent cores).
         manifest = Path(__file__).parent / "manifest.json"
         version = "0"
         if manifest.is_file():
-            version = json.loads(manifest.read_text()).get("version", "0")
+            text = await hass.async_add_executor_job(manifest.read_text)
+            version = json.loads(text).get("version", "0")
         card_url = f"{CARD_URL_BASE}?v={version}"
 
         # Check if already registered

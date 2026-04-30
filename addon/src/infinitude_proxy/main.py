@@ -164,7 +164,11 @@ def _compose_state(
                 damperPercent=tz.damperPercent if tz else None,
                 conditioning=HvacAction(tz.conditioning) if tz else None,
                 currentActivity=ActivityId(tz.currentActivity) if tz else None,
-                hold=ZoneHold(active=tz.holdActive) if tz else zc.hold,
+                hold=ZoneHold(
+                    active=tz.holdActive if tz else zc.hold.active,
+                    activity=zc.hold.activity,
+                    until=zc.hold.until,
+                ),
             )
         )
 

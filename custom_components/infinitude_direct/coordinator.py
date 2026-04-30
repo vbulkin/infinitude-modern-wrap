@@ -132,11 +132,15 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
     # ── Optimistic hold overlay ────────────────────────────────────────────
 
     def _set_optimistic(self, key: str, hold: dict) -> None:
-        """Stash an expected hold shape for overlay until the real state
-        catches up, then immediately reflect it in `self.data` and
-        notify listeners — so the UI flips on write completion rather
-        than waiting for the next poll (write→thermostat pull→state
-        reflect is ~30 s worst case).
+        """Stash an expected hold shape and immediately replay it through
+        the coordinator's data so listeners see the new state on write
+        completion rather than after the next poll (write→thermostat
+        pull→addon reflect is ~30 s worst case).
+
+        Uses `async_set_updated_data` (which substitutes `self.data` and
+        notifies listeners atomically) instead of mutating in place,
+        because HA's CoordinatorEntity diff path relies on receiving
+        a fresh data ref.
         """
         self._optimistic[key] = {
             "hold": hold,
@@ -144,16 +148,18 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         }
         if not isinstance(self.data, dict):
             return
+        new_data = dict(self.data)
         if key == "system":
-            system = self.data.get("system") or {}
-            system["hold"] = dict(hold)
-            self.data["system"] = system
+            new_data["system"] = {
+                **(new_data.get("system") or {}),
+                "hold": dict(hold),
+            }
         else:
-            for z in self.data.get("zones", []):
-                if z.get("id") == key:
-                    z["hold"] = dict(hold)
-                    break
-        self.async_update_listeners()
+            new_data["zones"] = [
+                {**z, "hold": dict(hold)} if z.get("id") == key else z
+                for z in new_data.get("zones", [])
+            ]
+        self.async_set_updated_data(new_data)
 
     def _apply_optimistic_zone(self, zone: dict) -> None:
         override = self._pop_expired(zone["id"])
