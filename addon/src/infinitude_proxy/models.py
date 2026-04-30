@@ -119,6 +119,13 @@ class HvacMode(str, Enum):
     COOL = "cool"
     AUTO = "auto"
     FAN_ONLY = "fanonly"
+    # Heat-pump-specific operating modes the thermostat reports in
+    # telemetry's <mode> element (not user-selectable in config). Live
+    # captures from heat-pump installs include "hpheat" — adding the
+    # known variants so HvacMode coercion doesn't crash the southbound
+    # status path. Unknown values still fall through to coerce_hvac_mode.
+    HP_HEAT = "hpheat"
+    HP_COOL = "hpcool"
 
 
 class HvacAction(str, Enum):

@@ -29,6 +29,11 @@ INFINITUDE_TO_HA_HVAC = {
     "heat": "heat",
     "auto": "heat_cool",
     "fanonly": "fan_only",
+    # Heat-pump telemetry modes — the unit reports its operational
+    # state, not the user-selected config mode. Surface as plain
+    # heat/cool in HA.
+    "hpheat": "heat",
+    "hpcool": "cool",
 }
 
 HA_TO_INFINITUDE_HVAC = {

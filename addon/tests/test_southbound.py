@@ -43,6 +43,34 @@ def test_parse_telemetry_boot_sample():
     assert z1.damperPercent == 100
 
 
+def test_parse_telemetry_accepts_heat_pump_modes():
+    """Heat-pump installs report telemetry <mode> as 'hpheat' / 'hpcool'.
+
+    Until alpha.17 these crashed parse_telemetry on the HvacMode enum
+    coercion, returning 500 to every status post and stranding the
+    thermostat as 'unreachable' from HA's perspective. The enum now
+    carries the heat-pump variants explicitly.
+    """
+    raw = _read("boot_05_status_telemetry.xml").replace(
+        b"<mode>off</mode>", b"<mode>hpheat</mode>", 1
+    )
+    snap = parse_telemetry(raw)
+    assert snap.systemMode == "hpheat"
+
+
+def test_parse_telemetry_unknown_mode_falls_back_to_off():
+    """An unfamiliar <mode> value must not break the entire status path —
+    parser falls through to OFF so the rest of the snapshot lands. The
+    crash on unknown enum values was the bug behind alpha.16's "thermostat
+    unreachable" symptom on heat-pump installs.
+    """
+    raw = _read("boot_05_status_telemetry.xml").replace(
+        b"<mode>off</mode>", b"<mode>future_mode_x</mode>", 1
+    )
+    snap = parse_telemetry(raw)
+    assert snap.systemMode == "off"
+
+
 def test_post_telemetry_returns_directive_and_updates_store():
     store = StateStore()
     app = create_app(store=store)

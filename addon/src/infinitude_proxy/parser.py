@@ -7,10 +7,36 @@ forensics but not surfaced in the snapshot.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 
 from lxml import etree
 from pydantic import BaseModel, ConfigDict
+
+logger = logging.getLogger(__name__)
+
+
+def _coerce_hvac_mode(raw: str, *, where: str) -> "HvacMode":
+    """Map a thermostat-reported HVAC mode to our enum, tolerating values
+    we haven't catalogued yet.
+
+    The thermostat reports operational modes in telemetry's <mode> element
+    (e.g. "hpheat" for heat-pump heating) that are distinct from the
+    user-selectable config modes. Crashing the entire status pipeline
+    because one heat-pump install reports an unfamiliar string is the
+    wrong default — log it once at INFO and fall back to "off" so the
+    rest of the snapshot still lands.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return HvacMode.OFF
+    try:
+        return HvacMode(raw)
+    except ValueError:
+        logger.info(
+            "parser: unknown HVAC mode %r at %s — coercing to 'off'", raw, where
+        )
+        return HvacMode.OFF
 
 from .models import (
     Activity,
@@ -372,7 +398,7 @@ def _parse_zone_hold(zone_el: etree._Element) -> ZoneHold:
 
 
 def _config_from_element(config: etree._Element) -> SystemConfig:
-    mode = HvacMode(_text(config, "mode") or "off")
+    mode = _coerce_hvac_mode(_text(config, "mode") or "off", where="config.mode")
     wh_hold = _parse_whole_house_hold(config.find("wholeHouse"))
 
     zones: list[ZoneConfig] = []
@@ -566,7 +592,9 @@ def parse_telemetry(xml_bytes: bytes) -> TelemetrySnapshot:
         outdoorTemperature=_int(root, "oat") or 0,
         operatingStatusMessage=_text(root, "oprstsmsg") or "",
         humidifierOn=_text(root, "humid") == "on",
-        systemMode=HvacMode(_text(root, "mode") or "off"),
+        systemMode=_coerce_hvac_mode(
+            _text(root, "mode") or "off", where="telemetry.mode"
+        ),
         vacationRunning=_text(root, "vacatrunning") == "on",
         zones=zones,
         filterLevelPercent=_int(root, "filtrlvl"),
