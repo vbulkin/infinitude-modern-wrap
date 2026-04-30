@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, Response
 from sse_starlette.sse import EventSourceResponse
 
@@ -291,7 +292,25 @@ def create_app(
         version=__version__,
         description="Northbound HTTP API for the modernized Infinitude proxy.",
         lifespan=lifespan,
+        # Disable the built-in /docs handler so we can serve a Swagger UI
+        # page with a *relative* openapi URL. Under HA Supervisor ingress
+        # the addon is mounted at `/api/hassio_ingress/<token>/`, but
+        # Swagger UI's default behavior is to fetch an absolute
+        # `/openapi.json` from the host root — which 404s because that
+        # path isn't proxied. A `./openapi.json` reference resolves
+        # against the page URL and works under both ingress and direct
+        # port access.
+        docs_url=None,
+        redoc_url=None,
     )
+
+    @app.get("/docs", include_in_schema=False)
+    async def custom_swagger_ui() -> HTMLResponse:
+        return get_swagger_ui_html(
+            openapi_url="./openapi.json",
+            title=f"{app.title} — docs",
+        )
+
     # Middleware runs outside-in; installing capture last means it's the
     # innermost wrapper, closest to the app. That's what we want — it
     # needs to see the exact bytes the app receives and emits after all

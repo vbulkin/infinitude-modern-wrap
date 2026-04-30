@@ -43,3 +43,20 @@ def test_openapi_includes_v1_paths():
     paths = r.json()["paths"]
     for p in ("/v1/healthz", "/v1/version", "/v1/config", "/v1/state"):
         assert p in paths, f"missing {p}"
+
+
+def test_swagger_ui_uses_relative_openapi_url():
+    """`/docs` must reference `./openapi.json` (relative), not `/openapi.json`
+    (absolute). Under HA Supervisor ingress the addon is mounted at
+    `/api/hassio_ingress/<token>/`, and an absolute reference 404s
+    because the host root doesn't proxy `/openapi.json`. A relative
+    URL resolves against the current page so both ingress and direct
+    port access work."""
+    r = client.get("/docs")
+    assert r.status_code == 200
+    body = r.text
+    assert "./openapi.json" in body
+    # Make sure we didn't accidentally also embed the absolute form
+    # (the default FastAPI Swagger HTML uses '/openapi.json' verbatim).
+    assert "'/openapi.json'" not in body
+    assert '"/openapi.json"' not in body
