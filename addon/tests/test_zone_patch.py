@@ -219,6 +219,44 @@ def test_patch_zone_sets_manual_setpoints_and_holds():
     assert _text(z1, "hold") == "on"
 
 
+def test_state_echoes_held_setpoints_after_patch_with_telemetry():
+    """`/v1/state` must echo the held-activity setpoints right after a
+    PATCH, even with stale telemetry on file. This is the "user bumped
+    the temperature, UI snapped back to the old value for ~30 s"
+    regression — telemetry's last-reported heatSetpoint reflects the
+    activity that *was* active before the write, not the manual hold
+    we just engaged.
+    """
+    store = StateStore()
+    app = create_app(store=store)
+    client = TestClient(app)
+    client.post(
+        "/systems/0000TEST0000",
+        content=_read("boot_01_system_config.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    # Seed telemetry so the response merges config + telemetry — this is
+    # the live-install shape, where telemetry exists and otherwise wins.
+    client.post(
+        "/systems/0000TEST0000/status",
+        content=_read("boot_05_status_telemetry.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    # Bump heat to 70 and engage manual hold (default behavior).
+    client.patch("/v1/zones/1", json={"heat": 70, "cool": 74})
+
+    state = client.get("/v1/state")
+    assert state.status_code == 200
+    z1 = next(z for z in state.json()["zones"] if z["id"] == "1")
+    # Held setpoints from config beat stale telemetry. Without the
+    # _build_zone hold-aware merge this would be telemetry's pre-write
+    # heat value (68 in the boot fixture).
+    assert z1["heatSetpoint"] == 70
+    assert z1["coolSetpoint"] == 74
+    assert z1["hold"]["activity"] == "manual"
+    assert z1["currentActivity"] == "manual"
+
+
 def test_patch_zone_without_activate_hold_stages_setpoints():
     store = StateStore()
     app = create_app(store=store)

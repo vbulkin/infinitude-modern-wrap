@@ -129,64 +129,74 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
             "lastUpdated": state.get("lastUpdated"),
         }
 
-    # ── Optimistic hold overlay ────────────────────────────────────────────
+    # ── Optimistic overlay ────────────────────────────────────────────────
 
-    def _set_optimistic(self, key: str, hold: dict) -> None:
-        """Stash an expected hold shape and immediately replay it through
-        the coordinator's data so listeners see the new state on write
-        completion rather than after the next poll (write→thermostat
-        pull→addon reflect is ~30 s worst case).
+    def _set_optimistic(self, key: str, patch: dict) -> None:
+        """Stash an expected partial zone/system shape and immediately
+        replay it through the coordinator's data so listeners see the
+        new state on write completion rather than after the next poll
+        (write→thermostat pull→addon state-reflect is ~30 s worst case).
 
-        Uses `async_set_updated_data` (which substitutes `self.data` and
-        notifies listeners atomically) instead of mutating in place,
-        because HA's CoordinatorEntity diff path relies on receiving
-        a fresh data ref.
+        `patch` is shallow-merged onto the live zone/system dict. Any
+        field can be overlaid; common patches include `hold`,
+        `heatSetpoint`, `coolSetpoint`, `currentActivity`. The overlay
+        is dropped on first poll where every patched field has converged
+        to the optimistic value, or after `_OPTIMISTIC_TTL`.
+
+        Uses `async_set_updated_data` (substitute + notify atomically)
+        instead of in-place mutation — HA's CoordinatorEntity diff path
+        relies on a fresh data ref.
         """
+        existing = self._optimistic.get(key, {}).get("patch", {})
+        merged = {**existing, **patch}
         self._optimistic[key] = {
-            "hold": hold,
+            "patch": merged,
             "expires": dt_util.utcnow() + _OPTIMISTIC_TTL,
         }
         if not isinstance(self.data, dict):
             return
         new_data = dict(self.data)
         if key == "system":
-            new_data["system"] = {
-                **(new_data.get("system") or {}),
-                "hold": dict(hold),
-            }
+            new_data["system"] = {**(new_data.get("system") or {}), **patch}
         else:
             new_data["zones"] = [
-                {**z, "hold": dict(hold)} if z.get("id") == key else z
+                {**z, **patch} if z.get("id") == key else z
                 for z in new_data.get("zones", [])
             ]
         self.async_set_updated_data(new_data)
 
     def _apply_optimistic_zone(self, zone: dict) -> None:
-        override = self._pop_expired(zone["id"])
-        if override is None:
+        patch = self._pop_expired(zone["id"])
+        if patch is None:
             return
-        if _hold_matches(zone.get("hold") or {}, override):
+        if _patch_converged(zone, patch):
             self._optimistic.pop(zone["id"], None)
             return
-        zone["hold"] = dict(override)
+        zone.update(patch)
 
     def _apply_optimistic_system(self, system: dict) -> None:
-        override = self._pop_expired("system")
-        if override is None:
+        patch = self._pop_expired("system")
+        if patch is None:
             return
-        if _hold_matches(system.get("hold") or {}, override):
+        if _patch_converged(system, patch):
             self._optimistic.pop("system", None)
             return
-        system["hold"] = dict(override)
+        system.update(patch)
 
     def _pop_expired(self, key: str) -> dict | None:
+        """Return the active optimistic patch, or None if expired/absent.
+
+        Misleading name (kept for diff stability) — returns the patch
+        when it's still valid; pops + returns None when the TTL has
+        elapsed.
+        """
         entry = self._optimistic.get(key)
         if entry is None:
             return None
         if dt_util.utcnow() >= entry["expires"]:
             self._optimistic.pop(key, None)
             return None
-        return entry["hold"]
+        return entry["patch"]
 
     # ── Write methods ──────────────────────────────────────────────────────
 
@@ -199,17 +209,18 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         body = self._build_hold_body(activity, until)
         await self._put(f"/v1/zones/{zone_id}/hold", body)
         self._set_optimistic(zone_id, {
-            "active": True,
-            "activity": activity,
-            "until": body.get("until"),
+            "hold": {
+                "active": True,
+                "activity": activity,
+                "until": body.get("until"),
+            },
+            "currentActivity": activity,
         })
 
     async def async_cancel_hold(self, zone_id: str) -> None:
         await self._delete(f"/v1/zones/{zone_id}/hold")
         self._set_optimistic(zone_id, {
-            "active": False,
-            "activity": None,
-            "until": None,
+            "hold": {"active": False, "activity": None, "until": None},
         })
 
     async def async_set_activity_temps(
@@ -219,6 +230,16 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
             f"/v1/zones/{zone_id}/activities/{activity}",
             {"heat": int(htsp), "cool": int(clsp)},
         )
+        # Setpoints are surfaced on the zone only when the held
+        # activity is the one we just edited. Stash optimistic so the
+        # climate entity flips its target_temp immediately rather than
+        # snapping back to telemetry's pre-write value while the
+        # thermostat catches up. async_set_hold's optimistic for the
+        # hold-activity itself is set separately by the caller.
+        self._set_optimistic(zone_id, {
+            "heatSetpoint": int(htsp),
+            "coolSetpoint": int(clsp),
+        })
 
     async def async_set_activity_fan(
         self, zone_id: str, activity: str, fan: str
@@ -233,17 +254,17 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         body = self._build_hold_body(activity, until)
         await self._put("/v1/system/hold", body)
         self._set_optimistic("system", {
-            "active": True,
-            "activity": activity,
-            "until": body.get("until"),
+            "hold": {
+                "active": True,
+                "activity": activity,
+                "until": body.get("until"),
+            },
         })
 
     async def async_cancel_whole_house_hold(self) -> None:
         await self._delete("/v1/system/hold")
         self._set_optimistic("system", {
-            "active": False,
-            "activity": None,
-            "until": None,
+            "hold": {"active": False, "activity": None, "until": None},
         })
 
     async def async_save_schedule(self, zone_id: str, program: list) -> None:
@@ -335,14 +356,27 @@ def _hhmm_from_now(hours: int) -> str:
     return f"{target.hour:02d}:{target.minute:02d}"
 
 
-def _hold_matches(real: dict, expected: dict) -> bool:
-    """True when the real hold shape has converged to the optimistic one.
+def _patch_converged(real: dict, patch: dict) -> bool:
+    """True when every field in `patch` has caught up in `real`.
 
-    Only compares the keys we set optimistically (active/activity) plus
-    the presence of `until` — exact HH:MM can drift by a quarter-hour
-    due to server-side snap_quarter_hour, so we treat any non-None
-    `until` as matching a non-None optimistic `until`.
+    Field-aware comparison — `hold` is compared loosely (active /
+    activity / presence-of-until) because the server quarter-hour-snaps
+    HH:MM and we don't want to fight that. Other fields are compared
+    by value; falsy variants normalize to None first so absent vs.
+    null vs. empty string don't keep the overlay sticky.
     """
+    for k, want in patch.items():
+        got = real.get(k)
+        if k == "hold":
+            if not _hold_matches(got or {}, want or {}):
+                return False
+        else:
+            if (got or None) != (want or None):
+                return False
+    return True
+
+
+def _hold_matches(real: dict, expected: dict) -> bool:
     if bool(real.get("active")) != bool(expected.get("active")):
         return False
     if (real.get("activity") or None) != (expected.get("activity") or None):

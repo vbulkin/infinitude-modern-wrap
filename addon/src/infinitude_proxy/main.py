@@ -124,6 +124,70 @@ def _configure_logging(level: str) -> None:
     proxy_logger.propagate = False
 
 
+def _build_zone(zc, tz) -> Zone:
+    """Merge a config-side ZoneConfig and (optional) telemetry zone into
+    the Zone wire shape.
+
+    Single source of truth for both `/v1/state` and per-zone mutation
+    responses. Without this consolidation the two paths drifted — state
+    showed telemetry-only setpoints (stale by one thermostat poll cycle
+    after a write), while `_zone_response` correctly preferred the
+    held-activity setpoints from config. The HA integration polls
+    state, so the user saw temp bumps revert until the thermostat
+    caught up.
+
+    Hold semantics:
+      * `active` — telemetry's `holdActive` bool when present, else the
+        config-side flag (only stale on a fresh-write race window).
+      * `activity` / `until` — config-side; telemetry doesn't carry them.
+
+    Setpoints:
+      * If the zone is in a hold and the held activity is in config,
+        read setpoints from that activity. This is what the thermostat
+        will display once it pulls the pending write, so the API echoes
+        user intent immediately.
+      * Otherwise fall back to telemetry's last-reported setpoints.
+    """
+    hold_heat: int | None = None
+    hold_cool: int | None = None
+    if zc.hold.active and zc.hold.activity:
+        held = next(
+            (a for a in zc.activities if a.id == zc.hold.activity),
+            None,
+        )
+        if held is not None:
+            hold_heat = held.heat
+            hold_cool = held.cool
+    return Zone(
+        id=zc.id,
+        name=zc.name,
+        enabled=zc.enabled,
+        temperature=tz.temperature if tz else None,
+        humidity=tz.humidity if tz else None,
+        heatSetpoint=(
+            hold_heat if hold_heat is not None
+            else (tz.heatSetpoint if tz else None)
+        ),
+        coolSetpoint=(
+            hold_cool if hold_cool is not None
+            else (tz.coolSetpoint if tz else None)
+        ),
+        fan=FanSpeed(tz.fan) if tz else None,
+        damperPercent=tz.damperPercent if tz else None,
+        conditioning=HvacAction(tz.conditioning) if tz else None,
+        currentActivity=(
+            ActivityId(zc.hold.activity)
+            if zc.hold.active and zc.hold.activity
+            else (ActivityId(tz.currentActivity) if tz else None)
+        ),
+        hold=ZoneHold(
+            active=tz.holdActive if tz else zc.hold.active,
+            activity=zc.hold.activity,
+            until=zc.hold.until,
+        ),
+    )
+
+
 def _compose_state(
     stored_config: StoredConfig | None,
     stored_telemetry: StoredTelemetry | None,
@@ -148,29 +212,9 @@ def _compose_state(
         if stored_telemetry else {}
     )
 
-    zones: list[Zone] = []
-    for zc in cfg.zones:
-        tz = telemetry_zones.get(zc.id)
-        zones.append(
-            Zone(
-                id=zc.id,
-                name=zc.name,
-                enabled=zc.enabled,
-                temperature=tz.temperature if tz else None,
-                humidity=tz.humidity if tz else None,
-                heatSetpoint=tz.heatSetpoint if tz else None,
-                coolSetpoint=tz.coolSetpoint if tz else None,
-                fan=FanSpeed(tz.fan) if tz else None,
-                damperPercent=tz.damperPercent if tz else None,
-                conditioning=HvacAction(tz.conditioning) if tz else None,
-                currentActivity=ActivityId(tz.currentActivity) if tz else None,
-                hold=ZoneHold(
-                    active=tz.holdActive if tz else zc.hold.active,
-                    activity=zc.hold.activity,
-                    until=zc.hold.until,
-                ),
-            )
-        )
+    zones: list[Zone] = [
+        _build_zone(zc, telemetry_zones.get(zc.id)) for zc in cfg.zones
+    ]
 
     if stored_telemetry is not None:
         snap = stored_telemetry.snapshot
@@ -1022,16 +1066,9 @@ def _zone_response(
 ) -> Zone:
     """Build a Zone response for a specific zone after a mutation.
 
-    Config is authoritative for hold fields (activity, until) — telemetry
-    only echoes a `holdActive` bool, not the activity that drove it, so
-    using telemetry here would lose the value we just wrote. Live values
-    (temperature, humidity, damper, conditioning) still come from the most
-    recent telemetry snapshot when present.
-
-    Setpoints: when the zone is in an active hold, we prefer the held
-    activity's setpoints from config — that's what the thermostat will
-    display once it picks up the pending write, and it lets PATCH
-    responses echo the user's intent without waiting for telemetry.
+    Delegates to `_build_zone` so mutation responses and `/v1/state`
+    stay in lockstep — see that function for the full hold/setpoint
+    merge contract.
     """
     zone_config = next(z for z in stored_config.config.zones if z.id == zone_id)
     tz = None
@@ -1040,40 +1077,7 @@ def _zone_response(
             (z for z in stored_telemetry.snapshot.zones if z.id == zone_id),
             None,
         )
-
-    hold_heat: int | None = None
-    hold_cool: int | None = None
-    if zone_config.hold.active and zone_config.hold.activity:
-        held = next(
-            (a for a in zone_config.activities if a.id == zone_config.hold.activity),
-            None,
-        )
-        if held is not None:
-            hold_heat = held.heat
-            hold_cool = held.cool
-
-    return Zone(
-        id=zone_id,
-        name=zone_config.name,
-        enabled=zone_config.enabled,
-        temperature=tz.temperature if tz else None,
-        humidity=tz.humidity if tz else None,
-        heatSetpoint=(
-            hold_heat
-            if hold_heat is not None
-            else (tz.heatSetpoint if tz else None)
-        ),
-        coolSetpoint=(
-            hold_cool
-            if hold_cool is not None
-            else (tz.coolSetpoint if tz else None)
-        ),
-        fan=FanSpeed(tz.fan) if tz else None,
-        damperPercent=tz.damperPercent if tz else None,
-        conditioning=HvacAction(tz.conditioning) if tz else None,
-        currentActivity=ActivityId(tz.currentActivity) if tz else None,
-        hold=zone_config.hold,
-    )
+    return _build_zone(zone_config, tz)
 
 
 def _system_response(
