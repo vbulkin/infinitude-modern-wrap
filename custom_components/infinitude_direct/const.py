@@ -29,11 +29,16 @@ INFINITUDE_TO_HA_HVAC = {
     "heat": "heat",
     "auto": "heat_cool",
     "fanonly": "fan_only",
-    # Heat-pump telemetry modes — the unit reports its operational
-    # state, not the user-selected config mode. Surface as plain
-    # heat/cool in HA.
+    # Telemetry-reported operational modes (the live state of the unit,
+    # distinct from the user-selected config mode). The HA climate
+    # entity reads system.mode which is config-side, so these are
+    # rarely hit — but if telemetry leaks through anywhere they map
+    # to the closest selectable HA mode rather than "off" by default.
     "hpheat": "heat",
     "hpcool": "cool",
+    "dehumidify": "cool",
+    "defrost": "heat",
+    "emheat": "heat",
 }
 
 HA_TO_INFINITUDE_HVAC = {

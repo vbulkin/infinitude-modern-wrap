@@ -119,13 +119,23 @@ class HvacMode(str, Enum):
     COOL = "cool"
     AUTO = "auto"
     FAN_ONLY = "fanonly"
-    # Heat-pump-specific operating modes the thermostat reports in
-    # telemetry's <mode> element (not user-selectable in config). Live
-    # captures from heat-pump installs include "hpheat" — adding the
-    # known variants so HvacMode coercion doesn't crash the southbound
-    # status path. Unknown values still fall through to coerce_hvac_mode.
+    # Operational modes the thermostat reports in *telemetry's* <mode>
+    # element — these never appear as user-selectable config modes, but
+    # the southbound status parser still has to round-trip them without
+    # crashing. Listed here so the enum coerce succeeds on known
+    # values; anything novel falls through `_coerce_hvac_mode` which
+    # logs and defaults to OFF rather than 500'ing the entire status
+    # path.
+    #   hpheat     — heat-pump active heating
+    #   hpcool     — heat-pump active cooling
+    #   dehumidify — cooling cycle running for moisture removal
+    #   defrost    — heat-pump reverse-cycle defrost
+    #   emheat     — emergency / aux electric heat
     HP_HEAT = "hpheat"
     HP_COOL = "hpcool"
+    DEHUMIDIFY = "dehumidify"
+    DEFROST = "defrost"
+    EM_HEAT = "emheat"
 
 
 class HvacAction(str, Enum):
