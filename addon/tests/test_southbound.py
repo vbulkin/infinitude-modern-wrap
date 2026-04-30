@@ -71,6 +71,82 @@ def test_parse_telemetry_unknown_mode_falls_back_to_off():
     assert snap.systemMode == "off"
 
 
+# ── Heat-pump install smoke ───────────────────────────────────────────
+# The fixtures below were captured from a live 2-stage non-communicating
+# heat-pump install via the addon's debug-capture, which we found while
+# debugging the alpha.16 "thermostat unreachable" symptom. They exercise
+# data shapes the bench fixtures never hit: `<mode>hpheat</mode>`,
+# `<odutype>hp2stgnoncomm</odutype>`, an active hold with `<otmr>13:15</otmr>`,
+# zones with different concurrent activities (manual + wake).
+
+
+def test_heatpump_status_telemetry_parses_clean():
+    """`mode=hpheat` is the operational telemetry value heat pumps emit.
+
+    Until alpha.17 the strict enum coercion crashed parse_telemetry on
+    this value, returning 500 to every status post.
+    """
+    snap = parse_telemetry(_read("heatpump_status_telemetry.xml"))
+    assert snap.systemMode == "hpheat"
+    assert snap.outdoorTemperature == 66
+
+    z1 = next(z for z in snap.zones if z.id == "1")
+    assert z1.name == "tv room"
+    assert z1.holdActive is True
+    assert z1.heatSetpoint == 72
+    assert z1.coolSetpoint == 74
+    assert z1.currentActivity == "manual"
+    # Parser maps thermostat's <zoneconditioning>active_heat</zoneconditioning>
+    # → HvacAction.HEATING. Heat-pump installs are the only fixtures that
+    # exercise the active_heat branch of _CONDITIONING_MAP.
+    assert z1.conditioning == "heating"
+
+    z2 = next(z for z in snap.zones if z.id == "2")
+    assert z2.holdActive is False
+    assert z2.currentActivity == "wake"
+
+
+def test_heatpump_install_full_round_trip():
+    """End-to-end: boot config + IDU + ODU + status all from the same
+    heat-pump install. After the boot sequence and a status post, /v1/state
+    must reflect the held setpoints (72 from the manual activity, not
+    telemetry's pre-write value)."""
+    store = StateStore()
+    app = create_app(store=store)
+    client = TestClient(app)
+
+    serial = "2013W000855"
+    for path, fixture in (
+        (f"/systems/{serial}", "heatpump_system_config.xml"),
+        (f"/systems/{serial}/idu_config", "heatpump_idu_config.xml"),
+        (f"/systems/{serial}/odu_config", "heatpump_odu_config.xml"),
+        (f"/systems/{serial}/status", "heatpump_status_telemetry.xml"),
+    ):
+        r = client.post(
+            path, content=_read(fixture),
+            headers={"content-type": "application/xml"},
+        )
+        assert r.status_code == 200, f"{path}: {r.status_code} {r.text[:200]}"
+
+    state = client.get("/v1/state").json()
+    assert state["system"]["mode"] == "auto"  # config-side, user-set
+    z1 = next(z for z in state["zones"] if z["id"] == "1")
+    assert z1["name"] == "tv room"
+    # Config-side hold: telemetry says holdActive=on; activity/until/
+    # held setpoints come from the config tree (alpha.16/19 fixes).
+    assert z1["hold"]["active"] is True
+    assert z1["hold"]["activity"] == "manual"
+    assert z1["hold"]["until"] == "13:15"
+    # Held setpoints come from activities[manual] in the captured config.
+    held = next(
+        a for a in client.get("/v1/zones/1/activities").json()
+        if a["id"] == "manual"
+    )
+    assert z1["heatSetpoint"] == held["heat"]
+    assert z1["coolSetpoint"] == held["cool"]
+    assert z1["currentActivity"] == "manual"
+
+
 def test_post_telemetry_returns_directive_and_updates_store():
     store = StateStore()
     app = create_app(store=store)
