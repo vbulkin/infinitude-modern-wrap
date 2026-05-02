@@ -142,15 +142,16 @@ def _build_zone(zc, tz) -> Zone:
         config-side flag (only stale on a fresh-write race window).
       * `activity` / `until` — config-side; telemetry doesn't carry them.
 
-    Setpoints:
+    Setpoints + fan:
       * If the zone is in a hold and the held activity is in config,
-        read setpoints from that activity. This is what the thermostat
-        will display once it pulls the pending write, so the API echoes
-        user intent immediately.
-      * Otherwise fall back to telemetry's last-reported setpoints.
+        read heat/cool/fan from that activity. This is what the
+        thermostat will display once it pulls the pending write, so
+        the API echoes user intent immediately.
+      * Otherwise fall back to telemetry's last-reported values.
     """
     hold_heat: int | None = None
     hold_cool: int | None = None
+    hold_fan: str | None = None
     if zc.hold.active and zc.hold.activity:
         held = next(
             (a for a in zc.activities if a.id == zc.hold.activity),
@@ -159,6 +160,7 @@ def _build_zone(zc, tz) -> Zone:
         if held is not None:
             hold_heat = held.heat
             hold_cool = held.cool
+            hold_fan = held.fan
     return Zone(
         id=zc.id,
         name=zc.name,
@@ -173,7 +175,10 @@ def _build_zone(zc, tz) -> Zone:
             hold_cool if hold_cool is not None
             else (tz.coolSetpoint if tz else None)
         ),
-        fan=FanSpeed(tz.fan) if tz else None,
+        fan=(
+            FanSpeed(hold_fan) if hold_fan is not None
+            else (FanSpeed(tz.fan) if tz else None)
+        ),
         damperPercent=tz.damperPercent if tz else None,
         conditioning=HvacAction(tz.conditioning) if tz else None,
         currentActivity=(

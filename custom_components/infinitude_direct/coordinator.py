@@ -202,6 +202,11 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
 
     async def async_set_mode(self, mode: str) -> None:
         await self._patch("/v1/system", {"mode": mode})
+        # Closes the ~100 ms gap between the PATCH return and the next
+        # coordinator refresh — without this the climate entity reads
+        # the pre-write `system.mode` from `self.data` until the refresh
+        # comes back, and HA's frontend optimistic clears + snaps.
+        self._set_optimistic("system", {"mode": mode})
 
     async def async_set_hold(
         self, zone_id: str, activity: str, until: str | None = None
@@ -247,6 +252,22 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         await self._patch(
             f"/v1/zones/{zone_id}/activities/{activity}", {"fan": fan}
         )
+        # Same reasoning as async_set_activity_temps — the zone surface
+        # only displays the held activity's fan, so we only stash the
+        # optimistic when the activity we just patched is the one that
+        # would be visible. Avoids flashing a stale fan value if the
+        # user edits a non-active activity.
+        zone = next(
+            (z for z in self.data.get("zones", []) if z.get("id") == zone_id),
+            None,
+        ) if isinstance(self.data, dict) else None
+        if zone is None:
+            return
+        hold = zone.get("hold") or {}
+        held_activity = hold.get("activity") if hold.get("active") else None
+        active_activity = held_activity or zone.get("currentActivity")
+        if active_activity == activity:
+            self._set_optimistic(zone_id, {"fan": fan})
 
     async def async_set_whole_house_hold(
         self, activity: str, until: str | None = None

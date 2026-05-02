@@ -244,6 +244,11 @@ def test_state_echoes_held_setpoints_after_patch_with_telemetry():
     )
     # Bump heat to 70 and engage manual hold (default behavior).
     client.patch("/v1/zones/1", json={"heat": 70, "cool": 74})
+    # Edit the manual activity's fan independently. The held-activity
+    # fan should win in the next /v1/state read just like setpoints.
+    client.patch(
+        "/v1/zones/1/activities/manual", json={"fan": "high"}
+    )
 
     state = client.get("/v1/state")
     assert state.status_code == 200
@@ -253,6 +258,7 @@ def test_state_echoes_held_setpoints_after_patch_with_telemetry():
     # heat value (68 in the boot fixture).
     assert z1["heatSetpoint"] == 70
     assert z1["coolSetpoint"] == 74
+    assert z1["fan"] == "high"
     assert z1["hold"]["activity"] == "manual"
     assert z1["currentActivity"] == "manual"
 
