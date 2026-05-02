@@ -137,20 +137,28 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         new state on write completion rather than after the next poll
         (write→thermostat pull→addon state-reflect is ~30 s worst case).
 
-        `patch` is shallow-merged onto the live zone/system dict. Any
-        field can be overlaid; common patches include `hold`,
-        `heatSetpoint`, `coolSetpoint`, `currentActivity`. The overlay
-        is dropped on first poll where every patched field has converged
-        to the optimistic value, or after `_OPTIMISTIC_TTL`.
+        Each call **replaces** the prior optimistic patch for `key`,
+        not merges. Replace semantics matter for cancel flows: after
+        `set_hold("away")` the patch carries `currentActivity:"away"`,
+        and the follow-up `cancel_hold` would otherwise leave that
+        currentActivity sticking around for 90 s while the
+        actually-active scheduled activity is shown as `preset_mode`.
+        Each coordinator write describes the current intent in full,
+        not as a delta on the prior intent.
+
+        `patch` is shallow-merged onto the live zone/system dict in
+        `self.data` — that's just the synchronous UI flip. Any field
+        can be overlaid; common patches include `hold`, `heatSetpoint`,
+        `coolSetpoint`, `currentActivity`. The overlay is dropped on
+        the first poll where every patched field has converged to the
+        optimistic value, or after `_OPTIMISTIC_TTL`.
 
         Uses `async_set_updated_data` (substitute + notify atomically)
         instead of in-place mutation — HA's CoordinatorEntity diff path
         relies on a fresh data ref.
         """
-        existing = self._optimistic.get(key, {}).get("patch", {})
-        merged = {**existing, **patch}
         self._optimistic[key] = {
-            "patch": merged,
+            "patch": dict(patch),
             "expires": dt_util.utcnow() + _OPTIMISTIC_TTL,
         }
         if not isinstance(self.data, dict):
