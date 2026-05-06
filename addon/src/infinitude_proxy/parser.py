@@ -42,6 +42,11 @@ from .models import (
     Activity,
     ActivityId,
     DayOfWeek,
+    Energy,
+    EnergyModeFlags,
+    EnergyPeriod,
+    EquipmentEvent,
+    EquipmentEvents,
     FanSpeed,
     HumidityConfig,
     HvacAction,
@@ -104,6 +109,12 @@ class TelemetryZone(BaseModel):
     fan: FanSpeed
     damperPercent: int
     conditioning: HvacAction
+    # 1 or 2 when the thermostat reports a staged condition
+    # (`staged1_heat`, `staged2_cool`, etc.) — multi-stage HP/AC.
+    # None for `active_*` (single-stage) or idle. Surfaced via
+    # `_build_zone` as Zone.conditioningStage so HA consumers see
+    # capacity stage without re-parsing strings.
+    conditioningStage: int | None = None
     currentActivity: ActivityId
     holdActive: bool
 
@@ -581,6 +592,9 @@ def parse_telemetry(xml_bytes: bytes) -> TelemetrySnapshot:
                     conditioning=_CONDITIONING_MAP.get(
                         _text(z, "zoneconditioning") or "idle", HvacAction.IDLE
                     ),
+                    conditioningStage=_extract_stage(
+                        _text(z, "zoneconditioning") or ""
+                    ),
                     currentActivity=ActivityId(_text(z, "currentActivity") or "home"),
                     holdActive=_text(z, "hold") == "on",
                 )
@@ -602,3 +616,122 @@ def parse_telemetry(xml_bytes: bytes) -> TelemetrySnapshot:
         humidifierLevelPercent=_int(root, "humlvl"),
         ventilatorLevelPercent=_int(root, "ventlvl"),
     )
+
+
+def _extract_stage(zoneconditioning: str) -> int | None:
+    """Pull the 1/2 stage suffix out of `staged1_heat` / `staged2_cool`
+    etc. Returns None for `active_*`, `idle`, `off`, or anything we
+    don't recognize — the conditioning enum already collapses those."""
+    if zoneconditioning.startswith("staged1_"):
+        return 1
+    if zoneconditioning.startswith("staged2_"):
+        return 2
+    return None
+
+
+# ── Energy (per-mode runtime hours + efficiency ratings) ─────────────
+
+_ENERGY_MODES: tuple[str, ...] = (
+    "cooling", "hpheat", "eheat", "gas", "reheat", "fangas", "fan", "looppump",
+)
+_ENERGY_PERIOD_IDS: tuple[str, ...] = (
+    "day1", "day2", "month1", "month2", "year1", "year2",
+)
+
+
+def _on_off_attr(el: etree._Element, name: str) -> bool:
+    """Coerce thermostat's `on|off` attribute style to bool."""
+    v = (el.get(name) or "").strip().lower()
+    return v == "on"
+
+
+def _opt_float(el: etree._Element, tag: str) -> float | None:
+    """Inner text → float, or None if missing/blank/non-numeric.
+    Used for the energy ratings (seer/hspf), which are decimals like
+    `15.0` / `8.8`."""
+    raw = _text(el, tag)
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def parse_energy(xml_bytes: bytes) -> Energy:
+    """Parse the thermostat's `<energy>` snapshot (POSTed at
+    `/systems/{serial}/energy`).
+
+    Two halves:
+      * Static config — SEER/HSPF ratings + per-mode display/enabled
+        flags as empty elements with attributes.
+      * Usage — `<period id="dayN|monthN|yearN">` blocks with one
+        integer per mode. Hour counters; periods named day1/2 (today
+        / yesterday), month1/2 (this / last month), year1/2 (this /
+        last year). Values default to 0 when absent.
+
+    Unknown periods are skipped, unknown modes are ignored — keeps
+    the parser tolerant of firmware that surfaces additional fields.
+    """
+    root = etree.fromstring(xml_bytes)
+    modes: dict[str, EnergyModeFlags] = {}
+    for name in _ENERGY_MODES:
+        el = root.find(name)
+        if el is None:
+            continue
+        modes[name] = EnergyModeFlags(
+            display=_on_off_attr(el, "display"),
+            enabled=_on_off_attr(el, "enabled"),
+        )
+
+    usage: list[EnergyPeriod] = []
+    usage_el = root.find("usage")
+    if usage_el is not None:
+        for period in usage_el.findall("period"):
+            pid = period.get("id") or ""
+            if pid not in _ENERGY_PERIOD_IDS:
+                continue
+            counters: dict[str, int] = {}
+            for mode in _ENERGY_MODES:
+                raw = _text(period, mode)
+                if raw:
+                    try:
+                        counters[mode] = int(raw)
+                    except ValueError:
+                        counters[mode] = 0
+            usage.append(EnergyPeriod(id=pid, **counters))
+
+    return Energy(
+        seer=_opt_float(root, "seer"),
+        hspf=_opt_float(root, "hspf"),
+        modes=modes,
+        usage=usage,
+    )
+
+
+# ── Equipment events (fault history) ──────────────────────────────────
+
+def parse_equipment_events(xml_bytes: bytes) -> EquipmentEvents:
+    """Parse `<equipment_events>` (POSTed at
+    `/systems/{serial}/equipment_events`).
+
+    Each `<event>` carries: id (per-event ordinal), code (numeric
+    fault code), source (zone or unit identifier — `ZN1` / `IDU` /
+    `ODU` etc.), description (free-text), localtime (thermostat-local
+    timestamp, no tz suffix), occurrences (counter), active (`on|off`).
+    """
+    root = etree.fromstring(xml_bytes)
+    events: list[EquipmentEvent] = []
+    events_el = root.find("events")
+    if events_el is not None:
+        for ev in events_el.findall("event"):
+            events.append(EquipmentEvent(
+                id=ev.get("id") or "",
+                code=_text(ev, "code") or "",
+                source=_text(ev, "source") or "",
+                description=_text(ev, "description") or "",
+                localTime=_text(ev, "localtime") or "",
+                occurrences=int(_text(ev, "occurrences") or "0"),
+                active=_text(ev, "active") == "on",
+            ))
+    return EquipmentEvents(events=events)

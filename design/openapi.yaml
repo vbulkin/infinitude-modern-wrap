@@ -382,6 +382,54 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /v1/system/energy:
+    get:
+      tags: [system]
+      summary: Per-mode runtime hours + efficiency ratings.
+      description: |
+        Source data for the MyInfinity-app energy dashboard. SEER/HSPF
+        ratings, per-mode display+enabled flags, and six rolling
+        period counters (today/yesterday/this-month/last-month/
+        this-year/last-year) carrying integer runtime hours per mode
+        (cooling/hpheat/eheat/gas/reheat/fangas/fan/looppump).
+
+        Posted ~daily by the thermostat, so on a fresh proxy install
+        this 404s for hours until the first sample lands.
+      operationId: getEnergy
+      responses:
+        "200":
+          description: Energy snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Energy"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/system/events:
+    get:
+      tags: [system]
+      summary: Equipment fault history.
+      description: |
+        List of observed equipment events. Each entry carries the
+        fault code, source (zone or unit identifier), description,
+        first-occurrence timestamp (thermostat-local wall-clock,
+        no tz suffix), occurrence count, and `active` flag (whether
+        the fault is currently asserted vs. historical).
+
+        The thermostat re-POSTs the full list on each change rather
+        than diffs; the proxy holds the latest snapshot in memory.
+      operationId: getEquipmentEvents
+      responses:
+        "200":
+          description: Equipment events list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EquipmentEvents"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   # ──────────────────────────────────────────────────────────────────────
   # Notifications (ring-buffer backfill + SSE companion)
   # ──────────────────────────────────────────────────────────────────────
@@ -1023,6 +1071,16 @@ components:
           allOf:
             - $ref: "#/components/schemas/HvacAction"
           nullable: true
+        conditioningStage:
+          type: integer
+          enum: [1, 2]
+          nullable: true
+          description: |
+            Compressor capacity stage when running on a multi-stage
+            HP/AC: 1 = first (low capacity, efficient), 2 = second
+            (high capacity). Null when single-stage `active_*` or idle.
+            Derived from telemetry's `<zoneconditioning>staged{N}_*</...>`
+            text; surfaced separately so consumers don't re-parse strings.
         currentActivity:
           allOf:
             - $ref: "#/components/schemas/ActivityId"
@@ -1304,6 +1362,96 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/NotificationEvent"
+
+    EnergyModeFlags:
+      type: object
+      required: [display, enabled]
+      properties:
+        display:
+          type: boolean
+          description: Whether the mode shows on the thermostat UI.
+        enabled:
+          type: boolean
+          description: Whether the mode is licensed/configured for this install.
+
+    EnergyPeriod:
+      type: object
+      required: [id, cooling, hpheat, eheat, gas, reheat, fangas, fan, looppump]
+      properties:
+        id:
+          type: string
+          enum: [day1, day2, month1, month2, year1, year2]
+          description: |
+            Period bucket — `day1`/`day2` (today/yesterday),
+            `month1`/`month2` (this/last month), `year1`/`year2`
+            (this/last year). All counters are integer hours of
+            runtime.
+        cooling: { type: integer, minimum: 0 }
+        hpheat:  { type: integer, minimum: 0, description: "Heat-pump heating." }
+        eheat:   { type: integer, minimum: 0, description: "Electric (auxiliary / emergency) heat." }
+        gas:     { type: integer, minimum: 0, description: "Gas furnace." }
+        reheat:  { type: integer, minimum: 0, description: "Reheat coil." }
+        fangas:  { type: integer, minimum: 0, description: "Fan during gas heating." }
+        fan:     { type: integer, minimum: 0, description: "Fan-only operation." }
+        looppump: { type: integer, minimum: 0, description: "Geothermal loop pump." }
+
+    Energy:
+      type: object
+      required: [modes, usage]
+      properties:
+        seer:
+          type: number
+          format: float
+          nullable: true
+          description: Cooling-efficiency rating (Seasonal Energy Efficiency Ratio).
+        hspf:
+          type: number
+          format: float
+          nullable: true
+          description: Heating-efficiency rating (Heating Seasonal Performance Factor).
+        modes:
+          type: object
+          description: Per-mode display+enabled flags, keyed by mode name.
+          additionalProperties:
+            $ref: "#/components/schemas/EnergyModeFlags"
+        usage:
+          type: array
+          description: |
+            Per-period runtime counters. Six entries when the thermostat
+            sends a complete report; fewer if some buckets haven't
+            accumulated yet.
+          items:
+            $ref: "#/components/schemas/EnergyPeriod"
+
+    EquipmentEvent:
+      type: object
+      required: [id, code, source, description, localTime, occurrences, active]
+      properties:
+        id: { type: string, description: "Per-event ordinal from the thermostat." }
+        code: { type: string, description: "Numeric fault code as a string." }
+        source:
+          type: string
+          description: "Origin of the fault — zone (`ZN1`/`ZN2`) or unit (`IDU`/`ODU`)."
+        description: { type: string, description: "Free-text fault description." }
+        localTime:
+          type: string
+          description: |
+            Thermostat-local timestamp of first occurrence, format
+            `YYYY-MM-DDTHH:MM:SS` with no tz suffix. Compare against
+            telemetry's `<localTime>` rather than UTC.
+        occurrences: { type: integer, minimum: 0 }
+        active:
+          type: boolean
+          description: True iff the fault is currently asserted; false if it has cleared but remains in the history list.
+
+    EquipmentEvents:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/EquipmentEvent"
 
     StateUpdatePayload:
       type: object

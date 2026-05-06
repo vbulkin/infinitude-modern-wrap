@@ -26,7 +26,7 @@ from lxml import etree
 
 from .drift import DriftTracker, intents_for_mutation
 from .events import EventPublisher
-from .models import IduConfig, OduConfig
+from .models import Energy, EquipmentEvents, IduConfig, OduConfig
 from .mutations import REPLAY_REGISTRY
 from .parser import (
     NotificationEvent,
@@ -130,12 +130,33 @@ class StoredOdu:
     receivedAt: datetime
 
 
+@dataclass
+class StoredEnergy:
+    serial: str
+    energy: "Energy"
+    receivedAt: datetime
+
+
+@dataclass
+class StoredEquipmentEvents:
+    serial: str
+    events: "EquipmentEvents"
+    receivedAt: datetime
+
+
 class StateStore:
     def __init__(self, persistence: Persistence | None = None) -> None:
         self._telemetry: StoredTelemetry | None = None
         self._config: StoredConfig | None = None
         self._idu: StoredIdu | None = None
         self._odu: StoredOdu | None = None
+        # Latest energy snapshot + equipment-events list. Both are
+        # POSTed sporadically by the thermostat (energy ~daily,
+        # events on-demand when faults are observed). In-memory only —
+        # not persisted, since they're snapshot-style and the next
+        # POST supersedes them.
+        self._energy: StoredEnergy | None = None
+        self._equipment_events: StoredEquipmentEvents | None = None
         self._notifications: deque[StoredNotification] = deque(
             maxlen=NOTIFICATION_BUFFER_SIZE
         )
@@ -460,6 +481,28 @@ class StateStore:
                     what="save_odu",
                 )
 
+    async def apply_energy(self, serial: str, energy: Energy) -> None:
+        """Replace the stored `<energy>` snapshot. Not persisted —
+        thermostat re-posts every ~24 h and the previous one becomes
+        stale anyway."""
+        async with self._lock:
+            self._energy = StoredEnergy(
+                serial=serial, energy=energy,
+                receivedAt=datetime.now(timezone.utc),
+            )
+
+    async def apply_equipment_events(
+        self, serial: str, events: EquipmentEvents,
+    ) -> None:
+        """Replace the stored fault list. The thermostat sends the
+        full list on each POST (not deltas), so a straight overwrite
+        matches its semantics."""
+        async with self._lock:
+            self._equipment_events = StoredEquipmentEvents(
+                serial=serial, events=events,
+                receivedAt=datetime.now(timezone.utc),
+            )
+
     async def mark_config_dirty(self) -> None:
         """Signal to the next telemetry directive that the thermostat
         should re-fetch its config. Cleared optimistically the next time
@@ -576,6 +619,12 @@ class StateStore:
 
     def get_config(self) -> StoredConfig | None:
         return self._config
+
+    def get_energy(self) -> StoredEnergy | None:
+        return self._energy
+
+    def get_equipment_events(self) -> StoredEquipmentEvents | None:
+        return self._equipment_events
 
     def get_idu(self) -> StoredIdu | None:
         return self._idu

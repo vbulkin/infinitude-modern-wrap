@@ -265,6 +265,13 @@ class Zone(BaseModel):
     fan: FanSpeed | None = None
     damperPercent: PercentInt | None = None
     conditioning: HvacAction | None = None
+    # Compressor stage when conditioning is staged (multi-stage HP/AC).
+    # 1 = first stage (low capacity), 2 = second stage (high capacity).
+    # None when single-stage `active_*` or idle. Derived from telemetry's
+    # `<zoneconditioning>` text — staged1_heat/staged2_heat,
+    # staged1_cool/staged2_cool. Surfaced as a separate field so HA
+    # consumers can map to attributes without re-parsing strings.
+    conditioningStage: Literal[1, 2] | None = None
     currentActivity: ActivityId | None = None
     hold: ZoneHold
 
@@ -613,3 +620,71 @@ class Health(BaseModel):
 class RuntimeConfig(BaseModel):
     passReqsIntervalSeconds: Annotated[int, Field(ge=10, le=3600)]
     logLevel: Literal["debug", "info", "warning", "error"]
+
+
+# ── Energy ─────────────────────────────────────────────────────────────
+# Thermostat POSTs `/systems/{serial}/energy` with the runtime data the
+# MyInfinity app uses for its energy dashboard: SEER/HSPF efficiency
+# ratings, per-mode display/enabled flags, and per-period (today,
+# yesterday, this/last month, this/last year) hour counters per mode.
+
+EnergyModeName = Literal[
+    "cooling", "hpheat", "eheat", "gas", "reheat", "fangas", "fan", "looppump",
+]
+
+EnergyPeriodId = Literal[
+    "day1", "day2", "month1", "month2", "year1", "year2",
+]
+
+
+class EnergyModeFlags(BaseModel):
+    """display = whether the mode shows on the thermostat UI;
+    enabled  = whether the mode is licensed/configured for this install.
+    Both come from the thermostat's <{mode} display="..." enabled="..."/>
+    elements with no inner text."""
+    display: bool
+    enabled: bool
+
+
+class EnergyPeriod(BaseModel):
+    """Per-period runtime hours, keyed by mode. Field names mirror the
+    EnergyModeName enum so consumers can index by the same string."""
+    id: EnergyPeriodId
+    cooling: Annotated[int, Field(ge=0)] = 0
+    hpheat: Annotated[int, Field(ge=0)] = 0
+    eheat: Annotated[int, Field(ge=0)] = 0
+    gas: Annotated[int, Field(ge=0)] = 0
+    reheat: Annotated[int, Field(ge=0)] = 0
+    fangas: Annotated[int, Field(ge=0)] = 0
+    fan: Annotated[int, Field(ge=0)] = 0
+    looppump: Annotated[int, Field(ge=0)] = 0
+
+
+class Energy(BaseModel):
+    """Parsed `<energy>` snapshot. Static config (efficiency ratings,
+    per-mode flags) and rolling per-period runtime counters. Surfaces
+    on `GET /v1/system/energy`."""
+    seer: float | None = None
+    hspf: float | None = None
+    modes: dict[EnergyModeName, EnergyModeFlags]
+    usage: list[EnergyPeriod]
+
+
+# ── Equipment events (fault history) ──────────────────────────────────
+# Thermostat POSTs `/systems/{serial}/equipment_events` carrying its
+# fault-history list. Each entry is one observed fault code with
+# source / description / first-occurrence timestamp / count / active
+# flag (whether the fault is currently asserted).
+
+class EquipmentEvent(BaseModel):
+    id: str
+    code: str
+    source: str        # e.g. "ZN1", "IDU", "ODU"
+    description: str
+    localTime: str     # thermostat-local wall-clock; `YYYY-MM-DDTHH:MM:SS`
+    occurrences: Annotated[int, Field(ge=0)]
+    active: bool
+
+
+class EquipmentEvents(BaseModel):
+    events: list[EquipmentEvent]

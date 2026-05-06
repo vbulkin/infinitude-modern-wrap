@@ -21,6 +21,8 @@ from fastapi import APIRouter, Request, Response
 
 from .carrier_bridge import CachedRelay, CarrierBridge
 from .parser import (
+    parse_energy,
+    parse_equipment_events,
     parse_idu_config,
     parse_notifications,
     parse_odu_config,
@@ -328,6 +330,41 @@ def create_southbound_router(
         await store.apply_odu(serial, config, raw_xml=raw)
         await _bridge_mirror(
             "POST", f"/systems/{serial}/odu_config", request, body=body,
+        )
+        return Response(status_code=200)
+
+    @router.post("/systems/{serial}/energy")
+    async def post_energy(serial: str, request: Request) -> Response:
+        """Per-mode runtime hours + efficiency ratings — feeds the
+        MyInfinity app's energy dashboard. Posted ~daily by the
+        thermostat. Surfaces northbound at `GET /v1/system/energy`."""
+        body = await request.body()
+        energy = parse_energy(_unwrap_form(body))
+        await store.apply_energy(serial, energy)
+        await _bridge_mirror(
+            "POST", f"/systems/{serial}/energy", request, body=body,
+        )
+        logger.info(
+            "energy: serial=%s seer=%s hspf=%s periods=%d",
+            serial, energy.seer, energy.hspf, len(energy.usage),
+        )
+        return Response(status_code=200)
+
+    @router.post("/systems/{serial}/equipment_events")
+    async def post_equipment_events(serial: str, request: Request) -> Response:
+        """Thermostat fault history. POSTed when the unit observes a
+        new fault or cycles its event list. Surfaces northbound at
+        `GET /v1/system/events`."""
+        body = await request.body()
+        events = parse_equipment_events(_unwrap_form(body))
+        await store.apply_equipment_events(serial, events)
+        await _bridge_mirror(
+            "POST", f"/systems/{serial}/equipment_events", request, body=body,
+        )
+        active = sum(1 for e in events.events if e.active)
+        logger.info(
+            "equipment_events: serial=%s total=%d active=%d",
+            serial, len(events.events), active,
         )
         return Response(status_code=200)
 

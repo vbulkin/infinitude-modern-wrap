@@ -25,6 +25,8 @@ from .models import (
     ActivityPatch,
     ApiHealth,
     CarrierCloudHealth,
+    Energy,
+    EquipmentEvents,
     FanSpeed,
     Health,
     HealthComponents,
@@ -183,6 +185,7 @@ def _build_zone(zc, tz) -> Zone:
         ),
         damperPercent=tz.damperPercent if tz else None,
         conditioning=HvacAction(tz.conditioning) if tz else None,
+        conditioningStage=(tz.conditioningStage if tz else None),
         currentActivity=(
             ActivityId(zc.hold.activity)
             if zc.hold.active and zc.hold.activity
@@ -851,6 +854,43 @@ def create_app(
                 status_code=404, detail="no odu_config received yet"
             )
         return stored.config
+
+    @app.get("/v1/system/energy", response_model=Energy, tags=["system"])
+    def get_energy() -> Energy:
+        """Per-mode runtime hours (cooling/hpheat/eheat/gas/reheat/
+        fangas/fan/looppump) across six rolling periods (today,
+        yesterday, this/last month, this/last year), plus SEER/HSPF
+        efficiency ratings and per-mode display/enabled flags.
+
+        Sourced from the thermostat's `<energy>` POST. Posted ~daily,
+        so on a fresh proxy install the endpoint may 404 for hours
+        before the first sample lands. Once received the latest
+        snapshot is retained until the next POST overwrites it
+        (in-memory only; not persisted)."""
+        stored = store.get_energy()
+        if stored is None:
+            raise HTTPException(
+                status_code=404, detail="no energy snapshot received yet",
+            )
+        return stored.energy
+
+    @app.get(
+        "/v1/system/events", response_model=EquipmentEvents, tags=["system"],
+    )
+    def get_equipment_events() -> EquipmentEvents:
+        """Thermostat fault history — list of observed equipment
+        events with code, source, description, first-occurrence
+        timestamp, occurrence count, and `active` flag (whether the
+        fault is currently asserted vs. historical).
+
+        Posted by the thermostat when its event list changes. 404
+        until the first POST lands."""
+        stored = store.get_equipment_events()
+        if stored is None:
+            raise HTTPException(
+                status_code=404, detail="no equipment_events snapshot received yet",
+            )
+        return stored.events
 
     @app.get(
         "/v1/notifications",
