@@ -125,6 +125,9 @@ class InfinitudeHVACCard extends InfinitudeBase {
     .zone-sp { display: flex; flex-direction: column; gap: 6px; }
     .zone-meta { display: flex; gap: 10px; padding: 0 14px 10px; font-size: 11px; color: var(--secondary-text-color); flex-wrap: wrap; }
     .meta-item { display: flex; align-items: center; gap: 4px; }
+    .meta-item.heating .meta-val { color: var(--label-badge-red, #f97316); }
+    .meta-item.cooling .meta-val { color: var(--label-badge-blue, #38bdf8); }
+    .meta-item.drying  .meta-val { color: var(--accent-color, #a78bfa); }
     .meta-val { color: var(--primary-text-color); font-weight: 500; }
     .zone-hold {
       display: flex; align-items: center; gap: 6px; padding: 8px 14px;
@@ -428,6 +431,7 @@ class InfinitudeHVACCard extends InfinitudeBase {
           ${rh != null ? html`<span class="meta-item">RH <span class="meta-val">${rh}%</span></span>` : nothing}
           ${a.fan_mode ? html`<span class="meta-item">Fan <span class="meta-val">${a.fan_mode}</span></span>` : nothing}
           ${a.damper_position != null ? html`<span class="meta-item">Damper <span class="meta-val">${a.damper_position}%</span></span>` : nothing}
+          ${ac && a.conditioning_stage != null ? html`<span class="meta-item ${ac}">Stage <span class="meta-val">${a.conditioning_stage}</span></span>` : nothing}
         </div>
         ${hasHold ? html`
           <div class="zone-hold">
