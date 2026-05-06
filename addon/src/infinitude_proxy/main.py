@@ -63,6 +63,7 @@ from .models import (
 from .capture import CaptureControl, CaptureMiddleware
 from .debug_api import create_debug_router
 from .errors import register_error_handlers
+from .forward_proxy import ForwardProxy, extract_target_url
 from .mutations import (
     apply_activity_set,
     apply_humidity_set,
@@ -249,6 +250,7 @@ def create_app(
     store: StateStore | None = None,
     *,
     capture_control: CaptureControl | None = None,
+    forward_proxy: ForwardProxy | None = None,
 ) -> FastAPI:
     settings = load_settings()
     _configure_logging(settings.log_level)
@@ -262,6 +264,16 @@ def create_app(
     # can inject a pre-wired one (e.g., attached to a test persistence)
     # to exercise capture without running the lifespan path.
     control = capture_control if capture_control is not None else CaptureControl()
+    # ForwardProxy is the thermostat → carrier.com relay. Lifespan opens/
+    # closes the underlying httpx client; the catch-all route at the
+    # bottom of this function dispatches matching requests to it. When
+    # capture is on, the proxy emits `carrier_out` rows mirroring the
+    # ASGI middleware's southbound/northbound output. Tests inject a
+    # pre-wired instance with an httpx.MockTransport so they don't hit
+    # the network.
+    if forward_proxy is None:
+        forward_proxy = ForwardProxy(capture_control=control)
+    fproxy = forward_proxy
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -283,12 +295,14 @@ def create_app(
                 persistence = None
                 store.attach_persistence(None)
                 control.attach_persistence(None)
+        await fproxy.open()
         try:
             yield
         finally:
             # Detach before close so any in-flight capture task sees a
             # clean "no persistence" state rather than a closed handle.
             control.attach_persistence(None)
+            await fproxy.close()
             if persistence is not None:
                 await persistence.close()
 
@@ -1079,6 +1093,24 @@ def create_app(
         if blob is None:
             raise HTTPException(status_code=404, detail=f"{kind}_xml is null")
         return Response(content=blob, media_type="application/xml")
+
+    # ── Carrier cloud forward-proxy (catch-all, registered LAST) ─────
+    # Matches paths shaped /http://host/... or /https://host/... — the
+    # encoded absolute-URI form the thermostat uses to reach
+    # carrier.com via us. Anything else falls through to FastAPI's
+    # default 404. Methods are explicit (no DELETE/HEAD) since the
+    # observed usages are GET (firmware checks) + POST/PUT (MyInfinity
+    # app round-trips).
+    @app.api_route(
+        "/{full_path:path}",
+        methods=["GET", "POST", "PUT", "PATCH"],
+        include_in_schema=False,
+    )
+    async def carrier_passthrough(full_path: str, request: Request) -> Response:
+        target = extract_target_url(request)
+        if target is None:
+            raise HTTPException(status_code=404, detail="not found")
+        return await fproxy.forward(request, target)
 
     return app
 
