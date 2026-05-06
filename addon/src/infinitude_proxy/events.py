@@ -28,6 +28,14 @@ EventType = Literal[
     "state.update",
     "health.changed",
     "hold.changed",
+    # alpha.31: thermostat-side notifications (filter due, fault codes,
+    # service reminders, etc.) now publish on the stream so HA-side
+    # consumers can react in real-time instead of waiting up to a full
+    # poll cycle for the REST endpoint at /v1/notifications. Carries
+    # `{"count": N, "events": [{...}, ...]}` — count of new arrivals
+    # and the parsed event list. Subscribers that only care that
+    # something arrived can ignore the events array.
+    "notifications.received",
 ]
 
 EVENT_BUFFER_SIZE = 200

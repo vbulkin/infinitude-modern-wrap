@@ -210,15 +210,41 @@ def _seeded_client() -> tuple[TestClient, StateStore]:
     return client, store
 
 
-def test_notifications_do_not_generate_sse_events():
-    """Raw thermostat notifications are /v1/notifications only — the SSE
-    stream's event enum is state/hold/health. Posting notifications must
-    not bump the event publisher's id counter."""
+def test_notifications_publish_notifications_received_event():
+    """alpha.31: thermostat notifications fire a `notifications.received`
+    SSE event so HA-side consumers see them in real time instead of
+    waiting for the next REST poll. Payload carries serial + count +
+    parsed event list."""
     client, store = _seeded_client()
     before = store.events.latest_id
     r = client.post(
         "/systems/0000TEST0000/notifications",
         content=_read("change_opmode_notifications.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    assert r.status_code == 200
+    # Event publisher's id counter advanced.
+    assert store.events.latest_id > before
+    # New events in the buffer include a notifications.received.
+    recent = store.events.replay_since(before) or []
+    types = [e.event for e in recent]
+    assert "notifications.received" in types
+    nr = next(e for e in recent if e.event == "notifications.received")
+    assert nr.data["serial"] == "0000TEST0000"
+    assert nr.data["count"] >= 1
+    assert isinstance(nr.data["events"], list)
+    assert len(nr.data["events"]) == nr.data["count"]
+
+
+def test_empty_notifications_post_skips_sse_publish():
+    """An empty notifications POST shouldn't bump the publisher's id —
+    no consumer needs to know that nothing happened."""
+    client, store = _seeded_client()
+    before = store.events.latest_id
+    # Synthesise an empty <notifications/> body.
+    r = client.post(
+        "/systems/0000TEST0000/notifications",
+        content=b'<?xml version="1.0"?><notifications/>',
         headers={"content-type": "application/xml"},
     )
     assert r.status_code == 200

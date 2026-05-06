@@ -447,25 +447,33 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         were disconnected get replayed (or, if our id is too old, the
         addon re-seeds with a fresh `state.snapshot`).
 
-        This loop is the only place `_sse_connected` flips True/False —
-        consumers read it via the `sse_connected` property to surface
-        a "live updates" indicator in the UI.
+        Polling-vs-SSE coordination lives in `_sse_consume_once` /
+        `_on_sse_disconnect` — when SSE is up, scheduled polling is
+        disabled (the keepalive ping is the heartbeat); when SSE
+        drops, polling resumes immediately.
         """
         backoff = 1.0
         while True:
             try:
                 await self._sse_consume_once()
-                # Clean disconnect (server closed cleanly) — reset
-                # backoff so the next reconnect is fast.
+                # Clean EOF (server closed cleanly) — reset backoff
+                # so the next reconnect is fast.
                 backoff = 1.0
                 _LOGGER.info("SSE: stream ended cleanly; reconnecting")
             except asyncio.CancelledError:
+                # Coordinator unload — leave _sse_connected/polling
+                # state alone; async_shutdown handles teardown.
                 raise
             except Exception as err:
-                self._sse_connected = False
                 _LOGGER.warning(
                     "SSE: %s — reconnecting in %.1fs", err, backoff,
                 )
+                # Centralised disconnect bookkeeping — flips the dot
+                # to yellow AND re-enables polling. Without this the
+                # coordinator would have `update_interval=None` from
+                # the prior connect and never refresh during the
+                # reconnect window.
+                self._on_sse_disconnect()
             try:
                 await asyncio.sleep(backoff)
             except asyncio.CancelledError:
@@ -475,7 +483,15 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
     async def _sse_consume_once(self) -> None:
         """One full connect → consume → disconnect cycle. Returns
         normally on EOF; raises on network or HTTP errors so the outer
-        loop can apply backoff."""
+        loop can apply backoff.
+
+        Side effect: toggles `update_interval` to disable scheduled
+        polling while SSE is connected (the addon's 15 s keepalive
+        ping is the heartbeat — polling would be redundant). On
+        disconnect we resume the 60 s heartbeat poll AND fire an
+        immediate refresh so the user sees state without waiting a
+        full poll cycle.
+        """
         headers = {"Accept": "text/event-stream", "Cache-Control": "no-cache"}
         if self._sse_last_event_id:
             headers["Last-Event-ID"] = self._sse_last_event_id
@@ -490,8 +506,13 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         ) as resp:
             resp.raise_for_status()
             self._sse_connected = True
+            # Disable scheduled polling — the SSE keepalive does the
+            # heartbeat job, and `state.update` events fire on every
+            # thermostat status post (~30 s) so we get fresher
+            # updates than the 60 s poll would give us anyway.
+            self.update_interval = None
             _LOGGER.info(
-                "SSE: connected (resume id=%s)",
+                "SSE: connected (resume id=%s); pause poll heartbeat",
                 self._sse_last_event_id or "none",
             )
             # Push a refresh so the UI's "SSE connected" indicator
@@ -499,8 +520,27 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
             # next poll-driven `async_set_updated_data`.
             self.async_update_listeners()
             await self._parse_sse_stream(resp)
+        # Stream ended cleanly (server closed) — fall through to
+        # disconnect handling in the finally-style block below.
+        self._on_sse_disconnect()
+
+    def _on_sse_disconnect(self) -> None:
+        """Centralised disconnect bookkeeping — flip the indicator
+        and re-enable polling so the user keeps getting updates while
+        the SSE consumer's outer loop reconnects with backoff."""
+        if not self._sse_connected:
+            return  # already disconnected; idempotent
         self._sse_connected = False
+        # Re-arm the heartbeat poll (matches the const default — we
+        # only switch it off, never permanently rebase). The next
+        # tick fires after `update_interval` from now.
+        self.update_interval = timedelta(seconds=SCAN_INTERVAL_SECONDS)
+        _LOGGER.info("SSE: disconnected; resume %ds poll heartbeat", SCAN_INTERVAL_SECONDS)
         self.async_update_listeners()
+        # Don't wait for the next interval — kick a refresh now so
+        # the gap between SSE-stop and first-poll-arrival doesn't
+        # show stale data.
+        self.async_request_refresh()
 
     async def _parse_sse_stream(self, resp) -> None:
         """SSE line-format parser per https://html.spec.whatwg.org/#server-sent-events.
@@ -563,11 +603,30 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         event for one fewer code path that can drift from the
         addon's actual state shape.
 
+        `notifications.received` triggers refresh too so the
+        notifications ring buffer fetched via /v1/notifications is
+        fresh by the time downstream entities read it. (alpha.31:
+        notifications are now on the SSE stream — pre-31 they were
+        REST-poll only and HA saw them up to a poll cycle late.)
+
         `health.changed` is published when mutation drift fires; not
         a state change for the user-facing UI, so we don't refresh on
         it.
         """
-        if event_type in ("state.snapshot", "state.update", "hold.changed"):
+        # Per-event DEBUG log — quiet in normal operation (INFO on
+        # connect/disconnect already records the lifecycle), turn on
+        # `log_level: debug` to see live event flow when debugging
+        # latency or "did this event arrive?" questions.
+        _LOGGER.debug(
+            "SSE event: %s id=%s data=%s",
+            event_type, self._sse_last_event_id, data[:200],
+        )
+        if event_type in (
+            "state.snapshot",
+            "state.update",
+            "hold.changed",
+            "notifications.received",
+        ):
             self.async_request_refresh()
 
 

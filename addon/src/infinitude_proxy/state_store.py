@@ -524,18 +524,48 @@ class StateStore:
     async def append_notifications(
         self, serial: str, events: list[NotificationEvent]
     ) -> None:
-        """Append thermostat notifications to the ring buffer.
+        """Append thermostat notifications to the ring buffer + publish
+        on the SSE stream so live consumers (HA, browsers) see them
+        without polling the REST endpoint.
 
-        Not published on the SSE stream: the spec's EventEnvelope enum is
-        state/hold/health — raw thermostat notifications don't fit. The
-        REST endpoint /v1/notifications remains the way clients consume
-        this stream.
+        Notifications are coarse-grained — one POST may carry several
+        events (fault clear + new fault, etc.) — so we batch them into
+        one `notifications.received` SSE event with `count` and the
+        full event list. INFO log records arrival so the operator can
+        see notifications in `journalctl`/Apps log without arming
+        capture.
         """
+        if not events:
+            return
         now = datetime.now(timezone.utc)
         async with self._lock:
             for ev in events:
                 sn = StoredNotification(serial=serial, event=ev, receivedAt=now)
                 self._notifications.append(sn)
+        # Summarize for the INFO log — first event's class + count,
+        # truncated. The full event list is in the SSE payload below
+        # (and on /v1/notifications) for anyone who needs it.
+        first = events[0]
+        first_summary = (
+            getattr(first, "eventClass", None)
+            or getattr(first, "type", None)
+            or type(first).__name__
+        )
+        logger.info(
+            "notification: serial=%s count=%d first=%s",
+            serial, len(events), first_summary,
+        )
+        await self.events.publish(
+            "notifications.received",
+            {
+                "serial": serial,
+                "count": len(events),
+                "events": [
+                    ev.model_dump(mode="json") if hasattr(ev, "model_dump") else dict(ev)
+                    for ev in events
+                ],
+            },
+        )
 
     @property
     def subscriber_count(self) -> int:
