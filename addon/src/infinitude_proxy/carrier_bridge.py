@@ -130,6 +130,13 @@ class CarrierBridge:
         # `infinitude:572`'s `$store->set(changes => time+60)`. The next
         # status POST consumes it once `now > scheduled_at`.
         self._scheduled_changes_at: datetime | None = None
+        # Health stats — surfaced via /v1/healthz so the addon UI's
+        # carrierCloud indicator reflects actual upstream reachability
+        # rather than a hardcoded "disabled".
+        self._last_success_at: datetime | None = None
+        self._last_attempt_at: datetime | None = None
+        self._last_error: str | None = None
+        self._consecutive_failures: int = 0
 
     @property
     def enabled(self) -> bool:
@@ -175,6 +182,34 @@ class CarrierBridge:
         self._scheduled_changes_at = (
             datetime.now(timezone.utc) + timedelta(seconds=seconds)
         )
+
+    def health(self) -> dict:
+        """Snapshot the bridge's reachability state for /v1/healthz.
+
+        - `disabled` when `pass_reqs=0` (operator turned the bridge off).
+        - `unknown` when enabled but no relay has been attempted yet
+          (process just started, no thermostat traffic yet).
+        - `healthy` when the most recent attempt succeeded.
+        - `degraded` when one or more recent attempts failed (consecutive
+          failures > 0). The /v1/healthz overall status downgrades to
+          `degraded` whenever any component is in this state.
+        """
+        if not self.enabled:
+            status = "disabled"
+        elif self._last_attempt_at is None:
+            status = "unknown"
+        elif self._consecutive_failures > 0:
+            status = "degraded"
+        else:
+            status = "healthy"
+        return {
+            "status": status,
+            "last_success_at": self._last_success_at,
+            "last_attempt_at": self._last_attempt_at,
+            "last_error": self._last_error,
+            "consecutive_failures": self._consecutive_failures,
+            "pass_reqs": self._pass_reqs,
+        }
 
     def consume_scheduled_changes(self) -> bool:
         """Atomic: return True iff a scheduled-changes deadline exists
@@ -276,6 +311,7 @@ class CarrierBridge:
         outgoing_headers = self._sanitize_request_headers(headers or {})
 
         start = time.monotonic()
+        self._last_attempt_at = datetime.now(timezone.utc)
         try:
             response = await self._client.request(
                 method.upper(), url,
@@ -284,6 +320,8 @@ class CarrierBridge:
             )
         except httpx.RequestError as e:
             duration_ms = int((time.monotonic() - start) * 1000)
+            self._consecutive_failures += 1
+            self._last_error = f"{type(e).__name__}: {e}"
             # Match the access-log shape (method url -> status (Nms))
             # so failures sit alongside successes when the operator
             # tail's the addon log.
@@ -293,6 +331,18 @@ class CarrierBridge:
             )
             await self._capture_failure(method, path, query, body, str(e), start)
             return None
+
+        # 5xx from Carrier is also a failure for health purposes (their
+        # API is up but returning errors); 4xx is application-level
+        # (we sent something they didn't like) and counts as success
+        # since the round-trip itself worked.
+        if response.status_code >= 500:
+            self._consecutive_failures += 1
+            self._last_error = f"HTTP {response.status_code}"
+        else:
+            self._consecutive_failures = 0
+            self._last_error = None
+            self._last_success_at = self._last_attempt_at
 
         duration_ms = int((time.monotonic() - start) * 1000)
         cached = CachedRelay(

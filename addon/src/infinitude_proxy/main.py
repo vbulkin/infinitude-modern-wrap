@@ -415,18 +415,24 @@ def create_app(
             )
             for ev in drift.recent_events()
         ]
+        bridge_h = cbridge.health()
+        # Promote any bridge degradation into the overall status so the
+        # operator's UI red-dot reflects upstream Carrier outages, not
+        # just thermostat-side staleness.
+        if bridge_h["status"] == "degraded" and overall == "healthy":
+            overall = "degraded"
         return Health(
             status=overall,  # type: ignore[arg-type]
             timestamp=now,
             components=HealthComponents(
                 thermostat=thermostat,
                 carrierCloud=CarrierCloudHealth(
-                    status="disabled",
-                    lastSuccess=None,
-                    lastAttempt=None,
-                    lastError=None,
-                    passReqsIntervalSeconds=settings.pass_reqs,
-                    consecutiveFailures=0,
+                    status=bridge_h["status"],
+                    lastSuccess=bridge_h["last_success_at"],
+                    lastAttempt=bridge_h["last_attempt_at"],
+                    lastError=bridge_h["last_error"],
+                    passReqsIntervalSeconds=bridge_h["pass_reqs"],
+                    consecutiveFailures=bridge_h["consecutive_failures"],
                 ),
                 stateStore=StateStoreHealth(
                     status="healthy",

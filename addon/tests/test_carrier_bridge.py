@@ -655,6 +655,113 @@ async def test_relay_emits_warning_on_network_failure():
     )
 
 
+def test_health_initial_state_is_unknown():
+    cb = CarrierBridge()
+    h = cb.health()
+    assert h["status"] == "unknown"
+    assert h["last_success_at"] is None
+    assert h["last_attempt_at"] is None
+    assert h["consecutive_failures"] == 0
+
+
+def test_health_disabled_when_pass_reqs_zero():
+    cb = CarrierBridge(pass_reqs=0)
+    assert cb.health()["status"] == "disabled"
+
+
+@pytest.mark.asyncio
+async def test_health_healthy_after_successful_relay():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"<status/>")
+
+    cb = _bridge_with_handler(handler)
+    await cb.relay("POST", "/systems/X/status", body=b"x")
+    h = cb.health()
+    assert h["status"] == "healthy"
+    assert h["last_success_at"] is not None
+    assert h["last_attempt_at"] is not None
+    assert h["consecutive_failures"] == 0
+
+
+@pytest.mark.asyncio
+async def test_health_degraded_after_consecutive_failures():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("simulated", request=request)
+
+    cb = _bridge_with_handler(handler)
+    for _ in range(3):
+        await cb.relay("POST", "/systems/X/status", body=b"x")
+    h = cb.health()
+    assert h["status"] == "degraded"
+    assert h["consecutive_failures"] == 3
+    assert h["last_error"] is not None
+    assert h["last_success_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_health_recovers_after_success_following_failures():
+    state = {"fail": True}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if state["fail"]:
+            raise httpx.ConnectError("simulated", request=request)
+        return httpx.Response(200, content=b"<status/>")
+
+    cb = _bridge_with_handler(handler)
+    await cb.relay("POST", "/systems/X/status", body=b"x")
+    assert cb.health()["consecutive_failures"] == 1
+
+    state["fail"] = False
+    await cb.relay("POST", "/systems/X/status", body=b"x")
+    h = cb.health()
+    assert h["status"] == "healthy"
+    assert h["consecutive_failures"] == 0
+    assert h["last_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_health_5xx_counts_as_failure():
+    """4xx is application error (we sent bad input), 5xx is server
+    side. For UI purposes only 5xx + network errors count as
+    'something we should worry about upstream'."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, content=b"")
+
+    cb = _bridge_with_handler(handler)
+    await cb.relay("POST", "/systems/X/status", body=b"x")
+    h = cb.health()
+    assert h["status"] == "degraded"
+    assert h["consecutive_failures"] == 1
+    assert "503" in (h["last_error"] or "")
+
+
+@pytest.mark.asyncio
+async def test_health_4xx_counts_as_success():
+    """A 404 from Carrier means we reached them and they responded
+    — round-trip works. Still counts as 'healthy upstream'."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, content=b"not found")
+
+    cb = _bridge_with_handler(handler)
+    await cb.relay("GET", "/some-unknown-path")
+    h = cb.health()
+    assert h["status"] == "healthy"
+    assert h["consecutive_failures"] == 0
+
+
+def test_healthz_endpoint_reflects_bridge_status():
+    """End-to-end: /v1/healthz response shape carries the bridge's
+    actual status, not the alpha.25-era hardcoded `disabled`."""
+    cb = CarrierBridge()  # enabled, never attempted
+    app = create_app(store=StateStore(), carrier_bridge=cb)
+    client = TestClient(app)
+    r = client.get("/v1/healthz")
+    assert r.status_code == 200
+    cc = r.json()["components"]["carrierCloud"]
+    assert cc["status"] == "unknown"
+    assert cc["passReqsIntervalSeconds"] == cb._pass_reqs
+
+
 def test_release_notes_falls_back_to_empty_stub_on_carrier_failure():
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("simulated", request=request)

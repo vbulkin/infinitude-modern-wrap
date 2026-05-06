@@ -533,7 +533,12 @@ class ThermostatHealth(BaseModel):
 
 
 class CarrierCloudHealth(BaseModel):
-    status: Literal["healthy", "degraded", "unreachable", "disabled"]
+    # `unknown` = bridge enabled but no relay attempted yet (process
+    # just started, or no thermostat traffic recently). Distinguishes
+    # "we haven't tried" from "we tried and failed" (degraded /
+    # unreachable). UI consumers should treat unknown as neutral
+    # (yellow/grey), not red.
+    status: Literal["healthy", "degraded", "unreachable", "disabled", "unknown"]
     lastSuccess: IsoDatetimeOut | None = None
     lastAttempt: IsoDatetimeOut | None = None
     lastError: str | None = None
