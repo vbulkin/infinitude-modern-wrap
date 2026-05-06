@@ -20,7 +20,7 @@ See [`design/DESIGN.md`](../design/DESIGN.md) for architecture and
 | 5 | HA integration cutover to the new API | ✅ shipped |
 | 5 | HA-side SSE consumer with reconnect + `Last-Event-ID` resume | ✅ shipped (alpha.30) |
 | 5 | Conditional polling (off while SSE up; resumes on disconnect) | ✅ shipped (alpha.31) |
-| 6 | Legacy HTML UI updates (humidity / vacation / service reminders) | ⏳ post-cutover |
+| 6 | Legacy Mojolicious HTML UI (humidity / vacation / service reminders) | ⛔ obsolete; user-facing surfaces are now the HACS integration's Lovelace cards. The Python add-on does not serve `infinitude-ui.html`. |
 | 7 | Carrier cloud passthrough — explicit forward proxy | ✅ shipped (alpha.24) |
 | 7 | Carrier cloud passthrough — implicit bridge (status mirror, `carrier_changes` window, scheduled changes, directive pass-through) | ✅ shipped (alpha.25–26) |
 | 7 | Vacation HA-side surface | ⏳ deferred to project tail |
