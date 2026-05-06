@@ -5,7 +5,7 @@ import { LitElement, html, css, nothing } from 'lit';
 
 export { LitElement, html, css, nothing };
 
-export const CARD_VERSION = '2.0.0-alpha.26';
+export const CARD_VERSION = '2.0.0-alpha.27';
 export const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 export const JS_DAY_MAP = [6,0,1,2,3,4,5];
 export const ACTIVITIES = ['home','away','sleep','wake'];

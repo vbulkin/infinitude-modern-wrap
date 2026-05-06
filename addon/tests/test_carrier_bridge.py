@@ -10,6 +10,7 @@ window so MyInfinity-app round-trips work.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -579,6 +580,79 @@ def test_release_notes_returns_carrier_body_when_available():
     r = client.get("/releaseNotes/systxbbec-14.02.txt")
     assert r.status_code == 200
     assert b"What's new" in r.content
+
+
+def _attach_test_handler() -> tuple[logging.Handler, list[logging.LogRecord]]:
+    """Hand-rolled record capture — pytest's caplog can't see records
+    once create_app's `_configure_logging` flips
+    propagate=False on the `infinitude_proxy` parent logger. We attach
+    our own handler directly to that logger so child loggers'
+    records flow into our list regardless of propagation."""
+    records: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    handler = _Capture(level=logging.DEBUG)
+    target = logging.getLogger("infinitude_proxy")
+    target.addHandler(handler)
+    return handler, records
+
+
+@pytest.mark.asyncio
+async def test_relay_emits_access_log_line_on_success():
+    """Per-relay INFO log line is the operator's main observability
+    surface — they should see Carrier traffic in the addon logs the
+    same way they see thermostat traffic via uvicorn's access log.
+    Format mirrors uvicorn: `method url -> status (ms, bytes)`."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=b"<status/>",
+            headers={"content-type": "application/xml"},
+        )
+
+    cap_handler, records = _attach_test_handler()
+    try:
+        cb = _bridge_with_handler(handler)
+        await cb.relay("POST", "/systems/X/status", body=b"x")
+    finally:
+        logging.getLogger("infinitude_proxy").removeHandler(cap_handler)
+
+    matches = [
+        r for r in records
+        if r.name == "infinitude_proxy.carrier_bridge"
+        and r.levelno == logging.INFO
+        and "relay POST" in r.getMessage()
+        and "/systems/X/status" in r.getMessage()
+        and "-> 200" in r.getMessage()
+    ]
+    assert matches, (
+        f"expected access-log INFO line; got: {[r.getMessage() for r in records]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_relay_emits_warning_on_network_failure():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("simulated", request=request)
+
+    cap_handler, records = _attach_test_handler()
+    try:
+        cb = _bridge_with_handler(handler)
+        await cb.relay("POST", "/systems/X/status", body=b"x")
+    finally:
+        logging.getLogger("infinitude_proxy").removeHandler(cap_handler)
+
+    matches = [
+        r for r in records
+        if r.levelno == logging.WARNING
+        and "ConnectError" in r.getMessage()
+        and "-> error" in r.getMessage()
+    ]
+    assert matches, (
+        f"expected warning log on network failure; got: {[r.getMessage() for r in records]}"
+    )
 
 
 def test_release_notes_falls_back_to_empty_stub_on_carrier_failure():

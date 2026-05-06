@@ -237,8 +237,36 @@ class CarrierBridge:
         """
         key = _action_key(method, path, query)
         if not self.should_relay(key, local_changes_pending=local_changes_pending):
-            return self._cache.get(key)
+            cached_hit = self._cache.get(key)
+            # Log at DEBUG so the operator can ask "why did/didn't we
+            # relay?" without the per-poll INFO noise. Three reasons
+            # short-circuit a relay: bridge disabled (pass_reqs=0),
+            # local mutation pending, or cache hit within TTL.
+            if not self.enabled:
+                reason = "disabled (pass_reqs=0)"
+            elif local_changes_pending:
+                reason = "local-changes-pending"
+            elif self.carrier_changes_active():
+                reason = "window-open (should not happen — bug)"
+            elif cached_hit is not None:
+                age = (
+                    datetime.now(timezone.utc) - cached_hit.cached_at
+                ).total_seconds()
+                reason = f"cache-hit age={age:.0f}s ttl={self._pass_reqs}s"
+            else:
+                reason = "unknown"
+            logger.debug(
+                "skip %s %s — %s%s",
+                method.upper(), path, reason,
+                f" (returning cached status={cached_hit.status_code})"
+                if cached_hit is not None else "",
+            )
+            return cached_hit
         if self._client is None:
+            logger.debug(
+                "skip %s %s — client not initialized",
+                method.upper(), path,
+            )
             return None
 
         url = f"https://{self._upstream_host}{path}"
@@ -255,13 +283,18 @@ class CarrierBridge:
                 content=body or None,
             )
         except httpx.RequestError as e:
+            duration_ms = int((time.monotonic() - start) * 1000)
+            # Match the access-log shape (method url -> status (Nms))
+            # so failures sit alongside successes when the operator
+            # tail's the addon log.
             logger.warning(
-                "carrier_bridge: relay failed method=%s path=%s err=%s",
-                method, path, e,
+                'relay %s %s -> error %s (%dms)',
+                method.upper(), url, type(e).__name__, duration_ms,
             )
             await self._capture_failure(method, path, query, body, str(e), start)
             return None
 
+        duration_ms = int((time.monotonic() - start) * 1000)
         cached = CachedRelay(
             status_code=response.status_code,
             body=response.content,
@@ -270,6 +303,17 @@ class CarrierBridge:
         )
         self._cache[key] = cached
 
+        # Per-request access-log — INFO level, formatted like uvicorn's
+        # access log so outbound Carrier traffic is visible in the
+        # same `journalctl`/Apps log stream as inbound thermostat
+        # traffic. Body length helps spot empty / truncated responses
+        # at a glance.
+        logger.info(
+            'relay %s %s -> %d (%dms, %d B)',
+            method.upper(), url,
+            response.status_code, duration_ms, len(cached.body),
+        )
+
         # The carrier-changes window is opened on Carrier saying
         # `serverHasChanges=true` in a relayed STATUS post. Don't
         # extend on cache hits — the trigger is a fresh signal, not a
@@ -277,7 +321,7 @@ class CarrierBridge:
         if path.endswith("/status") and self._has_server_changes(cached.body):
             self.open_carrier_changes_window()
             logger.info(
-                "carrier_bridge: opened carrier_changes window (%ds) on serverHasChanges=true",
+                "opened carrier_changes window (%ds) on serverHasChanges=true",
                 self._window_seconds,
             )
 

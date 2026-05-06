@@ -128,6 +128,10 @@ class ForwardProxy:
         binary firmware push ever arrives this way.
         """
         if not self.is_allowed(target_url):
+            logger.warning(
+                "forward %s %s -> 403 (forbidden host)",
+                request.method, target_url,
+            )
             raise HTTPException(403, detail=f"forbidden host: {target_url}")
         if self._client is None:
             raise HTTPException(503, detail="forward proxy not initialized")
@@ -146,17 +150,35 @@ class ForwardProxy:
                 headers=req_headers, content=req_body or None,
             )
         except httpx.TimeoutException as e:
+            duration_ms = int((time.monotonic() - start) * 1000)
+            logger.warning(
+                "forward %s %s -> 504 timeout (%dms)",
+                method, target_url, duration_ms,
+            )
             await self._capture_failure(
                 method, target_url, req_headers, req_body, 504, str(e), start
             )
             raise HTTPException(504, detail=f"upstream timeout: {e}") from e
         except httpx.RequestError as e:
+            duration_ms = int((time.monotonic() - start) * 1000)
+            logger.warning(
+                "forward %s %s -> 502 %s (%dms)",
+                method, target_url, type(e).__name__, duration_ms,
+            )
             await self._capture_failure(
                 method, target_url, req_headers, req_body, 502, str(e), start
             )
             raise HTTPException(502, detail=f"upstream error: {e}") from e
 
         duration_ms = int((time.monotonic() - start) * 1000)
+        # INFO-level access log so forward-proxy traffic is visible in
+        # the same log stream as inbound (uvicorn.access) and bridge
+        # relays (carrier_bridge). Same shape: method url -> status (ms, bytes).
+        logger.info(
+            "forward %s %s -> %d (%dms, %d B)",
+            method, target_url,
+            upstream.status_code, duration_ms, len(upstream.content),
+        )
         await self._capture_success(
             method, target_url, req_headers, req_body, upstream, duration_ms,
         )
