@@ -124,6 +124,12 @@ class CarrierBridge:
         self._client: httpx.AsyncClient | None = None
         self._cache: dict[str, CachedRelay] = {}
         self._carrier_changes_until: datetime | None = None
+        # Future-timestamp scheduled-changes flag — set after we serve
+        # Carrier's tree from `/systems/{id}/config` to force a follow-up
+        # config-fetch cycle ~60 s later, mirroring Perl
+        # `infinitude:572`'s `$store->set(changes => time+60)`. The next
+        # status POST consumes it once `now > scheduled_at`.
+        self._scheduled_changes_at: datetime | None = None
 
     @property
     def enabled(self) -> bool:
@@ -159,6 +165,32 @@ class CarrierBridge:
 
     def get_cached(self, key: str) -> CachedRelay | None:
         return self._cache.get(key)
+
+    def schedule_changes(self, seconds: int = 60) -> None:
+        """Arm the delayed-changes flag — at `now + seconds` and beyond,
+        the next call to `consume_scheduled_changes()` returns True.
+        Mirrors Perl's `$store->set(changes => time+60)` after a Carrier
+        config has been served. Idempotent: calling again replaces the
+        deadline rather than queuing multiple."""
+        self._scheduled_changes_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=seconds)
+        )
+
+    def consume_scheduled_changes(self) -> bool:
+        """Atomic: return True iff a scheduled-changes deadline exists
+        and has elapsed; clear it on success. Returns False otherwise.
+
+        Called from the status-POST handler. The semantics match Perl
+        `infinitude:589`: `if ($changes =~ /\\d+/) { $changes = (time>$changes) ? 'true' : '' }`
+        followed by `$store->set(changes=>'')` on consumption.
+        """
+        deadline = self._scheduled_changes_at
+        if deadline is None:
+            return False
+        if datetime.now(timezone.utc) < deadline:
+            return False
+        self._scheduled_changes_at = None
+        return True
 
     # ── Mirror flow ──────────────────────────────────────────────────
 

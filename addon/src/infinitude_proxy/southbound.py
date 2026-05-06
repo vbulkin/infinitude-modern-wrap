@@ -13,12 +13,13 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 from urllib.parse import unquote_to_bytes
 
 from fastapi import APIRouter, Request, Response
 
-from .carrier_bridge import CarrierBridge
+from .carrier_bridge import CachedRelay, CarrierBridge
 from .parser import (
     parse_idu_config,
     parse_notifications,
@@ -106,6 +107,22 @@ def _unwrap_form(body: bytes) -> bytes:
     return body
 
 
+# Match Perl `infinitude:597-601`: when we replay Carrier's directive
+# verbatim to the thermostat, force `pingRate` to the clean cadence
+# regardless of what Carrier returned. Carrier sometimes returns its
+# own pingRate hint (e.g. 30 s during planned-server-maintenance) that
+# we don't want governing local writes — the thermostat would then
+# re-poll us 2.5x slower than our own dirty-flag dictates.
+_PING_RATE_RE = re.compile(rb"<pingRate>\s*\d+\s*</pingRate>")
+
+
+def _override_ping_rate(body: bytes, rate: int) -> bytes:
+    return _PING_RATE_RE.sub(
+        f"<pingRate>{rate}</pingRate>".encode("ascii"),
+        body, count=1,
+    )
+
+
 def create_southbound_router(
     store: StateStore,
     bridge: CarrierBridge | None = None,
@@ -117,19 +134,23 @@ def create_southbound_router(
         body = await request.body()
         snapshot = parse_telemetry(_unwrap_form(body))
         await store.apply_telemetry(serial, snapshot)
-        # Atomic read-and-clear: if dirty, this response signals the
-        # thermostat to re-pull config AND the flag is already false
-        # for the next status POST. Matches upstream Perl's optimistic
-        # clear — see StateStore.take_config_dirty().
-        has_changes = await store.take_config_dirty()
+        # Combine local-mutation flag and the post-Carrier-config
+        # scheduled flag into one "any changes pending" decision —
+        # mirrors Perl `infinitude:589` where `changes` can be either
+        # 'true' or a future timestamp that becomes true when reached.
+        local_changes = await store.take_config_dirty()
+        scheduled_due = (
+            bridge.consume_scheduled_changes() if bridge is not None else False
+        )
+        has_changes = local_changes or scheduled_due
         # Mirror status post to Carrier when the bridge is enabled
-        # AND we don't have local changes pending. Both conditions
-        # match upstream Perl `infinitude:266`. Local-changes pending
-        # means our directive will say configHasChanges=true and the
-        # thermostat will pull our local tree next — relaying now
-        # would race that pull and let Carrier's stale view win.
+        # AND no local changes pending — Perl `infinitude:266`. Local
+        # changes mean our directive says configHasChanges=true; the
+        # thermostat will pull our local tree, and Carrier's stale
+        # view shouldn't race that.
+        relayed: CachedRelay | None = None
         if bridge is not None:
-            await bridge.relay(
+            relayed = await bridge.relay(
                 "POST",
                 f"/systems/{serial}/status",
                 query=str(request.url.query) or None,
@@ -137,16 +158,71 @@ def create_southbound_router(
                 body=body,
                 local_changes_pending=has_changes,
             )
-        return Response(
-            content=_directive_xml(has_changes),
-            media_type="application/xml",
+        # Directive selection — Perl `infinitude:597-601`:
+        #   - Local changes pending: send our local directive with
+        #     configHasChanges=true. Carrier's response is ignored
+        #     for this cycle (we already skipped the relay anyway).
+        #   - Otherwise, if Carrier responded with a directive body,
+        #     replay it to the thermostat with pingRate forced to
+        #     the clean cadence. This is the path that propagates
+        #     Carrier's `serverHasChanges=true` to the thermostat so
+        #     it actually fetches config (without this, the
+        #     `carrier_changes` window would expire unused after
+        #     120 s).
+        #   - Else build our local directive normally.
+        if has_changes:
+            content = _directive_xml(True)
+        elif relayed is not None and relayed.status_code == 200 and relayed.body:
+            content = _override_ping_rate(relayed.body, DIRECTIVE_PING_RATE_CLEAN)
+        else:
+            content = _directive_xml(False)
+        return Response(content=content, media_type="application/xml")
+
+    async def _bridge_mirror(method: str, path: str, request: Request, body: bytes | None = None) -> CachedRelay | None:
+        """Fire-and-forget mirror to Carrier — used by routes whose
+        local response shape we own (we ignore Carrier's response
+        body but still want Carrier to see the same traffic the
+        thermostat sends). Returns None when the bridge is disabled
+        or the relay fails. Local-changes flag is read non-
+        destructively here: these routes don't dictate the directive,
+        so they shouldn't consume the dirty bit."""
+        if bridge is None:
+            return None
+        return await bridge.relay(
+            method, path,
+            query=str(request.url.query) or None,
+            headers=dict(request.headers),
+            body=body,
+            local_changes_pending=store.config_dirty,
         )
+
+    async def _bridge_relay_or_local(
+        method: str, path: str, request: Request,
+        local_body: bytes, local_media_type: str = "application/xml",
+    ) -> Response:
+        """Relay to Carrier; if Carrier returned a body we use it,
+        else fall through to a local stub. The release-notes /
+        manifest / utility-events stubs all use this — Carrier may
+        actually have content for any of them, and our local stub
+        is just to keep the thermostat from retry-storming."""
+        relayed = await _bridge_mirror(method, path, request, body=None)
+        if relayed is not None and relayed.status_code == 200 and relayed.body:
+            return Response(
+                content=relayed.body,
+                media_type=relayed.content_type or local_media_type,
+            )
+        return Response(content=local_body, media_type=local_media_type)
 
     @router.post("/systems/{serial}")
     async def post_system_config(serial: str, request: Request) -> Response:
         body = await request.body()
         tree, config = parse_system_config_with_tree(_unwrap_form(body))
         await store.apply_config(serial, config, tree)
+        # Mirror boot config to Carrier so the cloud has the install's
+        # current tree. Perl `infinitude:259` relays this regardless
+        # of the local-changes flag because boot config is itself the
+        # change that resets the conversation.
+        await _bridge_mirror("POST", f"/systems/{serial}", request, body=body)
         return Response(status_code=200)
 
     @router.get("/systems/{serial}/config")
@@ -189,8 +265,16 @@ def create_southbound_router(
             response = relayed or cached
             if response is not None and response.status_code == 200 and response.body:
                 bridge.close_carrier_changes_window()
+                # Schedule a forced config-fetch ~60 s out so the
+                # thermostat re-syncs after applying Carrier's tree —
+                # mirrors Perl `infinitude:572`. Without this the
+                # round-trip ends here and any incremental local
+                # mutations queued during the apply window wouldn't
+                # surface until the next periodic mutation.
+                bridge.schedule_changes(60)
                 logger.info(
-                    "carrier_bridge: serving Carrier config to thermostat (window consumed)"
+                    "carrier_bridge: serving Carrier config to thermostat "
+                    "(window consumed, scheduled changes 60s)"
                 )
                 return Response(
                     content=response.body,
@@ -216,6 +300,11 @@ def create_southbound_router(
         body = await request.body()
         events = parse_notifications(_unwrap_form(body))
         await store.append_notifications(serial, events)
+        # Mirror notifications to Carrier so the MyInfinity app can
+        # surface alerts (filter due, fault codes, etc.).
+        await _bridge_mirror(
+            "POST", f"/systems/{serial}/notifications", request, body=body,
+        )
         return Response(status_code=200)
 
     @router.post("/systems/{serial}/idu_config")
@@ -224,6 +313,11 @@ def create_southbound_router(
         raw = _unwrap_form(body)
         config = parse_idu_config(raw)
         await store.apply_idu(serial, config, raw_xml=raw)
+        # Mirror equipment descriptor — Carrier needs it to know what
+        # hardware is talking (fancoil vs. furnace, etc.).
+        await _bridge_mirror(
+            "POST", f"/systems/{serial}/idu_config", request, body=body,
+        )
         return Response(status_code=200)
 
     @router.post("/systems/{serial}/odu_config")
@@ -232,6 +326,9 @@ def create_southbound_router(
         raw = _unwrap_form(body)
         config = parse_odu_config(raw)
         await store.apply_odu(serial, config, raw_xml=raw)
+        await _bridge_mirror(
+            "POST", f"/systems/{serial}/odu_config", request, body=body,
+        )
         return Response(status_code=200)
 
     # Metadata POSTs the thermostat also sends during boot (profile,
@@ -250,35 +347,53 @@ def create_southbound_router(
             serial, subpath, len(body),
             " sample_captured" if captured else "",
         )
+        # Mirror unhandled metadata posts too — Carrier might use
+        # them (utility_events, history, energy, etc.). Cheap to
+        # forward; ignored locally.
+        await _bridge_mirror(
+            "POST", f"/systems/{serial}/{subpath}", request, body=body,
+        )
         return Response(status_code=200)
 
     @router.get("/Alive")
-    async def heartbeat() -> Response:
-        return Response(content=b"alive", media_type="text/plain")
+    async def heartbeat(request: Request) -> Response:
+        return await _bridge_relay_or_local(
+            "GET", "/Alive", request,
+            local_body=b"alive", local_media_type="text/plain",
+        )
 
     # Stubs for thermostat GETs we don't implement but silence to keep
     # logs clean. utility_events is a demand-response rate schedule the
     # device polls from Carrier's cloud; manifest is a firmware-update
-    # check. Returning empty 200 bodies matches upstream Perl Infinitude.
+    # check. Returning empty 200 bodies matches upstream Perl Infinitude
+    # when offline; if the bridge is enabled we serve Carrier's actual
+    # content when available.
     @router.get("/systems/{serial}/utility_events")
-    async def get_utility_events(serial: str) -> Response:
-        return Response(
-            content=b'<?xml version="1.0" encoding="UTF-8"?>\n<utility_events/>',
-            media_type="application/xml",
+    async def get_utility_events(serial: str, request: Request) -> Response:
+        return await _bridge_relay_or_local(
+            "GET", f"/systems/{serial}/utility_events", request,
+            local_body=b'<?xml version="1.0" encoding="UTF-8"?>\n<utility_events/>',
+            local_media_type="application/xml",
         )
 
     @router.get("/manifest")
-    async def get_manifest() -> Response:
-        return Response(content=b"", media_type="application/octet-stream")
+    async def get_manifest(request: Request) -> Response:
+        return await _bridge_relay_or_local(
+            "GET", "/manifest", request,
+            local_body=b"", local_media_type="application/octet-stream",
+        )
 
     # Firmware-release-notes probe. Thermostat polls
     # `/releaseNotes/{model}-{firmware}.txt` (e.g. systxbbec-14.02.txt)
     # directly at the proxy; a 404 triggers a tight retry loop, a 200
-    # (even empty) quiets it. Matches upstream Perl Infinitude. The
-    # forward-proxy form (`/http%3A//www.ota.ing.carrier.com/releaseNotes/...`)
-    # is a separate concern handled by the future Carrier passthrough.
+    # (even empty) quiets it. With the bridge enabled we relay to
+    # Carrier which may serve real release notes; otherwise we return
+    # an empty 200 to match upstream Perl Infinitude's offline mode.
     @router.get("/releaseNotes/{path:path}")
-    async def get_release_notes(path: str) -> Response:
-        return Response(content=b"", media_type="text/plain")
+    async def get_release_notes(path: str, request: Request) -> Response:
+        return await _bridge_relay_or_local(
+            "GET", f"/releaseNotes/{path}", request,
+            local_body=b"", local_media_type="text/plain",
+        )
 
     return router

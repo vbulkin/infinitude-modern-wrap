@@ -239,15 +239,24 @@ async def test_relay_strips_hop_by_hop_headers():
 
 def test_status_post_mirrors_to_carrier_when_no_local_changes():
     """A status POST with no local changes pending must trigger a
-    relay to Carrier. This is the path that keeps the MyInfinity app
-    seeing fresh state."""
+    relay to Carrier. With alpha.26's directive pass-through, the
+    response sent BACK to the thermostat is Carrier's directive
+    (with our local pingRate normalization), not our local stub.
+    The local-stub directive is only used when the bridge is off
+    or Carrier is unreachable."""
     relay_calls: list[str] = []
+    carrier_directive = (
+        b'<?xml version="1.0"?>\n<status version="1.37">'
+        b'<configHasChanges>false</configHasChanges>'
+        b'<pingRate>30</pingRate>'  # Carrier sends 30; we normalize to 12
+        b'<serverHasChanges>false</serverHasChanges>'
+        b'</status>'
+    )
 
     def handler(request: httpx.Request) -> httpx.Response:
         relay_calls.append(f"{request.method} {request.url.path}")
         return httpx.Response(
-            200,
-            content=b"<status><serverHasChanges>false</serverHasChanges></status>",
+            200, content=carrier_directive,
             headers={"content-type": "application/xml"},
         )
 
@@ -267,10 +276,13 @@ def test_status_post_mirrors_to_carrier_when_no_local_changes():
         headers={"content-type": "application/xml"},
     )
     assert r.status_code == 200
-    # Directive must still be returned to the thermostat.
-    assert b"<configHasChanges>false</configHasChanges>" in r.content
-    # And the bridge must have relayed to Carrier.
-    assert relay_calls == ["POST /systems/2013W000855/status"]
+    # Directive should be Carrier's body, with pingRate forced to 12.
+    assert b"<pingRate>12</pingRate>" in r.content
+    assert b"<pingRate>30</pingRate>" not in r.content
+    assert b"<serverHasChanges>false</serverHasChanges>" in r.content
+    # And the relay must have happened (boot config + status both relayed
+    # — alpha.26's broader mirroring).
+    assert "POST /systems/2013W000855/status" in relay_calls
 
 
 def test_status_post_skips_relay_when_local_changes_pending():
@@ -368,6 +380,217 @@ def test_config_get_returns_carrier_response_when_window_active():
     )
     # Window must close after consumption — next GET returns local.
     assert not cb.carrier_changes_active()
+
+
+def test_status_post_passes_carrier_configHasChanges_through():
+    """The MyInfinity round-trip hinges on this: when Carrier responds
+    to the relayed status POST with `configHasChanges=true`, that
+    signal must reach the thermostat — otherwise the device never
+    pulls the queued app commands. Without alpha.26's directive
+    pass-through, the carrier_changes window opens but expires
+    unused."""
+    carrier_directive = (
+        b'<?xml version="1.0"?>\n<status version="1.37">'
+        b'<configHasChanges>true</configHasChanges>'
+        b'<pingRate>20</pingRate>'
+        b'<serverHasChanges>true</serverHasChanges>'
+        b'</status>'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=carrier_directive,
+            headers={"content-type": "application/xml"},
+        )
+
+    cb = _bridge_with_handler(handler)
+    app = create_app(store=StateStore(), carrier_bridge=cb)
+    client = TestClient(app)
+    client.post(
+        "/systems/2013W000855",
+        content=_read("boot_01_system_config.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    r = client.post(
+        "/systems/2013W000855/status",
+        content=_read("boot_05_status_telemetry.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    assert r.status_code == 200
+    # Carrier's directive reached the thermostat — config-fetch
+    # cycle will start.
+    assert b"<configHasChanges>true</configHasChanges>" in r.content
+    assert b"<serverHasChanges>true</serverHasChanges>" in r.content
+    # And the carrier_changes window opened so the next config GET
+    # serves Carrier's tree.
+    assert cb.carrier_changes_active()
+
+
+def test_config_get_schedules_followup_change_cycle():
+    """After we serve Carrier's tree from the carrier_changes
+    window, schedule a forced change ~60 s out so the thermostat
+    re-syncs after applying the cloud commands. Mirrors Perl
+    `infinitude:572` `$store->set(changes => time+60)`."""
+    fake_carrier_config = b'<?xml version="1.0"?>\n<config><MAGIC>1</MAGIC></config>'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/status"):
+            return httpx.Response(
+                200,
+                content=(
+                    b'<status><serverHasChanges>true</serverHasChanges>'
+                    b'</status>'
+                ),
+                headers={"content-type": "application/xml"},
+            )
+        return httpx.Response(200, content=fake_carrier_config)
+
+    cb = _bridge_with_handler(handler)
+    app = create_app(store=StateStore(), carrier_bridge=cb)
+    client = TestClient(app)
+    client.post(
+        "/systems/2013W000855",
+        content=_read("boot_01_system_config.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    client.post(
+        "/systems/2013W000855/status",
+        content=_read("boot_05_status_telemetry.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    # Pre-fetch: no scheduled change yet.
+    assert not cb.consume_scheduled_changes()
+    cb.schedule_changes  # method exists
+
+    r = client.get("/systems/2013W000855/config")
+    assert r.status_code == 200
+    assert b"MAGIC" in r.content
+    # After serving Carrier's tree, the bridge has armed a future
+    # changes deadline.
+    assert cb._scheduled_changes_at is not None
+    # Force the deadline into the past and verify consume returns True.
+    cb._scheduled_changes_at = (
+        datetime.now(timezone.utc) - timedelta(seconds=1)
+    )
+    assert cb.consume_scheduled_changes() is True
+    # Single-shot: subsequent consume returns False.
+    assert cb.consume_scheduled_changes() is False
+
+
+def test_status_post_signals_changes_when_scheduled_deadline_hit():
+    """End-to-end of the scheduled-changes mechanism: simulate the
+    "after Carrier config served" state by arming the deadline,
+    then verify the next status POST sends configHasChanges=true to
+    the thermostat (without needing a local mutation)."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Bridge would relay; respond with a benign Carrier directive.
+        return httpx.Response(
+            200,
+            content=b'<status><configHasChanges>false</configHasChanges><serverHasChanges>false</serverHasChanges></status>',
+        )
+
+    cb = _bridge_with_handler(handler)
+    # Arm an already-elapsed deadline.
+    cb._scheduled_changes_at = (
+        datetime.now(timezone.utc) - timedelta(seconds=1)
+    )
+
+    app = create_app(store=StateStore(), carrier_bridge=cb)
+    client = TestClient(app)
+    client.post(
+        "/systems/2013W000855",
+        content=_read("boot_01_system_config.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    r = client.post(
+        "/systems/2013W000855/status",
+        content=_read("boot_05_status_telemetry.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    assert r.status_code == 200
+    # Local-priority directive — has_changes=true forces this even
+    # though Carrier's relayed directive would have said false.
+    assert b"<configHasChanges>true</configHasChanges>" in r.content
+    # And the deadline has been consumed.
+    assert cb._scheduled_changes_at is None
+
+
+def test_idu_odu_notifications_mirror_to_carrier():
+    """Item 5: every thermostat-bound POST mirrors to Carrier so the
+    cloud's view of the install matches reality. Without this, the
+    MyInfinity app sees stale equipment descriptors and missed
+    notifications."""
+    relay_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        relay_paths.append(f"{request.method} {request.url.path}")
+        return httpx.Response(200, content=b"")
+
+    cb = _bridge_with_handler(handler)
+    app = create_app(store=StateStore(), carrier_bridge=cb)
+    client = TestClient(app)
+
+    serial = "2013W000855"
+    # Boot config first — bridge mirrors.
+    client.post(
+        f"/systems/{serial}", content=_read("boot_01_system_config.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    # IDU + ODU are both new bridge call sites in alpha.26.
+    client.post(
+        f"/systems/{serial}/idu_config", content=_read("boot_03_idu_config.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    client.post(
+        f"/systems/{serial}/odu_config", content=_read("boot_04_odu_config.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    # Notifications: the path that drives MyInfinity's alert surface.
+    client.post(
+        f"/systems/{serial}/notifications",
+        content=_read("change_setpoint_notifications.xml"),
+        headers={"content-type": "application/xml"},
+    )
+
+    # All four routes should have produced a relay.
+    assert f"POST /systems/{serial}" in relay_paths
+    assert f"POST /systems/{serial}/idu_config" in relay_paths
+    assert f"POST /systems/{serial}/odu_config" in relay_paths
+    assert f"POST /systems/{serial}/notifications" in relay_paths
+
+
+def test_release_notes_returns_carrier_body_when_available():
+    """`/releaseNotes/{path}` previously returned an empty 200 stub;
+    item 5 makes it relay to Carrier and serve real notes when Carrier
+    has them. Falls back to the empty stub on Carrier 4xx/5xx or
+    network failure."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "releaseNotes" in request.url.path:
+            return httpx.Response(
+                200,
+                content=b"## What's new in firmware 14.02\n- bugfixes\n",
+                headers={"content-type": "text/plain"},
+            )
+        return httpx.Response(200, content=b"")
+
+    cb = _bridge_with_handler(handler)
+    app = create_app(store=StateStore(), carrier_bridge=cb)
+    client = TestClient(app)
+    r = client.get("/releaseNotes/systxbbec-14.02.txt")
+    assert r.status_code == 200
+    assert b"What's new" in r.content
+
+
+def test_release_notes_falls_back_to_empty_stub_on_carrier_failure():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("simulated", request=request)
+
+    cb = _bridge_with_handler(handler)
+    app = create_app(store=StateStore(), carrier_bridge=cb)
+    client = TestClient(app)
+    r = client.get("/releaseNotes/systxbbec-14.02.txt")
+    assert r.status_code == 200  # Local stub kicks in.
+    assert r.content == b""
 
 
 def test_config_get_returns_local_tree_when_window_closed():
