@@ -275,12 +275,35 @@ def create_southbound_router(
             response = relayed or cached
             if response is not None and response.status_code == 200 and response.body:
                 bridge.close_carrier_changes_window()
+                # Persist Carrier's tree as our local store. Without
+                # this the +60s re-sync below (and any northbound
+                # write that flips config_dirty) would serve our
+                # *stale* tree on the next /config GET, reverting
+                # whatever Carrier just queued — exactly the
+                # alpha.40 oscillation user saw: hold appears
+                # (Carrier tree applied), 60s later hold reverts
+                # (local stale tree applied), repeat.
+                try:
+                    tree, config = parse_system_config_with_tree(response.body)
+                    await store.apply_config(serial, config, tree)
+                    logger.info(
+                        "carrier_bridge: synced local store from Carrier tree "
+                        "(serial=%s, %d B)", serial, len(response.body),
+                    )
+                except Exception as e:
+                    # Don't block serving Carrier's tree on parse failure —
+                    # the thermostat applies it either way. Log so the
+                    # operator can tell why local store may be stale.
+                    logger.warning(
+                        "carrier_bridge: failed to parse Carrier tree for local "
+                        "store sync (serial=%s): %s — serving body anyway",
+                        serial, e,
+                    )
                 # Schedule a forced config-fetch ~60 s out so the
                 # thermostat re-syncs after applying Carrier's tree —
-                # mirrors Perl `infinitude:572`. Without this the
-                # round-trip ends here and any incremental local
-                # mutations queued during the apply window wouldn't
-                # surface until the next periodic mutation.
+                # mirrors Perl `infinitude:572`. Now that the local
+                # store matches Carrier's tree, this re-sync is a
+                # no-op confirmation rather than a stale-tree revert.
                 bridge.schedule_changes(60)
                 logger.info(
                     "carrier_bridge: serving Carrier config to thermostat "
