@@ -273,6 +273,13 @@ class InfinitudeSystemInfoSensor(CoordinatorEntity, SensorEntity):
         return {
             "host": data.get("host", ""),
             "carrier_ok": data.get("carrier_ok"),
+            # alpha.36: surface the raw bridge-health status (one of
+            # `healthy` / `degraded` / `unreachable` / `unknown` /
+            # `disabled`) so the card maps to its 4-class palette
+            # (ok/warn/err/unk) the same way the Infinitude dot
+            # does. The legacy `carrier_ok` bool is kept for
+            # backward-compat with anything reading the old shape.
+            "carrier_status": data.get("carrier_status"),
             # alpha.30: live-event-stream connection state. The HVAC
             # card uses this to render a tri-state "Infinitude:
             # connected" indicator (green/yellow/red) rather than

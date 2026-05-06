@@ -60,13 +60,9 @@ class InfinitudeStatusCard extends InfinitudeBase {
 
     const infAvail = system.info ? this._st(system.info)?.state !== 'unavailable' : false;
     const sseConnected = system.info ? this._at(system.info, 'sse_connected') : null;
-    const carrierOk = system.info ? this._at(system.info, 'carrier_ok') : null;
-    const infCls = !infAvail ? 'err' : (sseConnected ? 'ok' : 'warn');
-    const infTitle = !infAvail
-      ? 'Infinitude: unavailable'
-      : (sseConnected
-          ? 'Infinitude: connected (live)'
-          : 'Infinitude: connected (polling — live event stream disconnected)');
+    const carrierStatus = system.info ? this._at(system.info, 'carrier_status') : null;
+    const [infCls, infTitle] = this._infinitudeDot(infAvail, sseConnected);
+    const [carCls, carTitle] = this._carrierDot(carrierStatus);
 
     return html`
       <ha-card>
@@ -74,7 +70,7 @@ class InfinitudeStatusCard extends InfinitudeBase {
           <div class="header">
             <span class="header-title">infinitude</span>
             <span class="conn-dot ${infCls}" title="${infTitle}"></span>
-            <span class="conn-dot ${carrierOk === true ? 'ok' : carrierOk === false ? 'err' : 'unk'}" title="${carrierOk === true ? 'Carrier cloud: connected' : carrierOk === false ? 'Carrier cloud: unreachable' : 'Carrier cloud: checking…'}"></span>
+            <span class="conn-dot ${carCls}" title="${carTitle}"></span>
             <span style="font-size:10px;color:var(--secondary-text-color);opacity:0.5">v${CARD_VERSION}</span>
           </div>
           <div class="mode-row">

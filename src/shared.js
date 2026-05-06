@@ -5,7 +5,7 @@ import { LitElement, html, css, nothing } from 'lit';
 
 export { LitElement, html, css, nothing };
 
-export const CARD_VERSION = '2.0.0-alpha.35';
+export const CARD_VERSION = '2.0.0-alpha.36';
 export const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 export const JS_DAY_MAP = [6,0,1,2,3,4,5];
 export const ACTIVITIES = ['home','away','sleep','wake'];
@@ -193,6 +193,31 @@ export class InfinitudeBase extends LitElement {
     const d = new Date();
     d.setHours(h, m, 0, 0);
     return 'until ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }
+
+  // ── Status-dot palette (shared between Infinitude + Carrier) ─────────
+  // Same 4-class CSS palette across both indicators so the cards read
+  // consistently:
+  //   ok   green   = healthy / connected
+  //   warn yellow  = degraded but functional (recent failures, fallback path active)
+  //   err  red     = broken / unreachable
+  //   unk  gray    = not applicable / disabled / haven't tried yet
+
+  _infinitudeDot(available, sseConnected) {
+    if (!available) return ['err', 'Infinitude: unavailable (addon down or thermostat stale)'];
+    if (sseConnected) return ['ok', 'Infinitude: connected (live event stream)'];
+    return ['warn', 'Infinitude: connected (polling — live event stream disconnected)'];
+  }
+
+  _carrierDot(status) {
+    switch (status) {
+      case 'healthy':     return ['ok',   'Carrier cloud: connected'];
+      case 'degraded':    return ['warn', 'Carrier cloud: degraded (recent failures, retrying)'];
+      case 'unreachable': return ['err',  'Carrier cloud: unreachable'];
+      case 'disabled':    return ['unk',  'Carrier cloud: bridge disabled (pass_reqs=0)'];
+      case 'unknown':     return ['unk',  'Carrier cloud: checking…'];
+      default:            return ['unk',  'Carrier cloud: checking…'];
+    }
   }
 
   _zoneId(eid) {
