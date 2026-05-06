@@ -472,8 +472,10 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
                 # to yellow AND re-enables polling. Without this the
                 # coordinator would have `update_interval=None` from
                 # the prior connect and never refresh during the
-                # reconnect window.
-                self._on_sse_disconnect()
+                # reconnect window. Async so we can await the inner
+                # `async_request_refresh` (without the await, the
+                # coroutine is GC'd unfinished and HA logs a warning).
+                await self._on_sse_disconnect()
             try:
                 await asyncio.sleep(backoff)
             except asyncio.CancelledError:
@@ -522,12 +524,17 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
             await self._parse_sse_stream(resp)
         # Stream ended cleanly (server closed) — fall through to
         # disconnect handling in the finally-style block below.
-        self._on_sse_disconnect()
+        await self._on_sse_disconnect()
 
-    def _on_sse_disconnect(self) -> None:
+    async def _on_sse_disconnect(self) -> None:
         """Centralised disconnect bookkeeping — flip the indicator
         and re-enable polling so the user keeps getting updates while
-        the SSE consumer's outer loop reconnects with backoff."""
+        the SSE consumer's outer loop reconnects with backoff.
+
+        Async because `async_request_refresh()` is a coroutine — early
+        in alpha.30 this was sync and the bare call left an unawaited-
+        coroutine warning behind on every reconnect cycle.
+        """
         if not self._sse_connected:
             return  # already disconnected; idempotent
         self._sse_connected = False
@@ -540,7 +547,7 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         # Don't wait for the next interval — kick a refresh now so
         # the gap between SSE-stop and first-poll-arrival doesn't
         # show stale data.
-        self.async_request_refresh()
+        await self.async_request_refresh()
 
     async def _parse_sse_stream(self, resp) -> None:
         """SSE line-format parser per https://html.spec.whatwg.org/#server-sent-events.
@@ -627,7 +634,7 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
             "hold.changed",
             "notifications.received",
         ):
-            self.async_request_refresh()
+            await self.async_request_refresh()
 
 
 _HHMM_RE = re.compile(r"^(\d{1,2}):(\d{2})$")

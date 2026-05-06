@@ -5,7 +5,7 @@ import { LitElement, html, css, nothing } from 'lit';
 
 export { LitElement, html, css, nothing };
 
-export const CARD_VERSION = '2.0.0-alpha.34';
+export const CARD_VERSION = '2.0.0-alpha.35';
 export const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 export const JS_DAY_MAP = [6,0,1,2,3,4,5];
 export const ACTIVITIES = ['home','away','sleep','wake'];
@@ -475,6 +475,7 @@ export const sharedStyles = css`
   .conn-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
   .conn-dot.ok { background: var(--label-badge-green, #34d399); animation: pulse-dot 2.5s ease infinite; }
   .conn-dot.err { background: #ef4444; }
+  .conn-dot.warn { background: var(--label-badge-yellow, #f59e0b); }
   .conn-dot.unk { background: var(--secondary-text-color); opacity: 0.4; }
   @keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
   .summary-stats {

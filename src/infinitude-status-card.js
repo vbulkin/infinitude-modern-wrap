@@ -61,7 +61,7 @@ class InfinitudeStatusCard extends InfinitudeBase {
     const infAvail = system.info ? this._st(system.info)?.state !== 'unavailable' : false;
     const sseConnected = system.info ? this._at(system.info, 'sse_connected') : null;
     const carrierOk = system.info ? this._at(system.info, 'carrier_ok') : null;
-    const infCls = !infAvail ? 'err' : (sseConnected ? 'ok' : 'unk');
+    const infCls = !infAvail ? 'err' : (sseConnected ? 'ok' : 'warn');
     const infTitle = !infAvail
       ? 'Infinitude: unavailable'
       : (sseConnected

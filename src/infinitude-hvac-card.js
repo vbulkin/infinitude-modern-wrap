@@ -239,10 +239,10 @@ class InfinitudeHVACCard extends InfinitudeBase {
     const carrierOk = system.info ? this._at(system.info, 'carrier_ok') : null;
 
     // Infinitude dot: tri-state.
-    //   green  = sensor available AND SSE event stream connected (live updates flowing)
-    //   yellow = sensor available but SSE disconnected (still working via 60s poll, just no push)
-    //   red    = sensor unavailable (addon down or thermostat stale)
-    const infCls = !infAvail ? 'err' : (sseConnected ? 'ok' : 'unk');
+    //   green  (`ok`)   = sensor available AND SSE event stream connected (live updates flowing)
+    //   yellow (`warn`) = sensor available but SSE disconnected — still working via 60s poll, just no push
+    //   red    (`err`)  = sensor unavailable (addon down or thermostat stale)
+    const infCls = !infAvail ? 'err' : (sseConnected ? 'ok' : 'warn');
     const infTitle = !infAvail
       ? 'Infinitude: unavailable'
       : (sseConnected
