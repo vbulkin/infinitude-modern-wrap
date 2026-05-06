@@ -1,6 +1,6 @@
 name: "Infinitude Modern Proxy"
 description: "Python/FastAPI rewrite of the Infinitude proxy with a typed OpenAPI northbound API"
-version: "2.0.0-alpha.28"
+version: "2.0.0-alpha.29"
 slug: "infinitude_modern"
 init: false
 arch:
@@ -22,7 +22,7 @@ ports_description:
 host_network: false
 
 options:
-  pass_reqs: 60
+  pass_reqs: 120
   log_level: info
 
 schema:

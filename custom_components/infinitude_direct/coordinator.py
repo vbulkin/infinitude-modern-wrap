@@ -97,6 +97,18 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         components = healthz.get("components", {})
         thermostat_status = components.get("thermostat", {}).get("status", "unreachable")
         carrier_status = components.get("carrierCloud", {}).get("status", "disabled")
+        # Tri-state for the HVAC card's "Carrier cloud:" indicator dot:
+        #   healthy             → True  (green)
+        #   degraded/unreachable → False (red — actual problem)
+        #   unknown/disabled    → None  (grey — neutral, not "broken")
+        # The card's status-card.js / hvac-card.js read this off the
+        # system_info sensor attribute and switch class accordingly.
+        if carrier_status == "healthy":
+            carrier_ok: bool | None = True
+        elif carrier_status in ("degraded", "unreachable"):
+            carrier_ok = False
+        else:
+            carrier_ok = None
 
         system = dict(state.get("system", {}))
         self._apply_optimistic_system(system)
@@ -122,7 +134,7 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
             "system": system,
             "zones": zones,
             "host": self.host,
-            "carrier_ok": carrier_status == "healthy",
+            "carrier_ok": carrier_ok,
             "carrier_status": carrier_status,
             "thermostat_status": thermostat_status,
             "stale": thermostat_status != "healthy",

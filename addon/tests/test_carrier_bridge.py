@@ -22,7 +22,6 @@ from infinitude_proxy.capture import CaptureControl
 from infinitude_proxy.carrier_bridge import (
     CarrierBridge,
     _action_key,
-    _DEFAULT_PASS_REQS_S,
 )
 from infinitude_proxy.main import create_app
 from infinitude_proxy.persistence import Persistence

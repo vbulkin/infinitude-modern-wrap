@@ -32,7 +32,7 @@ def _default_db_path() -> str:
 
 def load_settings() -> Settings:
     return Settings(
-        pass_reqs=int(os.environ.get("PASS_REQS", "60")),
+        pass_reqs=int(os.environ.get("PASS_REQS", "120")),
         log_level=os.environ.get("LOG_LEVEL", "info").lower(),
         commit_sha=os.environ.get("COMMIT_SHA", "dev"),
         built_at=os.environ.get("BUILT_AT", "1970-01-01T00:00:00Z"),

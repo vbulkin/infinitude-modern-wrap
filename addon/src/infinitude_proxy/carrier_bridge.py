@@ -48,9 +48,14 @@ logger = logging.getLogger(__name__)
 # kept as a fallback for Bryant-branded units.
 _DEFAULT_UPSTREAM_HOST = "www.api.ing.carrier.com"
 
-# Default pass_reqs cadence (seconds). Matches the upstream default
-# `60*5` from `infinitude:47`. Set to 0 to disable mirroring entirely.
-_DEFAULT_PASS_REQS_S = 300
+# Default pass_reqs cadence (seconds). 120 was chosen to match the
+# addon's `config.yaml` default — this constructor default is only
+# used by direct instantiation (tests / standalone scripts);
+# production reads `settings.pass_reqs`. Upstream Perl Infinitude's
+# default is `60*5=300` (`infinitude:47`), but a faster cadence keeps
+# Carrier's view of the device fresher for MyInfinity-app round-trips.
+# Set to 0 to disable mirroring entirely.
+_DEFAULT_PASS_REQS_S = 120
 
 # Length of the carrier-changes window opened when Carrier reports
 # `serverHasChanges=true` in a relayed status POST. Matches upstream
