@@ -11,6 +11,7 @@ import logging
 import re
 from datetime import datetime, timedelta
 
+import aiohttp
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -32,7 +33,24 @@ _OPTIMISTIC_TTL = timedelta(seconds=90)
 
 
 class InfinitudeDataCoordinator(DataUpdateCoordinator):
-    """Polls the Python proxy's /v1/* endpoints."""
+    """Polls the Python proxy's /v1/* endpoints AND consumes its SSE
+    stream for near-real-time push updates.
+
+    Two paths feed `self.data`:
+
+      * Periodic poll (`update_interval`) — heartbeat / safety net for
+        the case where SSE silently drops or events are missed. Cadence
+        is bumped from 30 s (pre-SSE) to 60 s now that SSE handles
+        live updates.
+      * SSE consumer (`_sse_loop`) — long-lived task subscribed to
+        `/v1/events`. Each event triggers a coordinator refresh
+        (debounced), so state changes from the thermostat side
+        (current temp, panel-set hold, fault notifications, etc.)
+        appear in HA within ~1 s instead of waiting for the next
+        poll. Reconnects with exponential backoff and the
+        `Last-Event-ID` header so missed events get replayed from
+        the addon's ring buffer.
+    """
 
     def __init__(self, hass: HomeAssistant, host: str) -> None:
         super().__init__(
@@ -46,6 +64,38 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         self.api_lock = asyncio.Lock()
         # zone_id → {"hold": {...}, "expires": datetime}. "system" for whole-house.
         self._optimistic: dict[str, dict] = {}
+        # SSE state — task lifetime tracked here so we can cancel on
+        # unload. `_sse_connected` flips on each connect/disconnect and
+        # is exposed to the system-info sensor so the UI can show a
+        # tri-state "live updates" indicator.
+        self._sse_task: asyncio.Task | None = None
+        self._sse_last_event_id: str | None = None
+        self._sse_connected: bool = False
+
+    @property
+    def sse_connected(self) -> bool:
+        return self._sse_connected
+
+    def start_sse(self) -> None:
+        """Launch the SSE consumer as a background task. Idempotent —
+        called from __init__.py after the first refresh succeeds.
+        Cancels itself on coordinator shutdown via async_shutdown."""
+        if self._sse_task is not None and not self._sse_task.done():
+            return
+        self._sse_task = self.hass.async_create_background_task(
+            self._sse_loop(), name=f"{DOMAIN}_sse_consumer",
+        )
+
+    async def async_shutdown(self) -> None:
+        if self._sse_task is not None:
+            self._sse_task.cancel()
+            try:
+                await self._sse_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._sse_task = None
+        self._sse_connected = False
+        await super().async_shutdown()
 
     async def _async_update_data(self) -> dict:
         try:
@@ -139,6 +189,12 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
             "thermostat_status": thermostat_status,
             "stale": thermostat_status != "healthy",
             "lastUpdated": state.get("lastUpdated"),
+            # Live-event-stream connection state. The system_info
+            # sensor reads this so the HVAC card can show a tri-state
+            # "Infinitude: connected" indicator (green = polling +
+            # SSE both healthy; yellow = polling alive, SSE
+            # disconnected; red = sensor unavailable).
+            "sse_connected": self._sse_connected,
         }
 
     # ── Optimistic overlay ────────────────────────────────────────────────
@@ -380,6 +436,139 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
     async def _delete(self, path: str) -> None:
         resp = await self._session.delete(f"{self.host}{path}")
         resp.raise_for_status()
+
+    # ── SSE consumer ───────────────────────────────────────────────────────
+
+    async def _sse_loop(self) -> None:
+        """Long-lived task: maintain an SSE connection to /v1/events.
+
+        Backoff is exponential with a 60 s ceiling. Resumes via the
+        addon's `Last-Event-ID` ring-buffer so events emitted while we
+        were disconnected get replayed (or, if our id is too old, the
+        addon re-seeds with a fresh `state.snapshot`).
+
+        This loop is the only place `_sse_connected` flips True/False —
+        consumers read it via the `sse_connected` property to surface
+        a "live updates" indicator in the UI.
+        """
+        backoff = 1.0
+        while True:
+            try:
+                await self._sse_consume_once()
+                # Clean disconnect (server closed cleanly) — reset
+                # backoff so the next reconnect is fast.
+                backoff = 1.0
+                _LOGGER.info("SSE: stream ended cleanly; reconnecting")
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:
+                self._sse_connected = False
+                _LOGGER.warning(
+                    "SSE: %s — reconnecting in %.1fs", err, backoff,
+                )
+            try:
+                await asyncio.sleep(backoff)
+            except asyncio.CancelledError:
+                raise
+            backoff = min(backoff * 2.0, 60.0)
+
+    async def _sse_consume_once(self) -> None:
+        """One full connect → consume → disconnect cycle. Returns
+        normally on EOF; raises on network or HTTP errors so the outer
+        loop can apply backoff."""
+        headers = {"Accept": "text/event-stream", "Cache-Control": "no-cache"}
+        if self._sse_last_event_id:
+            headers["Last-Event-ID"] = self._sse_last_event_id
+
+        # `sock_read` timeout = 60 s catches a half-open TCP without
+        # killing the long-lived stream itself. The addon emits a
+        # keepalive comment every 15 s, so a 60 s read-silence means
+        # the connection is genuinely dead.
+        timeout = aiohttp.ClientTimeout(total=None, sock_read=60)
+        async with self._session.get(
+            f"{self.host}/v1/events", headers=headers, timeout=timeout,
+        ) as resp:
+            resp.raise_for_status()
+            self._sse_connected = True
+            _LOGGER.info(
+                "SSE: connected (resume id=%s)",
+                self._sse_last_event_id or "none",
+            )
+            # Push a refresh so the UI's "SSE connected" indicator
+            # flips green immediately rather than waiting for the
+            # next poll-driven `async_set_updated_data`.
+            self.async_update_listeners()
+            await self._parse_sse_stream(resp)
+        self._sse_connected = False
+        self.async_update_listeners()
+
+    async def _parse_sse_stream(self, resp) -> None:
+        """SSE line-format parser per https://html.spec.whatwg.org/#server-sent-events.
+
+        Fields we care about:
+          * `id:` — monotonic event id; we save it for resume.
+          * `event:` — event type (state.snapshot / state.update /
+            hold.changed / health.changed). Default is `message`.
+          * `data:` — JSON payload; multi-line allowed (concatenated
+            with newlines).
+          * lines starting with `:` — comments; addon emits them every
+            15 s as keepalive, ignored here.
+
+        Blank line terminates an event; we then dispatch.
+        """
+        event_id: str | None = None
+        event_type: str = "message"
+        data_lines: list[str] = []
+        while True:
+            raw = await resp.content.readline()
+            if not raw:
+                # Connection closed by server; outer loop reconnects.
+                return
+            line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+            if not line:
+                # Blank line: dispatch and reset.
+                if data_lines:
+                    if event_id is not None:
+                        self._sse_last_event_id = event_id
+                    await self._handle_sse_event(
+                        event_type, "\n".join(data_lines),
+                    )
+                event_id = None
+                event_type = "message"
+                data_lines = []
+                continue
+            if line.startswith(":"):
+                # Comment / keepalive — ignore.
+                continue
+            field, _, value = line.partition(":")
+            if value.startswith(" "):
+                value = value[1:]
+            if field == "id":
+                event_id = value
+            elif field == "event":
+                event_type = value
+            elif field == "data":
+                data_lines.append(value)
+            # Other field names (`retry:`) ignored — we use our own
+            # backoff schedule.
+
+    async def _handle_sse_event(self, event_type: str, data: str) -> None:
+        """Dispatch one parsed event.
+
+        Strategy: every state-shaped event triggers a coordinator
+        refresh. This is simpler than parsing each payload and
+        applying surgical patches — `/v1/state` is small and
+        `async_request_refresh()` is debounced so a flurry of events
+        coalesces into one refresh. Trade-off: a few extra ms per
+        event for one fewer code path that can drift from the
+        addon's actual state shape.
+
+        `health.changed` is published when mutation drift fires; not
+        a state change for the user-facing UI, so we don't refresh on
+        it.
+        """
+        if event_type in ("state.snapshot", "state.update", "hold.changed"):
+            self.async_request_refresh()
 
 
 _HHMM_RE = re.compile(r"^(\d{1,2}):(\d{2})$")

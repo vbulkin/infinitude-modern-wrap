@@ -235,12 +235,24 @@ class InfinitudeHVACCard extends InfinitudeBase {
   _hdr(ent) {
     const { system } = ent;
     const infAvail = system.info ? this._st(system.info)?.state !== 'unavailable' : false;
+    const sseConnected = system.info ? this._at(system.info, 'sse_connected') : null;
     const carrierOk = system.info ? this._at(system.info, 'carrier_ok') : null;
+
+    // Infinitude dot: tri-state.
+    //   green  = sensor available AND SSE event stream connected (live updates flowing)
+    //   yellow = sensor available but SSE disconnected (still working via 60s poll, just no push)
+    //   red    = sensor unavailable (addon down or thermostat stale)
+    const infCls = !infAvail ? 'err' : (sseConnected ? 'ok' : 'unk');
+    const infTitle = !infAvail
+      ? 'Infinitude: unavailable'
+      : (sseConnected
+          ? 'Infinitude: connected (live)'
+          : 'Infinitude: connected (polling — live event stream disconnected)');
 
     return html`
       <div class="header-left">
         <span class="header-title">infinitude</span>
-        <span class="conn-dot ${infAvail ? 'ok' : 'err'}" title="${infAvail ? 'Infinitude: connected' : 'Infinitude: unavailable'}"></span>
+        <span class="conn-dot ${infCls}" title="${infTitle}"></span>
         <span class="conn-dot ${carrierOk === true ? 'ok' : carrierOk === false ? 'err' : 'unk'}" title="${carrierOk === true ? 'Carrier cloud: connected' : carrierOk === false ? 'Carrier cloud: unreachable' : 'Carrier cloud: checking…'}"></span>
         <span style="font-size:10px;color:var(--secondary-text-color);opacity:0.5">v${CARD_VERSION}</span>
       </div>`;

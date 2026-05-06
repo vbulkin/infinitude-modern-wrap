@@ -273,6 +273,11 @@ class InfinitudeSystemInfoSensor(CoordinatorEntity, SensorEntity):
         return {
             "host": data.get("host", ""),
             "carrier_ok": data.get("carrier_ok"),
+            # alpha.30: live-event-stream connection state. The HVAC
+            # card uses this to render a tri-state "Infinitude:
+            # connected" indicator (green/yellow/red) rather than
+            # the pre-SSE binary green-or-red.
+            "sse_connected": data.get("sse_connected", False),
             "schedule": json.dumps(schedule_by_zone),
             "profiles": json.dumps(profiles),
         }

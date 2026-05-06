@@ -34,6 +34,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Infinitude Direct from a config entry."""
     coordinator = InfinitudeDataCoordinator(hass, entry.data[CONF_HOST])
     await coordinator.async_config_entry_first_refresh()
+    # Start the SSE consumer AFTER the first refresh so we already
+    # have a baseline `data` shape before any events land. The
+    # coordinator's async_shutdown cancels the task on unload.
+    coordinator.start_sse()
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = coordinator
@@ -60,7 +64,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry (disable — keep dashboard/resources)."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
+        coordinator = hass.data[DOMAIN].pop(entry.entry_id, None)
+        if coordinator is not None:
+            # Explicit shutdown cancels the SSE consumer task. HA's
+            # DataUpdateCoordinator doesn't call this automatically;
+            # without it, the task survives the reload and we'd
+            # accumulate consumers on every options-flow change.
+            await coordinator.async_shutdown()
         if not hass.data[DOMAIN]:
             _unregister_services(hass)
     return unload_ok

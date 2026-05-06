@@ -7,7 +7,7 @@ MODEL = "Infinity"
 CONF_HOST = "host"
 
 DEFAULT_HOST = "http://local-infinitude:3001"
-SCAN_INTERVAL_SECONDS = 30
+SCAN_INTERVAL_SECONDS = 60  # alpha.30: SSE handles live updates; poll is heartbeat
 
 # Temperature bounds (Fahrenheit)
 MIN_HEAT_TEMP = 50
