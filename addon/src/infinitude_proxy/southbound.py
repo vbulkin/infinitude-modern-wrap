@@ -230,7 +230,7 @@ def create_southbound_router(
         return Response(status_code=200)
 
     @router.get("/systems/{serial}/config")
-    async def get_system_config(serial: str) -> Response:
+    async def get_system_config(serial: str, request: Request) -> Response:
         """Serve the retained <config> subtree to the thermostat.
 
         The thermostat fetches this path after receiving a directive
@@ -262,8 +262,14 @@ def create_southbound_router(
             cached = bridge.get_cached(f"GET /systems/{serial}/config")
             # Try to fetch a fresh Carrier config too — when the app
             # has queued changes, we want them, not the stale cache.
+            # Forward the thermostat's auth headers (and querystring) —
+            # without them Carrier replies 401 "consumer not found" and
+            # we silently fall through to the local cached tree, which
+            # is what masked the MyInfinity-app hold propagation bug.
             relayed = await bridge.relay(
                 "GET", f"/systems/{serial}/config",
+                query=str(request.url.query) or None,
+                headers=dict(request.headers),
                 local_changes_pending=False,
             )
             response = relayed or cached
