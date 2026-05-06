@@ -400,19 +400,27 @@ event: state.update
 data: {"resource": "zones/1", "changes": {"rt": 72, "zoneconditioning": "idle"}}
 
 event: hold.changed
-data: {"resource": "zones/1/hold", "state": "active", "activity": "manual", "until": "2026-04-17T19:00:00Z"}
+data: {"resource": "zones/1/hold", "state": "active", "activity": "manual", "until": "16:30"}
+
+event: notifications.received
+data: {"serial": "2013W000855", "count": 1, "events": [{"eventClass": "fault", "code": 16, "description": "..."}]}
 
 event: health.changed
-data: {"status": "degraded", "reason": "carrier_cloud.unreachable"}
+data: {"reason": "mutation_drift", "driftCount": 1, "events": [...]}
 ```
 
 Subscribers reconnect with `Last-Event-ID` to resume. The server keeps a bounded ring buffer (200 events) of recent events; if the requested `Last-Event-ID` is older than the buffer's oldest entry, the server re-seeds with a fresh `state.snapshot` instead of replaying.
 
 Initial connect: the server sends a `state.snapshot` event with the full current state, then incremental diffs.
 
-Keepalive is emitted as an SSE comment line (`: ping\n\n`) every 15 s rather than as a named event, so it doesn't pollute the `EventEnvelope` enum — the `EventSource` API silently ignores it.
+Keepalive is emitted as an SSE comment line (`: ping\n\n`) every 15 s rather than as a named event, so it doesn't pollute the `EventEnvelope` enum — the `EventSource` API silently ignores it. Consumer side (HA coordinator, alpha.30+) uses 60 s `sock_read` timeout; 4 missed pings = link is dead, trigger reconnect.
 
-`health.changed` is specified but not yet emitted; no continuous health ticker exists to drive transitions. Deferred until a health-monitor component needs it.
+Event types currently emitted:
+- `state.snapshot` — on connect, and on `Last-Event-ID` gap.
+- `state.update` — on every northbound mutation AND every thermostat status post (the latter with empty `changes` as a re-fetch hint).
+- `hold.changed` — when zone or whole-house hold flips active/cleared.
+- `notifications.received` — alpha.31. Thermostat notification batches (`POST /systems/{serial}/notifications`) fire on the stream as well as landing in the REST ring buffer at `/v1/notifications`. Consumers can use either; SSE delivers in ~1 s vs. waiting for a poll cycle.
+- `health.changed` — fires on mutation-drift batches today; reserved for future health-monitor transitions (Carrier-cloud reachability flips, etc.).
 
 ---
 
@@ -471,10 +479,12 @@ Phases, each shippable independently:
 4. **Phase 3 — Southbound re-implementation.** Thermostat POST handlers (`/status`, `/config` GET+POST, `/notifications`, `/idu_config`, `/odu_config`), SQLite persistence, replay dispatcher on proxy-restart/thermostat-reboot. ✅
 5. **Phase 4 — Northbound write endpoints.** Holds (zone + whole-house), setpoints, activities, schedules, vacation, humidity, mode, service reminders, spec-shape SSE events. ✅
 6. **Phase 5 — HA integration cutover.** ✅ `custom_components/infinitude_direct/` hits `/v1/*` for state, healthz, zones, activities, schedules, and whole-house hold. Integration ships on the same `2.0.0-alpha.x` train as the add-on. Legacy `/api/*?mode=…` code path is gone.
-7. **Phase 6 — SSE push client.** ⏳ The coordinator still polls `/v1/state` + `/v1/healthz` on a 30 s cadence. Server-side SSE (`/v1/events`) is live from Phase 4; the client hasn't been switched yet.
-8. **Phase 7 — Legacy add-on removed.** After a deprecation window (~2 releases), the Perl add-on is removed from the repo. ⏳
-
-Carrier cloud passthrough (`pass_reqs` cadence) is not yet implemented — the proxy runs local-only today. It can ship alongside or after Phase 6; the northbound API surface does not depend on it.
+7. **Phase 6 — SSE push client.** ✅ The coordinator subscribes to `/v1/events` on startup and dispatches `state.snapshot` / `state.update` / `hold.changed` / `notifications.received` events to a debounced refresh. Reconnect with exponential backoff + `Last-Event-ID` resume. While SSE is connected, scheduled polling is suspended (the addon's 15 s keepalive ping is the heartbeat); on disconnect a 60 s heartbeat poll resumes immediately + a one-shot refresh fires to catch up. Tri-state Infinitude indicator dot reflects SSE state (green = live; yellow = polling-only; red = sensor unavailable).
+8. **Phase 7 — Carrier cloud passthrough.** ✅ Two layers, full Perl Infinitude parity:
+   - **`forward_proxy.ForwardProxy`** for explicit URL-encoded paths (`GET /http%3A//host/path`) — firmware OTA. Allowlist-gated `*.carrier.com` / `*.bryant.com`; redirect-following disabled to keep the host check authoritative.
+   - **`carrier_bridge.CarrierBridge`** for implicit thermostat-bound traffic. Mirrors `/systems/{serial}/status`, notifications, IDU/ODU configs, boot-config to `https://www.api.ing.carrier.com/...` with `pass_reqs` cache TTL. On status-mirror, if Carrier responds with `serverHasChanges=true`, opens a 120 s `carrier_changes` window; the next `/systems/{serial}/config` GET serves Carrier's tree (carrying app-queued MyInfinity commands), schedules a forced re-sync at +60 s, then closes the window. When no local mutations are pending, the thermostat's status-POST response is Carrier's directive verbatim (with `pingRate` forced to the clean cadence) — that's what propagates `serverHasChanges=true` to the device.
+   - Both directions land in the `capture_traffic` SQLite table when `/v1/debug/capture` is on, with `direction='carrier_out'` for the relay legs. Per-request INFO access log mirrors uvicorn's shape so all four legs (inbound thermostat, inbound HA, outbound bridge mirror, outbound forward proxy) sit in the same log stream.
+9. **Phase 8 — Legacy add-on removed.** After a deprecation window (~2 releases), the Perl add-on is removed from the repo. ⏳
 
 No dual-stack period is planned; the HA integration tracks the API version it knows. Because Phases 5 and 6 were telescoped onto the same alpha train as the add-on, both the add-on (`addon/pyproject.toml`) and the integration (`custom_components/infinitude_direct/manifest.json`) share a single version number (`2.0.0-alpha.x`) and are released together.
 

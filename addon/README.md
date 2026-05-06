@@ -2,12 +2,11 @@
 
 Python/FastAPI rewrite of the legacy Perl Infinitude proxy. Southbound
 handler, northbound write endpoints, persistent pending-write replay,
-and spec-shape SSE events are all live; the HA integration + legacy
-HTML UI cutover is the remaining track.
+spec-shape SSE events, HA integration cutover with SSE consumer, and
+full-Perl-parity Carrier cloud passthrough are all live.
 
 See [`design/DESIGN.md`](../design/DESIGN.md) for architecture and
-migration plan, and [`design/openapi.yaml`](../design/openapi.yaml) for
-the full API contract.
+[`design/openapi.yaml`](../design/openapi.yaml) for the full API contract.
 
 ## Status
 
@@ -17,10 +16,14 @@ the full API contract.
 | 3 | Southbound thermostat XML handler | ✅ shipped |
 | 3 | SQLite persistence (state cache + pending writes) | ✅ shipped |
 | 4 | Northbound write endpoints | ✅ shipped (all surfaces) |
-| 4 | Spec-shape SSE (state.snapshot / state.update / hold.changed) | ✅ shipped |
-| 5 | HA integration cutover to the new API | ⏳ post-cutover |
+| 4 | Spec-shape SSE (state.snapshot / state.update / hold.changed / notifications.received / health.changed) | ✅ shipped |
+| 5 | HA integration cutover to the new API | ✅ shipped |
+| 5 | HA-side SSE consumer with reconnect + `Last-Event-ID` resume | ✅ shipped (alpha.30) |
+| 5 | Conditional polling (off while SSE up; resumes on disconnect) | ✅ shipped (alpha.31) |
 | 6 | Legacy HTML UI updates (humidity / vacation / service reminders) | ⏳ post-cutover |
-| 7 | Carrier cloud passthrough (`pass_reqs`) | ⏳ not started |
+| 7 | Carrier cloud passthrough — explicit forward proxy | ✅ shipped (alpha.24) |
+| 7 | Carrier cloud passthrough — implicit bridge (status mirror, `carrier_changes` window, scheduled changes, directive pass-through) | ✅ shipped (alpha.25–26) |
+| 7 | Vacation HA-side surface | ⏳ deferred to project tail |
 
 ## API surface
 
@@ -58,8 +61,20 @@ the full API contract.
 
 ### Events
 
-- `GET /v1/events` — SSE stream of `state.snapshot` / `state.update` / `hold.changed`. Clients resume with `Last-Event-ID`; ring-buffered, re-seeds with snapshot on gap.
-- `GET /v1/notifications` — REST-backed ring buffer of raw thermostat notifications (not on SSE — out of spec enum).
+- `GET /v1/events` — SSE stream of `state.snapshot` / `state.update` / `hold.changed` / `notifications.received` / `health.changed`. Clients resume with `Last-Event-ID`; ring-buffered, re-seeds with snapshot on gap. Keepalive comment every 15 s doubles as half-open-TCP probe.
+- `GET /v1/notifications` — REST-backed ring buffer of raw thermostat notifications. Same arrivals also fire `notifications.received` on the SSE stream so live consumers see them in ~1 s.
+
+### Carrier cloud relay
+
+- **Forward proxy** (catch-all): `GET/POST/PUT/PATCH /http%3A//host/...` — URL-encoded explicit forward. Allowlist-gated against `*.carrier.com` / `*.bryant.com`. Used by the thermostat for firmware OTA (`/http%3A//www.ota.ing.carrier.com/releaseNotes/...`).
+- **Implicit bridge**: every thermostat-bound POST (`/systems/{serial}/status`, `/notifications`, `/idu_config`, `/odu_config`, fallback metadata) is mirrored to `https://www.api.ing.carrier.com/...` with `pass_reqs` cache TTL. Mirrors Perl Infinitude's `before_dispatch` hook.
+- **`carrier_changes` window** — when Carrier responds to a status mirror with `serverHasChanges=true`, a 120 s window opens; the next `/systems/{serial}/config` GET serves Carrier's tree (carrying app-queued MyInfinity commands), schedules a forced re-sync at +60 s, then closes the window.
+- **Directive pass-through** — when no local mutations are pending, the thermostat's status response IS Carrier's directive (with `pingRate` forced to 12). This is what surfaces Carrier's `serverHasChanges=true` to the thermostat so it actually fetches config.
+- **Per-request access log** at INFO: `relay POST https://www.api.ing.carrier.com/systems/.../status -> 200 (143ms, 287 B)` mirrors uvicorn's access-log shape so outbound traffic sits alongside inbound in the same log stream.
+
+### Debug
+
+- `GET/POST/DELETE /v1/debug/capture[/start|/stop|/entries]` — flip a SQLite capture middleware on/off; tee inbound (southbound + northbound) and outbound (`carrier_out`) traffic with bodies for forensic inspection.
 
 ### Southbound (thermostat ↔ proxy)
 
@@ -91,7 +106,7 @@ cd addon
 pytest
 ```
 
-Current coverage: 229 tests across parser, mutations, state store, persistence, southbound handler, error shape, and every northbound endpoint including SSE publisher/resume semantics.
+Current coverage: 349 tests across parser, mutations, state store, persistence, southbound handler, error shape, every northbound endpoint, SSE publisher/resume, ForwardProxy + CarrierBridge full-roundtrip + capture integration, heat-pump-install regression fixtures.
 
 ## HA add-on build (local)
 

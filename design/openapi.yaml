@@ -138,12 +138,20 @@ paths:
       summary: Server-Sent Events stream.
       description: |
         `text/event-stream` channel emitting:
-          * `state.snapshot` — full state on connect (and on reconnect without `Last-Event-ID`).
-          * `state.update`   — incremental change.
-          * `health.changed` — health roll-up transition.
-          * `hold.changed`   — hold activated or cleared (zone or whole-house).
+          * `state.snapshot`         — full state on connect (and on reconnect without `Last-Event-ID`).
+          * `state.update`           — incremental change.
+          * `health.changed`         — health roll-up transition.
+          * `hold.changed`           — hold activated or cleared (zone or whole-house).
+          * `notifications.received` — thermostat notification (filter due, fault code, dealer reminder, etc.) batched per arrival; payload carries `serial`, `count`, and the parsed `events` list.
 
-        Clients should reconnect with `Last-Event-ID` to resume. Event IDs are monotonic integers.
+        Keep-alive: SSE comment lines (`: ping`) are emitted every 15 s
+        to keep idle proxies from killing the stream and to serve as a
+        half-open-TCP probe on the consumer side.
+
+        Clients should reconnect with `Last-Event-ID` to resume. Event IDs
+        are monotonic integers. If the requested ID is older than the
+        ring buffer's tail, the publisher re-seeds with a fresh
+        `state.snapshot` instead of failing.
 
         Returns 503 on first-connect if the thermostat has not reported
         yet (cannot compose an initial snapshot).
@@ -375,7 +383,7 @@ paths:
           $ref: "#/components/responses/NotFound"
 
   # ──────────────────────────────────────────────────────────────────────
-  # Notifications (ring-buffer backfill — not emitted on SSE)
+  # Notifications (ring-buffer backfill + SSE companion)
   # ──────────────────────────────────────────────────────────────────────
 
   /v1/notifications:
@@ -383,12 +391,14 @@ paths:
       tags: [state]
       summary: Recent thermostat notifications (ring buffer).
       description: |
-        REST-backed ring buffer of raw thermostat notification events, for
-        SSE reconnect backfill. Oldest-first; the buffer holds up to 50
-        entries. Notifications are **not** emitted on `/v1/events` —
-        they don't fit the spec's `EventEnvelope` enum, so a separate
-        REST endpoint owns them. Clients reconnecting from a gap can
-        page here using `receivedAt` as the cursor.
+        REST-backed ring buffer of raw thermostat notification events.
+        Oldest-first; the buffer holds up to 50 entries.
+
+        Each arriving notification batch ALSO fires a
+        `notifications.received` event on `/v1/events` (alpha.31+) —
+        live consumers should subscribe to SSE; this endpoint is the
+        backfill source for clients that connected late or fell out of
+        the SSE ring buffer. Cursor with `receivedAt` for pagination.
       operationId: getNotifications
       parameters:
         - in: query
@@ -1264,13 +1274,36 @@ components:
             - state.update
             - health.changed
             - hold.changed
+            - notifications.received
         data:
           description: Payload schema varies by event type.
           oneOf:
-            - $ref: "#/components/schemas/State"                  # state.snapshot
-            - $ref: "#/components/schemas/StateUpdatePayload"     # state.update
-            - $ref: "#/components/schemas/HealthChangedPayload"   # health.changed
-            - $ref: "#/components/schemas/HoldChangedPayload"     # hold.changed
+            - $ref: "#/components/schemas/State"                          # state.snapshot
+            - $ref: "#/components/schemas/StateUpdatePayload"             # state.update
+            - $ref: "#/components/schemas/HealthChangedPayload"           # health.changed
+            - $ref: "#/components/schemas/HoldChangedPayload"             # hold.changed
+            - $ref: "#/components/schemas/NotificationsReceivedPayload"   # notifications.received
+
+    NotificationsReceivedPayload:
+      type: object
+      required: [serial, count, events]
+      description: |
+        Fired on every `POST /systems/{serial}/notifications` from the
+        thermostat. Mirrors the same arrival the REST endpoint
+        `/v1/notifications` would surface on the next read; SSE just
+        delivers it in ~1 s instead of waiting for a poll cycle.
+      properties:
+        serial:
+          type: string
+          description: Thermostat serial that sent the notification batch.
+        count:
+          type: integer
+          minimum: 1
+          description: Number of notification events in this batch.
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/NotificationEvent"
 
     StateUpdatePayload:
       type: object

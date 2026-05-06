@@ -6,9 +6,17 @@ This repository contains two components for controlling Carrier Infinity/Bryant 
 
 ### 1. Home Assistant Add-on — Infinitude Modern Proxy (`addon/`)
 
-A Home Assistant add-on (app) running a Python/FastAPI reverse-proxy for Carrier/Bryant Infinity thermostats. The thermostat is redirected at the LAN layer to this proxy instead of the Carrier cloud, enabling local control and a typed OpenAPI northbound API that the HACS integration below consumes.
+A Home Assistant add-on (app) running a Python/FastAPI reverse-proxy for Carrier/Bryant Infinity thermostats. The thermostat is DNS-redirected at the LAN layer to this proxy instead of the Carrier cloud, enabling local control plus optional pass-through to Carrier (firmware updates, MyInfinity-app round-trips), and a typed OpenAPI northbound API that the HACS integration below consumes.
 
-Ships as `Infinitude Modern Proxy` in the add-on store, binds port **3001**, and exposes `/v1/*` JSON + `/v1/events` SSE endpoints. OpenAPI spec lives at [`design/openapi.yaml`](design/openapi.yaml). Source lives under [`addon/`](addon/).
+Ships as `Infinitude Modern Proxy` in the add-on store, binds port **3001**, and exposes:
+
+- `/v1/*` typed JSON API (state read, mutations, healthz, debug capture)
+- `/v1/events` SSE stream of `state.snapshot` / `state.update` / `hold.changed` / `notifications.received` / `health.changed` with `Last-Event-ID` resume
+- `/systems/{serial}/...` thermostat-facing southbound endpoints (Carrier wire shape preserved)
+- Catch-all forward proxy for `/http%3A//host/...` URL-encoded requests (firmware OTA)
+- Implicit Carrier-cloud bridge: status mirror, `serverHasChanges` window, scheduled-changes flag — full Perl Infinitude parity
+
+OpenAPI spec lives at [`design/openapi.yaml`](design/openapi.yaml). Source lives under [`addon/`](addon/).
 
 ### 1b. Legacy Add-on — Infinitude Direct (`infinitude/`)
 
@@ -104,17 +112,36 @@ The integration is configured entirely through the UI. During setup you provide 
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `pass_reqs` | int | 60 | Seconds between Carrier cloud passthrough requests (10–3600) |
-| `log_level` | enum | `info` | Proxy log verbosity (`debug` / `info` / `warning` / `error`) |
+| `pass_reqs` | int | 120 | Seconds between Carrier cloud passthrough requests (10–3600). Set to `0` to disable the bridge entirely (offline-first; Carrier-cloud dot stays grey). |
+| `log_level` | enum | `info` | Proxy log verbosity (`debug` / `info` / `warning` / `error`). DEBUG surfaces per-SSE-event flow on the HA-integration side and bridge skip-reasons (cache hit, local-changes-pending). |
 
 ## Architecture
 
 ```
-Thermostat <──> Infinitude Modern Proxy (Add-on) <──> HA Integration
-                            :3001                       (local polling)
+                       ┌─────────── Carrier cloud ───────────┐
+                       │  www.api.ing.carrier.com (mirror)   │
+                       │  www.ota.ing.carrier.com (firmware) │
+                       └──────────────▲──────────────────────┘
+                                      │ httpx (CarrierBridge + ForwardProxy)
+                                      │ pass_reqs cadence, allowlist-gated
+                                      │
+Thermostat ◀──xml──▶ Infinitude Modern Proxy (Add-on) ◀──HTTP+SSE──▶ HA Integration
+                              :3001                      (event-driven)
 ```
 
-The integration polls `/v1/state` and `/v1/healthz` on the proxy every 30 seconds and maps zones, setpoints, activities, schedules, and conditioning state onto HA entities. Server-side SSE (`/v1/events`) is live on the proxy; the integration's SSE client switch is tracked as [DESIGN.md §13 Phase 6](design/DESIGN.md#13-migration-plan).
+**HA integration data flow:**
+
+The HA coordinator subscribes to the addon's SSE stream on startup. Each `state.update` / `hold.changed` / `notifications.received` event triggers a debounced refresh from `/v1/state` — so panel-set holds, fault notifications, and current-temp drift propagate to HA in roughly one second.
+
+While SSE is connected, scheduled polling is disabled (the addon's 15 s keepalive ping is the heartbeat). On SSE disconnect the coordinator immediately resumes a 60 s heartbeat poll until the consumer reconnects with backoff + `Last-Event-ID` resume — so missed events get replayed from the addon's ring buffer rather than dropped.
+
+**Carrier cloud relay:**
+
+Two paths handle thermostat → Carrier requests:
+- **`ForwardProxy`** for explicit URL-encoded requests (`/http%3A//www.ota.ing.carrier.com/releaseNotes/…`) — firmware update checks. Allowlist-gated against `*.carrier.com` / `*.bryant.com`.
+- **`CarrierBridge`** for implicit thermostat-bound traffic (`/systems/{serial}/status`, `/notifications`, `/idu_config`, `/odu_config`). Mirrors to Carrier with `pass_reqs` cache TTL, opens a 120 s `carrier_changes` window when Carrier signals app-queued commands, gates `/systems/{serial}/config` GET to return Carrier's tree during the window. Full Perl Infinitude parity.
+
+Both directions land in the same SQLite `capture_traffic` table (when `/v1/debug/capture` is on) for symmetric forensic visibility.
 
 ## Development
 
