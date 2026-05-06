@@ -61,6 +61,7 @@ from .models import (
     ZonePatch,
 )
 from .capture import CaptureControl, CaptureMiddleware
+from .carrier_bridge import CarrierBridge
 from .debug_api import create_debug_router
 from .errors import register_error_handlers
 from .forward_proxy import ForwardProxy, extract_target_url
@@ -251,6 +252,7 @@ def create_app(
     *,
     capture_control: CaptureControl | None = None,
     forward_proxy: ForwardProxy | None = None,
+    carrier_bridge: CarrierBridge | None = None,
 ) -> FastAPI:
     settings = load_settings()
     _configure_logging(settings.log_level)
@@ -274,6 +276,17 @@ def create_app(
     if forward_proxy is None:
         forward_proxy = ForwardProxy(capture_control=control)
     fproxy = forward_proxy
+    # CarrierBridge is the implicit-relay path — mirrors thermostat
+    # status posts up to Carrier (so MyInfinity sees fresh state) and
+    # gates /systems/{id}/config on the carrier_changes window so
+    # app-initiated changes flow back down. Defaults to enabled at
+    # `pass_reqs` cadence; disable by passing a CarrierBridge with
+    # pass_reqs=0 if you want offline-first behavior.
+    if carrier_bridge is None:
+        carrier_bridge = CarrierBridge(
+            pass_reqs=settings.pass_reqs, capture_control=control,
+        )
+    cbridge = carrier_bridge
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -296,12 +309,14 @@ def create_app(
                 store.attach_persistence(None)
                 control.attach_persistence(None)
         await fproxy.open()
+        await cbridge.open()
         try:
             yield
         finally:
             # Detach before close so any in-flight capture task sees a
             # clean "no persistence" state rather than a closed handle.
             control.attach_persistence(None)
+            await cbridge.close()
             await fproxy.close()
             if persistence is not None:
                 await persistence.close()
@@ -336,7 +351,7 @@ def create_app(
     # other middleware (CORS, error handlers) have done their work.
     app.add_middleware(CaptureMiddleware, control=control)
     register_error_handlers(app)
-    app.include_router(create_southbound_router(store))
+    app.include_router(create_southbound_router(store, cbridge))
     app.include_router(create_debug_router(control))
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)

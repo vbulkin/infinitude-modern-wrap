@@ -18,6 +18,7 @@ from urllib.parse import unquote_to_bytes
 
 from fastapi import APIRouter, Request, Response
 
+from .carrier_bridge import CarrierBridge
 from .parser import (
     parse_idu_config,
     parse_notifications,
@@ -105,7 +106,10 @@ def _unwrap_form(body: bytes) -> bytes:
     return body
 
 
-def create_southbound_router(store: StateStore) -> APIRouter:
+def create_southbound_router(
+    store: StateStore,
+    bridge: CarrierBridge | None = None,
+) -> APIRouter:
     router = APIRouter(tags=["southbound"])
 
     @router.post("/systems/{serial}/status")
@@ -118,6 +122,21 @@ def create_southbound_router(store: StateStore) -> APIRouter:
         # for the next status POST. Matches upstream Perl's optimistic
         # clear — see StateStore.take_config_dirty().
         has_changes = await store.take_config_dirty()
+        # Mirror status post to Carrier when the bridge is enabled
+        # AND we don't have local changes pending. Both conditions
+        # match upstream Perl `infinitude:266`. Local-changes pending
+        # means our directive will say configHasChanges=true and the
+        # thermostat will pull our local tree next — relaying now
+        # would race that pull and let Carrier's stale view win.
+        if bridge is not None:
+            await bridge.relay(
+                "POST",
+                f"/systems/{serial}/status",
+                query=str(request.url.query) or None,
+                headers=dict(request.headers),
+                body=body,
+                local_changes_pending=has_changes,
+            )
         return Response(
             content=_directive_xml(has_changes),
             media_type="application/xml",
@@ -135,8 +154,8 @@ def create_southbound_router(store: StateStore) -> APIRouter:
         """Serve the retained <config> subtree to the thermostat.
 
         The thermostat fetches this path after receiving a directive
-        with configHasChanges=true. We serve the in-memory tree — which
-        will include any northbound mutations once Slice 2 lands — as
+        with configHasChanges=true. We serve the in-memory tree —
+        which includes any northbound mutations — as
         `<?xml ...?>\\n<config>...</config>`, matching the live
         Mojolicious wire format. 404 until the thermostat's boot POST
         to /systems/{serial} has populated the store; serial is
@@ -147,10 +166,36 @@ def create_southbound_router(store: StateStore) -> APIRouter:
         writes queued against this serial are assumed landed and are
         marked applied. Not a true confirmation (that would require
         matching the pulled tree against each pending mutation's
-        expected value) but close enough for Slice 2 — the thermostat
-        only pulls after we signal configHasChanges, and it won't pull
-        without then saving the payload.
+        expected value) but close enough — the thermostat only pulls
+        after we signal configHasChanges, and it won't pull without
+        then saving the payload.
+
+        Carrier-changes pass-through: when the bridge has a fresh
+        Carrier response cached AND its carrier_changes window is
+        open (Carrier reported `serverHasChanges=true` recently in a
+        relayed status POST), we serve Carrier's tree instead of
+        ours — that tree carries the queued MyInfinity-app commands.
+        Mirrors Perl `infinitude:567`. The window closes on first
+        use so we don't keep returning the same response.
         """
+        if bridge is not None and bridge.carrier_changes_active():
+            cached = bridge.get_cached(f"GET /systems/{serial}/config")
+            # Try to fetch a fresh Carrier config too — when the app
+            # has queued changes, we want them, not the stale cache.
+            relayed = await bridge.relay(
+                "GET", f"/systems/{serial}/config",
+                local_changes_pending=False,
+            )
+            response = relayed or cached
+            if response is not None and response.status_code == 200 and response.body:
+                bridge.close_carrier_changes_window()
+                logger.info(
+                    "carrier_bridge: serving Carrier config to thermostat (window consumed)"
+                )
+                return Response(
+                    content=response.body,
+                    media_type=response.content_type or "application/xml",
+                )
         stored = store.get_config()
         if stored is None:
             return Response(status_code=404)
