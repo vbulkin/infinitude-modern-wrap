@@ -24,8 +24,10 @@ from .parser import (
     parse_energy,
     parse_equipment_events,
     parse_idu_config,
+    parse_idu_status,
     parse_notifications,
     parse_odu_config,
+    parse_odu_status,
     parse_system_config_with_tree,
     parse_telemetry,
     serialize_config_tree,
@@ -347,6 +349,42 @@ def create_southbound_router(
         logger.info(
             "energy: serial=%s seer=%s hspf=%s periods=%d",
             serial, energy.seer, energy.hspf, len(energy.usage),
+        )
+        return Response(status_code=200)
+
+    @router.post("/systems/{serial}/odu_status")
+    async def post_odu_status(serial: str, request: Request) -> Response:
+        """Outdoor-unit live runtime — compressor stage + RPM,
+        refrigerant pressures, blower state. Surfaces northbound at
+        `GET /v1/system/odu_status`."""
+        body = await request.body()
+        status = parse_odu_status(_unwrap_form(body))
+        await store.apply_odu_status(serial, status)
+        await _bridge_mirror(
+            "POST", f"/systems/{serial}/odu_status", request, body=body,
+        )
+        logger.info(
+            "odu_status: serial=%s opstat=%r stage=%s opmode=%s oat=%s comprpm=%s",
+            serial, status.opstat, status.operatingStage, status.opmode,
+            status.outdoorTemperature, status.compressorRpm,
+        )
+        return Response(status_code=200)
+
+    @router.post("/systems/{serial}/idu_status")
+    async def post_idu_status(serial: str, request: Request) -> Response:
+        """Indoor-unit live runtime — blower RPM, airflow CFM,
+        static pressure, coil temp. Surfaces northbound at
+        `GET /v1/system/idu_status`."""
+        body = await request.body()
+        status = parse_idu_status(_unwrap_form(body))
+        await store.apply_idu_status(serial, status)
+        await _bridge_mirror(
+            "POST", f"/systems/{serial}/idu_status", request, body=body,
+        )
+        logger.info(
+            "idu_status: serial=%s opstat=%r stage=%s blwrpm=%s cfm=%s",
+            serial, status.opstat, status.operatingStage,
+            status.blowerRpm, status.iduCfm,
         )
         return Response(status_code=200)
 

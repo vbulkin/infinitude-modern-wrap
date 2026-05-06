@@ -406,6 +406,53 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /v1/system/odu_status:
+    get:
+      tags: [system]
+      summary: Outdoor-unit live runtime status.
+      description: |
+        Compressor stage (raw `opstat` string + parsed integer
+        `operatingStage`), compressor RPM, refrigerant suction +
+        discharge pressures and temperatures, superheat, expansion-
+        valve position, blower RPM, static pressure, outdoor air
+        temperature, lockout state.
+
+        Many fields are null when the unit is idle — the thermostat
+        emits `na` / `invalid` literals for sensors that aren't
+        currently reading; the proxy coerces those to `null`.
+
+        Posted every few minutes while the unit is running. 404 until
+        the first POST lands.
+      operationId: getOduStatus
+      responses:
+        "200":
+          description: ODU live status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OduStatus"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/system/idu_status:
+    get:
+      tags: [system]
+      summary: Indoor-unit live runtime status.
+      description: |
+        Blower RPM, airflow CFM, static pressure, coil temperature,
+        inducer RPM (gas furnaces), lockout state. Same null-on-idle
+        semantics as the ODU.
+      operationId: getIduStatus
+      responses:
+        "200":
+          description: IDU live status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IduStatus"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /v1/system/events:
     get:
       tags: [system]
@@ -1452,6 +1499,84 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/EquipmentEvent"
+
+    OduStatus:
+      type: object
+      required: [odutype, opstat, opmode]
+      description: |
+        Outdoor-unit live runtime snapshot. Numeric fields are
+        nullable because the thermostat sends `na` / `invalid`
+        literals for sensors that aren't currently reading
+        (typically because the unit is idle); the proxy coerces
+        those to `null`.
+      properties:
+        odutype: { type: string, description: "ODU model class, e.g. `hp2stgnoncomm`." }
+        opstat:
+          type: string
+          description: |
+            Raw operating-status string from the thermostat:
+            `Stage 0`, `Stage 1`, `Stage 2`, `off`, etc. Preserved
+            verbatim; consumers usually want `operatingStage` instead.
+        operatingStage:
+          type: integer
+          nullable: true
+          description: |
+            Parsed `N` from `Stage N` opstat — 0 = idle compressor,
+            1 = first stage (low capacity), 2 = second stage (high
+            capacity). `null` for `off` / unknown.
+        opmode: { type: string, description: "Operating mode: `off`, `cooling`, `hpheat`, `eheat`, etc." }
+        outdoorTemperature: { type: integer, nullable: true, description: "OAT (°F)." }
+        blowerRpm: { type: integer, nullable: true }
+        iduCfm: { type: integer, nullable: true, description: "Indoor-unit airflow CFM as reported by the ODU." }
+        coilTemperature: { type: integer, nullable: true }
+        leavingAirTemperature: { type: integer, nullable: true }
+        lineVoltage: { type: integer, nullable: true }
+        lockoutActive: { type: boolean }
+        lockoutTime: { type: integer, nullable: true, description: "Lockout-remaining seconds; 0 when not locked." }
+        compressorRpm: { type: integer, nullable: true }
+        suctionPressure: { type: number, format: float, nullable: true, description: "Refrigerant suction pressure (PSI)." }
+        suctionTemperature: { type: integer, nullable: true }
+        suctionSuperheat: { type: number, format: float, nullable: true }
+        dischargeTemperature: { type: integer, nullable: true }
+        spareSensorStatus: { type: string, nullable: true }
+        spareSensorValue: { type: number, format: float, nullable: true }
+        expansionValvePosition: { type: integer, nullable: true }
+        curtailActive: { type: boolean, description: "Utility-curtail signal asserted." }
+        staticPressure: { type: number, format: float, nullable: true }
+        enteringRefrigerantTemperature: { type: number, format: float, nullable: true }
+        availMinHeatStage: { type: integer, nullable: true }
+        availMaxHeatStage: { type: integer, nullable: true }
+        availMinCoolStage: { type: integer, nullable: true }
+        availMaxCoolStage: { type: integer, nullable: true }
+        opMinHeatStage: { type: integer, nullable: true }
+        opMaxHeatStage: { type: integer, nullable: true }
+        opMinCoolStage: { type: integer, nullable: true }
+        opMaxCoolStage: { type: integer, nullable: true }
+
+    IduStatus:
+      type: object
+      required: [idutype, opstat]
+      description: Indoor-unit live runtime snapshot.
+      properties:
+        idutype: { type: string, description: "IDU model class, e.g. `fancoilelectric`, `gasfurnace`." }
+        pwmBlower: { type: boolean, description: "True iff the blower is running with PWM speed control." }
+        opstat: { type: string, description: "Raw `opstat` — `off` / `Stage N`." }
+        operatingStage: { type: integer, nullable: true }
+        iduCfm: { type: integer, nullable: true }
+        blowerRpm: { type: integer, nullable: true }
+        staticPressure: { type: number, format: float, nullable: true }
+        coilTemperature: { type: integer, nullable: true }
+        inducerRpm: { type: integer, nullable: true, description: "Gas-furnace inducer fan RPM." }
+        leavingAirTemperature: { type: integer, nullable: true }
+        lockoutActive: { type: boolean }
+        lockoutTime:
+          type: string
+          nullable: true
+          description: |
+            IDU's `<lockouttime>` is a **string** (different from
+            ODU's integer `<locktime>`). On a fancoil it's `"off"`
+            when not locked; firmware variants may emit a duration
+            string when locked. Passed through verbatim.
 
     StateUpdatePayload:
       type: object

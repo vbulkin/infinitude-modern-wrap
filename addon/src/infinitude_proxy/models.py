@@ -688,3 +688,70 @@ class EquipmentEvent(BaseModel):
 
 class EquipmentEvents(BaseModel):
     events: list[EquipmentEvent]
+
+
+# ── Outdoor / indoor unit live status ─────────────────────────────────
+# Thermostat POSTs `/systems/{serial}/odu_status` and `/idu_status`
+# carrying the live runtime state of the outdoor and indoor units —
+# compressor stage + RPM, refrigerant pressures, blower RPM, static
+# pressure, etc. Fields are populated only when the unit is running;
+# off-state fields arrive as `na` / `invalid` / empty elements which
+# the parser coerces to None.
+
+class OduStatus(BaseModel):
+    """Outdoor-unit live status snapshot.
+
+    Every numeric field is `int | None` or `float | None` because the
+    thermostat sends `na` / `invalid` literals when the corresponding
+    sensor isn't reporting (typically because the unit is idle). The
+    raw `opstat` string is preserved alongside the parsed integer
+    `operatingStage` so consumers can introspect both.
+    """
+    odutype: str                                  # e.g. "hp2stgnoncomm"
+    opstat: str                                   # raw, e.g. "Stage 0" / "off" / "Stage 2"
+    operatingStage: int | None = None             # parsed N from "Stage N"; None for "off"/unknown
+    opmode: str                                   # operating mode (off / cooling / hpheat / ...)
+    outdoorTemperature: int | None = None         # <oat>, °F
+    blowerRpm: int | None = None                  # <blwrpm>
+    iduCfm: int | None = None                     # <iducfm>, indoor airflow CFM
+    coilTemperature: int | None = None            # <oducoiltmp>
+    leavingAirTemperature: int | None = None      # <lat>
+    lineVoltage: int | None = None                # <linevolt>
+    lockoutActive: bool = False                   # <lockactive>
+    lockoutTime: int | None = None                # <locktime>, seconds (0 when not locked)
+    compressorRpm: int | None = None              # <comprpm>
+    suctionPressure: float | None = None          # <suctpress>, PSI
+    suctionTemperature: int | None = None         # <sucttemp>
+    suctionSuperheat: float | None = None         # <suctsupheat>
+    dischargeTemperature: int | None = None       # <dischargetmp>
+    spareSensorStatus: str | None = None          # <sparesensorstatus>
+    spareSensorValue: float | None = None         # <sparesensorvalue>
+    expansionValvePosition: int | None = None     # <exvpos>
+    curtailActive: bool = False                   # <curtail>
+    staticPressure: float | None = None           # <statpress>
+    enteringRefrigerantTemperature: float | None = None  # <enterreftmp>
+    # Stage availability — empty elements when not running.
+    availMinHeatStage: int | None = None
+    availMaxHeatStage: int | None = None
+    availMinCoolStage: int | None = None
+    availMaxCoolStage: int | None = None
+    opMinHeatStage: int | None = None
+    opMaxHeatStage: int | None = None
+    opMinCoolStage: int | None = None
+    opMaxCoolStage: int | None = None
+
+
+class IduStatus(BaseModel):
+    """Indoor-unit live status snapshot — fancoil / furnace / etc."""
+    idutype: str                                  # e.g. "fancoilelectric"
+    pwmBlower: bool = False                       # <pwmblower>
+    opstat: str                                   # raw, e.g. "off" / "Stage 1"
+    operatingStage: int | None = None
+    iduCfm: int | None = None                     # <iducfm>
+    blowerRpm: int | None = None                  # <blwrpm>
+    staticPressure: float | None = None           # <statpress>
+    coilTemperature: int | None = None            # <coiltemp>
+    inducerRpm: int | None = None                 # <inducerrpm>, gas-furnace inducer
+    leavingAirTemperature: int | None = None      # <lat>
+    lockoutActive: bool = False                   # <lockoutactive>
+    lockoutTime: str | None = None                # <lockouttime> — string ("off" / N seconds)

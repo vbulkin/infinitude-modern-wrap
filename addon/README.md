@@ -44,6 +44,8 @@ See [`design/DESIGN.md`](../design/DESIGN.md) for architecture and
 - `GET /v1/system/service` — service-reminder intervals/flags + life-remaining % for filter/UV/humidifier/ventilator.
 - `GET /v1/system/energy` — per-mode runtime hours (cooling/hpheat/eheat/gas/reheat/fangas/fan/looppump) across six rolling periods (today / yesterday / this+last month / this+last year), plus SEER/HSPF efficiency ratings and per-mode display+enabled flags. Sourced from the thermostat's `/energy` POST (~daily cadence).
 - `GET /v1/system/events` — equipment fault history (code, source, description, first-occurrence timestamp, occurrence count, active flag). Sourced from the thermostat's `/equipment_events` POST.
+- `GET /v1/system/odu_status` — outdoor-unit live runtime: compressor stage (`Stage 0/1/2`) + parsed `operatingStage` integer, compressor RPM, suction/discharge refrigerant pressures + temperatures + superheat, expansion-valve position, blower RPM, static pressure, OAT, lockout state. Idle-state fields are null. Sourced from the thermostat's `/odu_status` POST (every few minutes when running).
+- `GET /v1/system/idu_status` — indoor-unit live runtime: blower RPM, airflow CFM, static pressure, coil temperature, inducer RPM (gas furnaces), lockout state.
 - `GET /v1/zones` — all zones (including disabled). Each zone carries a `conditioningStage` field (1, 2, or null) derived from the thermostat's `<zoneconditioning>` text — surfaces multi-stage HP/AC capacity stage without re-parsing strings.
 - `GET /v1/zones/{id}` — single zone.
 - `GET /v1/zones/{id}/activities` — all activities for a zone.
@@ -108,7 +110,7 @@ cd addon
 pytest
 ```
 
-Current coverage: 360 tests across parser, mutations, state store, persistence, southbound handler, error shape, every northbound endpoint, SSE publisher/resume, ForwardProxy + CarrierBridge full-roundtrip + capture integration, heat-pump-install regression fixtures, energy + equipment-events parsing + multi-stage compressor surfacing.
+Current coverage: 367 tests across parser, mutations, state store, persistence, southbound handler, error shape, every northbound endpoint, SSE publisher/resume, ForwardProxy + CarrierBridge full-roundtrip + capture integration, heat-pump-install regression fixtures, energy + equipment-events parsing + multi-stage compressor surfacing, ODU/IDU live-status with `na`/`invalid` placeholder coercion.
 
 ## HA add-on build (local)
 

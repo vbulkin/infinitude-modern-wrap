@@ -52,7 +52,9 @@ from .models import (
     HvacAction,
     HvacMode,
     IduConfig,
+    IduStatus,
     OduConfig,
+    OduStatus,
     ScheduleDay,
     SchedulePeriod,
     SystemHoldActivity,
@@ -735,3 +737,122 @@ def parse_equipment_events(xml_bytes: bytes) -> EquipmentEvents:
                 active=_text(ev, "active") == "on",
             ))
     return EquipmentEvents(events=events)
+
+
+# ── ODU / IDU live status ─────────────────────────────────────────────
+# Helpers to coerce the thermostat's placeholder strings (`na`,
+# `invalid`, `none`, empty) to None on numeric fields. The unit only
+# emits real values for sensors that are reading; idle sensors stay
+# empty / placeholder until the unit cycles on.
+
+_NUMERIC_PLACEHOLDERS = frozenset({"na", "invalid", "none", "n/a", ""})
+
+
+def _opt_int_text(el: etree._Element, tag: str) -> int | None:
+    raw = (_text(el, tag) or "").strip().lower()
+    if raw in _NUMERIC_PLACEHOLDERS:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _opt_float_text(el: etree._Element, tag: str) -> float | None:
+    raw = (_text(el, tag) or "").strip().lower()
+    if raw in _NUMERIC_PLACEHOLDERS:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def _parse_stage(opstat: str) -> int | None:
+    """Pull the `N` out of `Stage N` opstat strings; everything else
+    returns None (`off`, `idle`, etc. → not a stage).
+
+    Examples:
+      "Stage 0" → 0   (idle compressor)
+      "Stage 1" → 1   (low-capacity)
+      "Stage 2" → 2   (high-capacity)
+      "off"     → None
+    """
+    parts = (opstat or "").strip().split()
+    if len(parts) == 2 and parts[0].lower() == "stage":
+        try:
+            return int(parts[1])
+        except ValueError:
+            return None
+    return None
+
+
+def parse_odu_status(xml_bytes: bytes) -> OduStatus:
+    """Parse `<odu_status>` POSTed by the thermostat at
+    `/systems/{serial}/odu_status`. Live runtime state for the outdoor
+    unit — compressor stage + RPM, refrigerant pressures, blower
+    state, etc. Idle-state sensors arrive as `na`/`invalid`/empty
+    elements; coerced to None."""
+    root = etree.fromstring(xml_bytes)
+    opstat = (_text(root, "opstat") or "").strip()
+    return OduStatus(
+        odutype=_text(root, "odutype") or "",
+        opstat=opstat,
+        operatingStage=_parse_stage(opstat),
+        opmode=_text(root, "opmode") or "off",
+        outdoorTemperature=_opt_int_text(root, "oat"),
+        blowerRpm=_opt_int_text(root, "blwrpm"),
+        iduCfm=_opt_int_text(root, "iducfm"),
+        coilTemperature=_opt_int_text(root, "oducoiltmp"),
+        leavingAirTemperature=_opt_int_text(root, "lat"),
+        lineVoltage=_opt_int_text(root, "linevolt"),
+        lockoutActive=_text(root, "lockactive") == "on",
+        lockoutTime=_opt_int_text(root, "locktime"),
+        compressorRpm=_opt_int_text(root, "comprpm"),
+        suctionPressure=_opt_float_text(root, "suctpress"),
+        suctionTemperature=_opt_int_text(root, "sucttemp"),
+        suctionSuperheat=_opt_float_text(root, "suctsupheat"),
+        dischargeTemperature=_opt_int_text(root, "dischargetmp"),
+        spareSensorStatus=_text(root, "sparesensorstatus") or None,
+        spareSensorValue=_opt_float_text(root, "sparesensorvalue"),
+        expansionValvePosition=_opt_int_text(root, "exvpos"),
+        curtailActive=_text(root, "curtail") == "on",
+        staticPressure=_opt_float_text(root, "statpress"),
+        enteringRefrigerantTemperature=_opt_float_text(root, "enterreftmp"),
+        availMinHeatStage=_opt_int_text(root, "availminheatstage"),
+        availMaxHeatStage=_opt_int_text(root, "availmaxheatstage"),
+        availMinCoolStage=_opt_int_text(root, "availmincoolstage"),
+        availMaxCoolStage=_opt_int_text(root, "availmaxcoolstage"),
+        opMinHeatStage=_opt_int_text(root, "opminheatstage"),
+        opMaxHeatStage=_opt_int_text(root, "opmaxheatstage"),
+        opMinCoolStage=_opt_int_text(root, "opmincoolstage"),
+        opMaxCoolStage=_opt_int_text(root, "opmaxcoolstage"),
+    )
+
+
+def parse_idu_status(xml_bytes: bytes) -> IduStatus:
+    """Parse `<idu_status>` POSTed at `/systems/{serial}/idu_status`.
+    Runtime state for the indoor unit — blower RPM, airflow, static
+    pressure, coil temp.
+
+    Note: `<lockouttime>` is a string here (vs. ODU's int `<locktime>`).
+    On a fancoil it's `"off"` when not locked; some firmware variants
+    may emit a duration string when locked. We pass it through verbatim.
+    """
+    root = etree.fromstring(xml_bytes)
+    opstat = (_text(root, "opstat") or "").strip()
+    lockout_raw = _text(root, "lockouttime")
+    return IduStatus(
+        idutype=_text(root, "idutype") or "",
+        pwmBlower=_text(root, "pwmblower") == "on",
+        opstat=opstat,
+        operatingStage=_parse_stage(opstat),
+        iduCfm=_opt_int_text(root, "iducfm"),
+        blowerRpm=_opt_int_text(root, "blwrpm"),
+        staticPressure=_opt_float_text(root, "statpress"),
+        coilTemperature=_opt_int_text(root, "coiltemp"),
+        inducerRpm=_opt_int_text(root, "inducerrpm"),
+        leavingAirTemperature=_opt_int_text(root, "lat"),
+        lockoutActive=_text(root, "lockoutactive") == "on",
+        lockoutTime=lockout_raw or None,
+    )

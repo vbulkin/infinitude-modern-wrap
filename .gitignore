@@ -17,4 +17,5 @@ tools/scrub/_scratch_*.py
 addon/.coverage
 addon/data/
 addon/metadata_samples/
+metadata_samples/
 design/samples/

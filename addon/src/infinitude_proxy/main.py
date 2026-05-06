@@ -28,6 +28,8 @@ from .models import (
     Energy,
     EquipmentEvents,
     FanSpeed,
+    IduStatus,
+    OduStatus,
     Health,
     HealthComponents,
     HumidityConfig,
@@ -873,6 +875,39 @@ def create_app(
                 status_code=404, detail="no energy snapshot received yet",
             )
         return stored.energy
+
+    @app.get(
+        "/v1/system/odu_status", response_model=OduStatus, tags=["system"],
+    )
+    def get_odu_status() -> OduStatus:
+        """Live outdoor-unit runtime: compressor stage (`Stage 0/1/2`)
+        + parsed `operatingStage` integer, compressor RPM, refrigerant
+        pressures + temperatures, blower RPM, expansion-valve position,
+        static pressure, lockout state. Many fields are null when the
+        unit is idle (sensors don't report — thermostat sends `na` /
+        `invalid` literals; we coerce to None).
+
+        Posted every few minutes while the unit is running. 404 until
+        the first POST lands."""
+        stored = store.get_odu_status()
+        if stored is None:
+            raise HTTPException(
+                status_code=404, detail="no odu_status received yet",
+            )
+        return stored.status
+
+    @app.get(
+        "/v1/system/idu_status", response_model=IduStatus, tags=["system"],
+    )
+    def get_idu_status() -> IduStatus:
+        """Live indoor-unit runtime: blower RPM, airflow CFM, static
+        pressure, coil temperature, lockout state."""
+        stored = store.get_idu_status()
+        if stored is None:
+            raise HTTPException(
+                status_code=404, detail="no idu_status received yet",
+            )
+        return stored.status
 
     @app.get(
         "/v1/system/events", response_model=EquipmentEvents, tags=["system"],

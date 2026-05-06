@@ -26,7 +26,7 @@ from lxml import etree
 
 from .drift import DriftTracker, intents_for_mutation
 from .events import EventPublisher
-from .models import Energy, EquipmentEvents, IduConfig, OduConfig
+from .models import Energy, EquipmentEvents, IduConfig, IduStatus, OduConfig, OduStatus
 from .mutations import REPLAY_REGISTRY
 from .parser import (
     NotificationEvent,
@@ -144,6 +144,20 @@ class StoredEquipmentEvents:
     receivedAt: datetime
 
 
+@dataclass
+class StoredOduStatus:
+    serial: str
+    status: "OduStatus"
+    receivedAt: datetime
+
+
+@dataclass
+class StoredIduStatus:
+    serial: str
+    status: "IduStatus"
+    receivedAt: datetime
+
+
 class StateStore:
     def __init__(self, persistence: Persistence | None = None) -> None:
         self._telemetry: StoredTelemetry | None = None
@@ -157,6 +171,11 @@ class StateStore:
         # POST supersedes them.
         self._energy: StoredEnergy | None = None
         self._equipment_events: StoredEquipmentEvents | None = None
+        # ODU / IDU live runtime status — POSTed every few minutes
+        # while the unit is running. In-memory only; the next POST
+        # supersedes the previous one within the polling window.
+        self._odu_status: StoredOduStatus | None = None
+        self._idu_status: StoredIduStatus | None = None
         self._notifications: deque[StoredNotification] = deque(
             maxlen=NOTIFICATION_BUFFER_SIZE
         )
@@ -503,6 +522,20 @@ class StateStore:
                 receivedAt=datetime.now(timezone.utc),
             )
 
+    async def apply_odu_status(self, serial: str, status: OduStatus) -> None:
+        async with self._lock:
+            self._odu_status = StoredOduStatus(
+                serial=serial, status=status,
+                receivedAt=datetime.now(timezone.utc),
+            )
+
+    async def apply_idu_status(self, serial: str, status: IduStatus) -> None:
+        async with self._lock:
+            self._idu_status = StoredIduStatus(
+                serial=serial, status=status,
+                receivedAt=datetime.now(timezone.utc),
+            )
+
     async def mark_config_dirty(self) -> None:
         """Signal to the next telemetry directive that the thermostat
         should re-fetch its config. Cleared optimistically the next time
@@ -625,6 +658,12 @@ class StateStore:
 
     def get_equipment_events(self) -> StoredEquipmentEvents | None:
         return self._equipment_events
+
+    def get_odu_status(self) -> StoredOduStatus | None:
+        return self._odu_status
+
+    def get_idu_status(self) -> StoredIduStatus | None:
+        return self._idu_status
 
     def get_idu(self) -> StoredIdu | None:
         return self._idu
