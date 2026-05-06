@@ -17,7 +17,12 @@ from .coordinator import InfinitudeDataCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.CLIMATE, Platform.SELECT, Platform.SENSOR]
+PLATFORMS = [
+    Platform.BINARY_SENSOR,
+    Platform.CLIMATE,
+    Platform.SELECT,
+    Platform.SENSOR,
+]
 
 CARD_FILENAME = "infinitude-hvac-card.js"
 CARD_DIR = "www/community/infinitude_direct"

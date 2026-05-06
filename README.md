@@ -67,6 +67,15 @@ Features across cards:
 - System operating status
 - Humidifier state
 - Per-zone damper position and fan mode
+- **Diagnostics** (alpha.37 — sourced from `/v1/system/odu_status` + `idu_status` + `energy` + `events`; report unavailable until the thermostat seeds each subpath):
+  - Compressor stage (0/1/2), compressor RPM
+  - Suction pressure, discharge temperature, outdoor coil temperature
+  - Static pressure, indoor blower RPM, airflow (CFM)
+  - Cooling efficiency (SEER), heating efficiency (HSPF) — install reference
+  - Equipment events recorded (full history count, with up to 20 most-recent events as an attribute)
+
+### Binary Sensor
+- `binary_sensor.infinitude_fault_active` — `PROBLEM` device class, ON when any equipment event is currently asserted (`active=true`). Companion of the fault-count sensor; latest fault code/description/source/local-time exposed as attributes for templating.
 
 ### Select Entity
 - Whole-house hold activity selector (off / home / away / sleep / wake)

@@ -113,8 +113,24 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
                 schedule_tasks = [
                     self._get_obj(f"/v1/zones/{zid}/schedule") for zid in zone_ids
                 ]
+                # Optional aux endpoints — these 404 on a fresh proxy
+                # install until the thermostat sends the corresponding
+                # POST (energy ~daily, equipment_events on demand,
+                # odu/idu_status every few minutes when running).
+                # `_get_obj_optional` returns None on 404 so the
+                # coordinator doesn't fail just because an endpoint
+                # hasn't been seeded yet.
+                aux_tasks = [
+                    self._get_obj_optional("/v1/system/energy"),
+                    self._get_obj_optional("/v1/system/odu_status"),
+                    self._get_obj_optional("/v1/system/idu_status"),
+                    self._get_obj_optional("/v1/system/events"),
+                ]
                 activities_results = await asyncio.gather(*activities_tasks)
                 schedule_results = await asyncio.gather(*schedule_tasks)
+                energy, odu_status, idu_status, events = await asyncio.gather(
+                    *aux_tasks
+                )
         except Exception as err:
             raise UpdateFailed(f"Error communicating with Infinitude: {err}") from err
 
@@ -125,10 +141,31 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
             }
             for i, zid in enumerate(zone_ids)
         }
-        return self._shape(state, healthz, zone_aux)
+        shaped = self._shape(state, healthz, zone_aux)
+        # Optional snapshots — sensors check for None and report
+        # unavailable when the underlying endpoint hasn't been seeded.
+        shaped["energy"] = energy
+        shaped["odu_status"] = odu_status
+        shaped["idu_status"] = idu_status
+        shaped["events"] = events
+        return shaped
 
     async def _get_obj(self, path: str) -> dict:
         resp = await self._session.get(f"{self.host}{path}")
+        resp.raise_for_status()
+        data = await resp.json(content_type=None)
+        if not isinstance(data, dict):
+            raise UpdateFailed(f"Expected JSON object at {path}, got {type(data).__name__}")
+        return data
+
+    async def _get_obj_optional(self, path: str) -> dict | None:
+        """Same as `_get_obj` but returns None on 404 instead of
+        raising. Used for `/v1/system/{energy,odu_status,idu_status,events}`
+        which 404 until the thermostat first POSTs the corresponding
+        sub-resource."""
+        resp = await self._session.get(f"{self.host}{path}")
+        if resp.status == 404:
+            return None
         resp.raise_for_status()
         data = await resp.json(content_type=None)
         if not isinstance(data, dict):

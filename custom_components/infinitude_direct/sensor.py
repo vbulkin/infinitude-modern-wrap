@@ -9,7 +9,13 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTemperature
+from homeassistant.const import (
+    REVOLUTIONS_PER_MINUTE,
+    UnitOfPressure,
+    UnitOfTemperature,
+    UnitOfTime,
+    UnitOfVolumeFlowRate,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -33,6 +39,20 @@ async def async_setup_entry(
         InfinitudeOATSensor(coordinator),
         InfinitudeOperationStatusSensor(coordinator),
         InfinitudeSystemInfoSensor(coordinator),
+        # alpha.37 — diagnostics from /v1/system/odu_status + idu_status
+        # + energy. All gated on coordinator.data.get(<key>) is not None
+        # so they report unavailable until the corresponding POST seeds.
+        InfinitudeCompressorStageSensor(coordinator),
+        InfinitudeCompressorRpmSensor(coordinator),
+        InfinitudeSuctionPressureSensor(coordinator),
+        InfinitudeDischargeTempSensor(coordinator),
+        InfinitudeOduCoilTempSensor(coordinator),
+        InfinitudeStaticPressureSensor(coordinator),
+        InfinitudeIduBlowerRpmSensor(coordinator),
+        InfinitudeIduAirflowSensor(coordinator),
+        InfinitudeSeerSensor(coordinator),
+        InfinitudeHspfSensor(coordinator),
+        InfinitudeFaultCountSensor(coordinator),
     ]
     for zone in coordinator.data.get("zones", []):
         zid = zone["id"]
@@ -287,4 +307,259 @@ class InfinitudeSystemInfoSensor(CoordinatorEntity, SensorEntity):
             "sse_connected": data.get("sse_connected", False),
             "schedule": json.dumps(schedule_by_zone),
             "profiles": json.dumps(profiles),
+        }
+
+
+# ── Diagnostic sensors (alpha.37) ─────────────────────────────────────
+# All read from coordinator.data slots seeded by `_get_obj_optional`
+# fetches in `_async_update_data`. The slot is None until the
+# thermostat POSTs the corresponding sub-resource — sensors
+# `available` is False in that window so HA shows them as unavailable
+# rather than emitting a stale or `unknown` state.
+
+
+class _InfinitudeSystemSensor(CoordinatorEntity, SensorEntity):
+    """Base for system-level diagnostic sensors that pull from a
+    coordinator-data sub-dict (e.g. `odu_status`)."""
+
+    _attr_has_entity_name = True
+    _data_key: str = ""  # set by subclass: "odu_status" / "idu_status" / "energy" / "events"
+
+    def __init__(self, coordinator: InfinitudeDataCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, "system")},
+            name="Infinitude System",
+            manufacturer=MANUFACTURER,
+            model=MODEL,
+        )
+
+    @property
+    def _data(self) -> dict | None:
+        return self.coordinator.data.get(self._data_key)
+
+    @property
+    def available(self) -> bool:
+        return (
+            super().available
+            and not self.coordinator.data.get("stale", False)
+            and self._data is not None
+        )
+
+
+class InfinitudeCompressorStageSensor(_InfinitudeSystemSensor):
+    """Outdoor-unit compressor stage (0/1/2) — answers "is the heat
+    pump running on low or high capacity right now?".
+    """
+    _data_key = "odu_status"
+    _attr_icon = "mdi:engine"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: InfinitudeDataCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = "infinitude_compressor_stage"
+        self._attr_name = "Compressor stage"
+
+    @property
+    def native_value(self) -> int | None:
+        d = self._data
+        return d.get("operatingStage") if d else None
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        d = self._data or {}
+        return {
+            "raw_opstat": d.get("opstat"),
+            "opmode": d.get("opmode"),
+        }
+
+
+class InfinitudeCompressorRpmSensor(_InfinitudeSystemSensor):
+    _data_key = "odu_status"
+    _attr_icon = "mdi:fan"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = REVOLUTIONS_PER_MINUTE
+
+    def __init__(self, coordinator: InfinitudeDataCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = "infinitude_compressor_rpm"
+        self._attr_name = "Compressor RPM"
+
+    @property
+    def native_value(self) -> int | None:
+        d = self._data
+        return d.get("compressorRpm") if d else None
+
+
+class InfinitudeSuctionPressureSensor(_InfinitudeSystemSensor):
+    _data_key = "odu_status"
+    _attr_icon = "mdi:gauge"
+    _attr_device_class = SensorDeviceClass.PRESSURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfPressure.PSI
+
+    def __init__(self, coordinator: InfinitudeDataCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = "infinitude_suction_pressure"
+        self._attr_name = "Suction pressure"
+
+    @property
+    def native_value(self) -> float | None:
+        d = self._data
+        return d.get("suctionPressure") if d else None
+
+
+class InfinitudeDischargeTempSensor(_InfinitudeSystemSensor):
+    _data_key = "odu_status"
+    _attr_icon = "mdi:thermometer"
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTemperature.FAHRENHEIT
+
+    def __init__(self, coordinator: InfinitudeDataCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = "infinitude_discharge_temp"
+        self._attr_name = "Discharge temperature"
+
+    @property
+    def native_value(self) -> int | None:
+        d = self._data
+        return d.get("dischargeTemperature") if d else None
+
+
+class InfinitudeOduCoilTempSensor(_InfinitudeSystemSensor):
+    _data_key = "odu_status"
+    _attr_icon = "mdi:thermometer"
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTemperature.FAHRENHEIT
+
+    def __init__(self, coordinator: InfinitudeDataCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = "infinitude_odu_coil_temp"
+        self._attr_name = "Outdoor coil temperature"
+
+    @property
+    def native_value(self) -> int | None:
+        d = self._data
+        return d.get("coilTemperature") if d else None
+
+
+class InfinitudeStaticPressureSensor(_InfinitudeSystemSensor):
+    """Static pressure (in. WC) from the ODU report. Both ODU and
+    IDU report this; ODU's reading is canonical for the install."""
+    _data_key = "odu_status"
+    _attr_icon = "mdi:gauge"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "inWC"
+
+    def __init__(self, coordinator: InfinitudeDataCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = "infinitude_static_pressure"
+        self._attr_name = "Static pressure"
+
+    @property
+    def native_value(self) -> float | None:
+        d = self._data
+        return d.get("staticPressure") if d else None
+
+
+class InfinitudeIduBlowerRpmSensor(_InfinitudeSystemSensor):
+    _data_key = "idu_status"
+    _attr_icon = "mdi:fan"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = REVOLUTIONS_PER_MINUTE
+
+    def __init__(self, coordinator: InfinitudeDataCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = "infinitude_idu_blower_rpm"
+        self._attr_name = "Blower RPM"
+
+    @property
+    def native_value(self) -> int | None:
+        d = self._data
+        return d.get("blowerRpm") if d else None
+
+
+class InfinitudeIduAirflowSensor(_InfinitudeSystemSensor):
+    """Indoor airflow in CFM. Reported by both ODU and IDU; we use
+    the IDU value since that's the directly-measured leg."""
+    _data_key = "idu_status"
+    _attr_icon = "mdi:weather-windy"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "ft³/min"
+
+    def __init__(self, coordinator: InfinitudeDataCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = "infinitude_idu_airflow"
+        self._attr_name = "Airflow"
+
+    @property
+    def native_value(self) -> int | None:
+        d = self._data
+        return d.get("iduCfm") if d else None
+
+
+class InfinitudeSeerSensor(_InfinitudeSystemSensor):
+    """SEER cooling-efficiency rating — static install config, never
+    changes after commissioning. Surfaced for completeness alongside
+    HSPF and as a label for cost-calculation automations."""
+    _data_key = "energy"
+    _attr_icon = "mdi:snowflake-thermometer"
+    _attr_entity_category = None  # ratings are user-facing reference data, not diagnostic
+
+    def __init__(self, coordinator: InfinitudeDataCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = "infinitude_seer"
+        self._attr_name = "Cooling efficiency (SEER)"
+
+    @property
+    def native_value(self) -> float | None:
+        d = self._data
+        return d.get("seer") if d else None
+
+
+class InfinitudeHspfSensor(_InfinitudeSystemSensor):
+    """HSPF heating-efficiency rating — heat-pump-only metric."""
+    _data_key = "energy"
+    _attr_icon = "mdi:fire"
+
+    def __init__(self, coordinator: InfinitudeDataCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = "infinitude_hspf"
+        self._attr_name = "Heating efficiency (HSPF)"
+
+    @property
+    def native_value(self) -> float | None:
+        d = self._data
+        return d.get("hspf") if d else None
+
+
+class InfinitudeFaultCountSensor(_InfinitudeSystemSensor):
+    """Total recorded equipment events (active + cleared). The
+    `binary_sensor.infinitude_fault_active` companion fires when
+    any event is currently asserted; this counts the full history."""
+    _data_key = "events"
+    _attr_icon = "mdi:alert-circle-outline"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: InfinitudeDataCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = "infinitude_fault_count"
+        self._attr_name = "Equipment events recorded"
+
+    @property
+    def native_value(self) -> int | None:
+        d = self._data
+        if d is None:
+            return None
+        return len(d.get("events", []))
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        d = self._data or {}
+        events = d.get("events", []) or []
+        return {
+            "active_count": sum(1 for e in events if e.get("active")),
+            "events": events[:20],  # truncate for state-attribute size
         }
