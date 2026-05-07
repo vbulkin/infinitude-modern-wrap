@@ -125,10 +125,17 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
                     self._get_obj_optional("/v1/system/odu_status"),
                     self._get_obj_optional("/v1/system/idu_status"),
                     self._get_obj_optional("/v1/system/events"),
+                    # `/v1/system/vacation` is always present once the
+                    # boot config has been parsed (vacation block is
+                    # part of the standard system tree, even when
+                    # `active=false`). _optional protects against the
+                    # cold-start window before the addon has seen the
+                    # first config POST.
+                    self._get_obj_optional("/v1/system/vacation"),
                 ]
                 activities_results = await asyncio.gather(*activities_tasks)
                 schedule_results = await asyncio.gather(*schedule_tasks)
-                energy, odu_status, idu_status, events = await asyncio.gather(
+                energy, odu_status, idu_status, events, vacation = await asyncio.gather(
                     *aux_tasks
                 )
         except Exception as err:
@@ -148,6 +155,13 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         shaped["odu_status"] = odu_status
         shaped["idu_status"] = idu_status
         shaped["events"] = events
+        # Vacation block — apply optimistic overlay so set_vacation /
+        # cancel_vacation flip in the UI immediately rather than
+        # waiting for the next config-pull cycle (~30 s worst case),
+        # mirroring the system/hold optimistic path.
+        if vacation is not None:
+            self._apply_optimistic_vacation(vacation)
+        shaped["vacation"] = vacation
         return shaped
 
     async def _get_obj(self, path: str) -> dict:
@@ -271,6 +285,8 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         new_data = dict(self.data)
         if key == "system":
             new_data["system"] = {**(new_data.get("system") or {}), **patch}
+        elif key == "vacation":
+            new_data["vacation"] = {**(new_data.get("vacation") or {}), **patch}
         else:
             new_data["zones"] = [
                 {**z, **patch} if z.get("id") == key else z
@@ -295,6 +311,19 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
             self._optimistic.pop("system", None)
             return
         system.update(patch)
+
+    def _apply_optimistic_vacation(self, vacation: dict) -> None:
+        """Vacation has its own optimistic key separate from `system`
+        because the addon serves it on a different endpoint and the
+        shape (`active`/`start`/`end`/`heatSetpoint`/`coolSetpoint`/
+        `fan`) is independent of the whole-house hold block."""
+        patch = self._pop_expired("vacation")
+        if patch is None:
+            return
+        if _patch_converged(vacation, patch):
+            self._optimistic.pop("vacation", None)
+            return
+        vacation.update(patch)
 
     def _pop_expired(self, key: str) -> dict | None:
         """Return the active optimistic patch, or None if expired/absent.
@@ -400,6 +429,69 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
         self._set_optimistic("system", {
             "hold": {"active": False, "activity": None, "until": None},
         })
+
+    async def async_set_vacation(
+        self,
+        *,
+        active: bool | None = None,
+        start: str | None = None,
+        end: str | None = None,
+        heat_setpoint: int | None = None,
+        cool_setpoint: int | None = None,
+        fan: str | None = None,
+    ) -> None:
+        """Sparse vacation update against PATCH /v1/system/vacation.
+
+        Each kwarg maps to the matching field on the addon's
+        `VacationPatch`; omitting a kwarg leaves that field unchanged
+        on the thermostat. `start`/`end` accept ISO 8601 strings (with
+        offset) or `None` to clear the field. The addon's pydantic
+        model rejects empty bodies, so we elide entirely-blank calls
+        — caller would have meant `cancel_vacation` instead.
+        """
+        body: dict = {}
+        if active is not None:
+            body["active"] = bool(active)
+        if start is not None:
+            body["start"] = start
+        if end is not None:
+            body["end"] = end
+        if heat_setpoint is not None:
+            body["heatSetpoint"] = int(heat_setpoint)
+        if cool_setpoint is not None:
+            body["coolSetpoint"] = int(cool_setpoint)
+        if fan is not None:
+            body["fan"] = fan
+        if not body:
+            _LOGGER.warning("set_vacation: no fields provided; nothing to do")
+            return
+        await self._patch("/v1/system/vacation", body)
+        # Optimistic mirror — same shape the GET returns. Keep absent
+        # fields out of the overlay so the optimistic compare doesn't
+        # fight live state on fields we didn't touch.
+        overlay: dict = {}
+        if "active" in body:
+            overlay["active"] = body["active"]
+        if "start" in body:
+            overlay["start"] = body["start"]
+        if "end" in body:
+            overlay["end"] = body["end"]
+        if "heatSetpoint" in body:
+            overlay["heatSetpoint"] = body["heatSetpoint"]
+        if "coolSetpoint" in body:
+            overlay["coolSetpoint"] = body["coolSetpoint"]
+        if "fan" in body:
+            overlay["fan"] = body["fan"]
+        if overlay:
+            self._set_optimistic("vacation", overlay)
+
+    async def async_cancel_vacation(self) -> None:
+        """Exit vacation mode without clearing the configured window —
+        sends `{"active": false}`. Mirrors the addon's documented
+        cancel semantic (VacationPatch docstring) so a re-enable later
+        doesn't have to re-set start/end."""
+        await self._patch("/v1/system/vacation", {"active": False})
+        self._set_optimistic("vacation", {"active": False})
 
     async def async_save_schedule(self, zone_id: str, program: list) -> None:
         """Write a zone's weekly schedule.

@@ -1,10 +1,13 @@
 """Binary sensors for Infinitude Direct.
 
-Currently a single entity: `binary_sensor.infinitude_fault_active`,
-which mirrors the thermostat's `<active>on</active>` flag on any
-event in `/v1/system/events`. Useful for HA automations that should
-fire when the HVAC reports a problem (notify on Home, run a script,
-etc.) without having to template against the full event list.
+Two entities:
+  * `binary_sensor.infinitude_fault_active` — mirrors the thermostat's
+    `<active>on</active>` flag on any event in `/v1/system/events`.
+    Useful for automations that should fire when the HVAC reports a
+    problem.
+  * `binary_sensor.infinitude_vacation` — vacation-mode flag from
+    `/v1/system/vacation`, with the configured window + setpoints
+    surfaced as attributes for dashboards / templates.
 """
 
 from __future__ import annotations
@@ -29,7 +32,10 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: InfinitudeDataCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([InfinitudeFaultActiveBinarySensor(coordinator)])
+    async_add_entities([
+        InfinitudeFaultActiveBinarySensor(coordinator),
+        InfinitudeVacationBinarySensor(coordinator),
+    ])
 
 
 class InfinitudeFaultActiveBinarySensor(CoordinatorEntity, BinarySensorEntity):
@@ -80,3 +86,55 @@ class InfinitudeFaultActiveBinarySensor(CoordinatorEntity, BinarySensorEntity):
             "latest_source": (latest or {}).get("source"),
             "latest_local_time": (latest or {}).get("localTime"),
         }
+
+
+class InfinitudeVacationBinarySensor(CoordinatorEntity, BinarySensorEntity):
+    """ON when the system is currently in vacation mode (`active=true`
+    on `/v1/system/vacation`). Attributes carry the configured start,
+    end, vacation-mode setpoints, and fan speed so dashboards can show
+    the schedule without templating against `climate.*`'s
+    `extra_state_attributes`.
+    """
+
+    _attr_has_entity_name = True
+    _attr_name = "Vacation"
+    _attr_icon = "mdi:airplane"
+
+    def __init__(self, coordinator: InfinitudeDataCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = "infinitude_vacation"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, "system")},
+            name="Infinitude System",
+            manufacturer=MANUFACTURER,
+            model=MODEL,
+        )
+
+    @property
+    def available(self) -> bool:
+        return (
+            super().available
+            and not self.coordinator.data.get("stale", False)
+            and self.coordinator.data.get("vacation") is not None
+        )
+
+    @property
+    def is_on(self) -> bool:
+        vac = self.coordinator.data.get("vacation") or {}
+        return bool(vac.get("active"))
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        vac = self.coordinator.data.get("vacation") or {}
+        attrs: dict = {}
+        if vac.get("start"):
+            attrs["start"] = vac["start"]
+        if vac.get("end"):
+            attrs["end"] = vac["end"]
+        if vac.get("heatSetpoint") is not None:
+            attrs["heat_setpoint"] = int(vac["heatSetpoint"])
+        if vac.get("coolSetpoint") is not None:
+            attrs["cool_setpoint"] = int(vac["coolSetpoint"])
+        if vac.get("fan"):
+            attrs["fan"] = vac["fan"]
+        return attrs

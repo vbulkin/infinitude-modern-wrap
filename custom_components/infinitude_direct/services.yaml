@@ -132,3 +132,66 @@ set_whole_house_hold:
 cancel_whole_house_hold:
   name: Cancel whole house hold
   description: Cancel the active whole-house hold.
+
+set_vacation:
+  name: Set vacation
+  description: >
+    Configure vacation mode. All fields optional but at least one must
+    be set; omitted fields are left unchanged on the thermostat.
+    Send `active: true` along with start/end to enter vacation mode;
+    use the `cancel_vacation` service to exit without clearing the
+    configured window.
+  fields:
+    active:
+      name: Active
+      description: Enter (true) or exit (false) vacation mode.
+      required: false
+      selector:
+        boolean:
+    start:
+      name: Start
+      description: "Vacation start time as ISO 8601 with offset (e.g. 2026-06-01T00:00:00Z)."
+      required: false
+      selector:
+        text:
+    end:
+      name: End
+      description: "Vacation end time as ISO 8601 with offset."
+      required: false
+      selector:
+        text:
+    heat_setpoint:
+      name: Heat setpoint
+      description: Vacation-mode heat target.
+      required: false
+      selector:
+        number:
+          min: 45
+          max: 90
+          unit_of_measurement: "°F"
+    cool_setpoint:
+      name: Cool setpoint
+      description: Vacation-mode cool target.
+      required: false
+      selector:
+        number:
+          min: 45
+          max: 99
+          unit_of_measurement: "°F"
+    fan:
+      name: Fan mode
+      description: Vacation-mode fan speed.
+      required: false
+      selector:
+        select:
+          options:
+            - "off"
+            - low
+            - med
+            - high
+
+cancel_vacation:
+  name: Cancel vacation
+  description: >
+    Exit vacation mode without clearing the configured start/end
+    window or setpoints. Equivalent to set_vacation with active=false.

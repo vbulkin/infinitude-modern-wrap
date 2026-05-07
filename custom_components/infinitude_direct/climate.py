@@ -219,6 +219,23 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
             attrs["whole_house_hold_activity"] = wh["activity"]
         if wh.get("until"):
             attrs["whole_house_hold_until"] = wh["until"]
+        # Vacation block — surfaced on every zone climate entity for
+        # parity with whole_house_hold_*. Drives template availability
+        # / display-only attributes for users who don't want a separate
+        # binary_sensor in their dashboard.
+        vac = self.coordinator.data.get("vacation") or {}
+        if vac:
+            attrs["vacation_active"] = bool(vac.get("active"))
+            if vac.get("start"):
+                attrs["vacation_start"] = vac["start"]
+            if vac.get("end"):
+                attrs["vacation_end"] = vac["end"]
+            if vac.get("heatSetpoint") is not None:
+                attrs["vacation_heat_setpoint"] = int(vac["heatSetpoint"])
+            if vac.get("coolSetpoint") is not None:
+                attrs["vacation_cool_setpoint"] = int(vac["coolSetpoint"])
+            if vac.get("fan"):
+                attrs["vacation_fan"] = vac["fan"]
         return attrs
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:

@@ -418,12 +418,63 @@ def _register_services(hass: HomeAssistant) -> None:
         schema=vol.Schema({}),
     )
 
+    async def handle_set_vacation(call: ServiceCall) -> None:
+        c = _coordinator()
+        if not c:
+            _LOGGER.warning("set_vacation: no active coordinator found")
+            return
+        kwargs: dict = {}
+        if "active" in call.data:
+            kwargs["active"] = bool(call.data["active"])
+        if "start" in call.data:
+            kwargs["start"] = call.data["start"]
+        if "end" in call.data:
+            kwargs["end"] = call.data["end"]
+        if "heat_setpoint" in call.data:
+            kwargs["heat_setpoint"] = int(call.data["heat_setpoint"])
+        if "cool_setpoint" in call.data:
+            kwargs["cool_setpoint"] = int(call.data["cool_setpoint"])
+        if "fan" in call.data:
+            kwargs["fan"] = call.data["fan"]
+        await c.async_set_vacation(**kwargs)
+        await c.async_request_refresh()
+
+    hass.services.async_register(
+        DOMAIN,
+        "set_vacation",
+        handle_set_vacation,
+        schema=vol.Schema({
+            vol.Optional("active"): cv.boolean,
+            vol.Optional("start"): cv.string,
+            vol.Optional("end"): cv.string,
+            vol.Optional("heat_setpoint"): vol.Coerce(int),
+            vol.Optional("cool_setpoint"): vol.Coerce(int),
+            vol.Optional("fan"): cv.string,
+        }),
+    )
+
+    async def handle_cancel_vacation(call: ServiceCall) -> None:
+        c = _coordinator()
+        if not c:
+            _LOGGER.warning("cancel_vacation: no active coordinator found")
+            return
+        await c.async_cancel_vacation()
+        await c.async_request_refresh()
+
+    hass.services.async_register(
+        DOMAIN,
+        "cancel_vacation",
+        handle_cancel_vacation,
+        schema=vol.Schema({}),
+    )
+
 
 def _unregister_services(hass: HomeAssistant) -> None:
     """Remove all custom services."""
     for svc in (
         "save_schedule", "set_profile", "cancel_hold",
         "set_hold", "set_whole_house_hold", "cancel_whole_house_hold",
+        "set_vacation", "cancel_vacation",
     ):
         if hass.services.has_service(DOMAIN, svc):
             hass.services.async_remove(DOMAIN, svc)
