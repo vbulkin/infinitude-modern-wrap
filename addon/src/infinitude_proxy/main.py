@@ -292,6 +292,14 @@ def create_app(
             pass_reqs=settings.pass_reqs, capture_control=control,
         )
     cbridge = carrier_bridge
+    # Wire the bridge into the state store so HA-originated mutations
+    # synthesize an upstream POST /systems/{serial} after they apply
+    # locally. See CarrierBridge module docstring + state_store
+    # `attach_carrier_bridge` for *why* — closes the asymmetry where
+    # panel changes propagate to Carrier naturally but HA changes
+    # don't. Re-attached on every create_app() so tests get a fresh
+    # binding.
+    store.attach_carrier_bridge(cbridge)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

@@ -222,11 +222,34 @@ def create_southbound_router(
         body = await request.body()
         tree, config = parse_system_config_with_tree(_unwrap_form(body))
         await store.apply_config(serial, config, tree)
-        # Mirror boot config to Carrier so the cloud has the install's
-        # current tree. Perl `infinitude:259` relays this regardless
-        # of the local-changes flag because boot config is itself the
-        # change that resets the conversation.
-        await _bridge_mirror("POST", f"/systems/{serial}", request, body=body)
+        # Mirror boot/sync POST to Carrier unconditionally —
+        # `local_changes_pending=False` here, NOT `store.config_dirty`.
+        #
+        # Why force False: the alpha.10 "skip relay when local changes
+        # pending" rule exists to stop us from leaking in-flight HA
+        # state to Carrier on *outbound* polls (status post, etc.).
+        # That logic doesn't apply to a thermostat-originated
+        # `POST /systems/{serial}`: the thermostat is *pushing* its
+        # current view here (post-panel-change or post-boot), and
+        # this body IS the device's authoritative state. Skipping the
+        # mirror because HA happens to also have a pending write
+        # would silently drop the only natural propagation channel
+        # for panel-side changes — verified live alpha.46 (capture
+        # showed two panel POSTs, one mirrored, one skipped because
+        # apply_config's replay had set config_dirty).
+        #
+        # Perl `infinitude:259` likewise relays unconditionally on
+        # boot POST (`!$store->get('changes')` is checked in
+        # `before_dispatch`, but the boot-style POST hits that hook
+        # before the local store's dirty bit can interfere).
+        if bridge is not None:
+            await bridge.relay(
+                "POST", f"/systems/{serial}",
+                query=str(request.url.query) or None,
+                headers=dict(request.headers),
+                body=body,
+                local_changes_pending=False,
+            )
         return Response(status_code=200)
 
     @router.get("/systems/{serial}/config")

@@ -978,3 +978,230 @@ async def test_relay_writes_carrier_out_capture_when_enabled():
         assert control.submitted == 1
     finally:
         await persistence.close()
+
+
+# ── push_config (alpha.47): HA-mutation upstream sync ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_relay_caches_auth_headers_for_later_push():
+    """Every successful inbound thermostat relay must rotate the auth
+    cache the bridge keeps for `push_config`. Without this, HA-side
+    pushes have nothing to authenticate with on cold start beyond the
+    very first relay's headers."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"")
+
+    cb = _bridge_with_handler(handler)
+    assert cb._latest_auth_headers is None  # type: ignore[attr-defined]
+    await cb.relay(
+        "POST", "/systems/2013W000855/status",
+        headers={"Authorization": "Basic abc=", "User-Agent": "carrier"},
+        body=b"data=...",
+    )
+    cached = cb._latest_auth_headers  # type: ignore[attr-defined]
+    assert cached is not None
+    # The sanitizer preserves header-name case as supplied; lookup
+    # case-insensitively here (httpx normalizes on the wire).
+    lower = {k.lower(): v for k, v in cached.items()}
+    assert lower.get("authorization") == "Basic abc="
+    # Sanitizer always overrides Host to the upstream so we don't leak
+    # the proxy's local hostname back at Carrier.
+    assert lower.get("host") == "www.api.ing.carrier.com"
+
+
+@pytest.mark.asyncio
+async def test_push_config_noop_when_no_auth_cached():
+    """Cold start: no thermostat request has landed yet, so the auth
+    cache is empty. push_config must be a no-op (return False) rather
+    than POST-with-empty-headers, which Carrier would reject as 401
+    and we'd burn a consecutive-failure on the bridge health gauge."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, content=b"")
+
+    cb = _bridge_with_handler(handler)
+    ok = await cb.push_config("2013W000855", b"data=fake")
+    assert ok is False
+    assert seen == [], "no upstream request should have been made"
+
+
+@pytest.mark.asyncio
+async def test_push_config_uses_cached_auth_and_correct_target():
+    """push_config posts to /systems/{serial} on the upstream host
+    using the cached thermostat auth, with the supplied body and
+    form-urlencoded content-type — same wire shape Carrier accepts
+    from a real device boot/sync POST."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, content=b"")
+
+    cb = _bridge_with_handler(handler)
+    # Prime the auth cache via a normal status relay.
+    await cb.relay(
+        "POST", "/systems/2013W000855/status",
+        headers={"Authorization": "Basic xyz="},
+        body=b"data=...",
+    )
+    seen.clear()
+    body = b"data=" + b"%3Csystem%20version%3D%221.7%22%3E..."
+    ok = await cb.push_config("2013W000855", body)
+    assert ok is True
+    assert len(seen) == 1
+    req = seen[0]
+    assert req.method == "POST"
+    assert str(req.url) == (
+        "https://www.api.ing.carrier.com/systems/2013W000855"
+    )
+    assert req.headers.get("authorization") == "Basic xyz="
+    assert req.headers.get("content-type") == "application/x-www-form-urlencoded"
+    assert req.content == body
+
+
+@pytest.mark.asyncio
+async def test_push_config_logs_failure_does_not_raise():
+    """Carrier returning 5xx (or a network error) must not propagate —
+    push_config is best-effort upstream sync, not a precondition for
+    the local mutation."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, content=b"upstream busy")
+
+    cb = _bridge_with_handler(handler)
+    await cb.relay(
+        "POST", "/systems/X/status",
+        headers={"Authorization": "Basic z="},
+        body=b"data=...",
+    )
+    ok = await cb.push_config("X", b"data=fake")
+    assert ok is False  # 503 is not 2xx
+    # Bridge health should reflect the failure so /v1/healthz can
+    # surface it; failures count toward consecutive_failures.
+    assert cb._consecutive_failures > 0
+
+
+@pytest.mark.asyncio
+async def test_mutate_config_triggers_carrier_push():
+    """End-to-end: a HA-side mutation (PUT /v1/system/hold) must fire
+    `bridge.push_config` so Carrier learns about it. Without this,
+    Carrier's tree stays stale and re-asserts the pre-mutation state
+    on its next `serverHasChanges=true` window — the exact alpha.45
+    grace-window-expiration revert the 2026-05-07 capture caught."""
+    pushes: list[tuple[str, bytes]] = []
+
+    class StubBridge:
+        # Match the surface state_store / southbound rely on. Keeps
+        # the test free of an httpx mock since we're proving the wire-
+        # up, not the HTTP behavior (covered by the cb tests above).
+        enabled = True
+
+        async def push_config(self, serial: str, body: bytes) -> bool:
+            pushes.append((serial, body))
+            return True
+
+        async def relay(self, *a, **kw):
+            return None
+
+        def carrier_changes_active(self) -> bool:
+            return False
+
+        async def open(self): pass
+        async def close(self): pass
+
+    bridge = StubBridge()
+    store = StateStore()
+    app = create_app(store=store, carrier_bridge=bridge)
+    client = TestClient(app)
+
+    client.post(
+        "/systems/2013W000855",
+        content=_read("boot_01_system_config.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    pushes.clear()
+    r = client.put("/v1/system/hold", json={"activity": "home"})
+    assert r.status_code == 200
+
+    # mutate_config schedules push_config via asyncio.create_task; it
+    # runs on the event loop after the request handler returns. Yield
+    # once so the task gets to execute before we assert.
+    import asyncio as _asyncio
+    await _asyncio.sleep(0)
+    await _asyncio.sleep(0)  # give create_task two ticks to settle
+
+    assert len(pushes) == 1, (
+        f"mutate_config should have fired exactly one push; got {len(pushes)}"
+    )
+    serial, body = pushes[0]
+    assert serial == "2013W000855"
+    assert body.startswith(b"data=")
+    # Body decodes to <system version="1.7"><config>...</config></system>
+    # carrying the post-mutation hold=on state.
+    from urllib.parse import unquote_to_bytes
+    inner = unquote_to_bytes(body[5:])
+    assert b"<system version=" in inner
+    assert b"<config>" in inner or b"<config " in inner
+    assert b"<hold>on</hold>" in inner
+
+
+def test_post_system_config_mirrors_even_when_config_dirty():
+    """Side-bug fix: a thermostat-originated POST /systems/{serial}
+    must mirror to Carrier regardless of `store.config_dirty`. The
+    alpha.10 "skip relay on local-changes-pending" rule applies to
+    *outbound polls* (status, etc.) — not to a thermostat *pushing*
+    its current view, where this body IS the device's authoritative
+    state and dropping the mirror loses the only natural propagation
+    channel for panel-side changes. Verified live in alpha.46
+    capture: panel POST #2 was silently skipped because apply_config
+    had set config_dirty during replay."""
+    relay_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        relay_paths.append(f"{request.method} {request.url.path}")
+        return httpx.Response(200, content=b"")
+
+    cb = _bridge_with_handler(handler)
+    store = StateStore()
+    app = create_app(store=store, carrier_bridge=cb)
+    client = TestClient(app)
+
+    # Boot once so the store has state. Mirror on this first POST is
+    # the precondition for the test — verify it happened.
+    client.post(
+        "/systems/2013W000855",
+        content=_read("boot_01_system_config.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    assert any(
+        p == "POST /systems/2013W000855" for p in relay_paths
+    ), "first boot POST should have mirrored"
+
+    # Now force config_dirty=True via a HA mutation, then send another
+    # boot-style POST. Pre-fix this second mirror was skipped (relay
+    # short-circuit on local_changes_pending=True returned None
+    # without any HTTP attempt); with the fix relay() proceeds to its
+    # cache/TTL machinery as if config_dirty were False.
+    client.put("/v1/zones/1/hold", json={"activity": "manual"})
+    assert store.config_dirty is True
+    relay_paths.clear()
+    # Clear the bridge cache so the second POST is observably a fresh
+    # outbound request, not a within-TTL cache hit. Without this we
+    # can't distinguish "side-bug fixed (relay attempted, cache
+    # answered)" from "side-bug present (relay skipped entirely)".
+    cb._cache.clear()
+
+    client.post(
+        "/systems/2013W000855",
+        content=_read("boot_01_system_config.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    assert any(
+        p == "POST /systems/2013W000855" for p in relay_paths
+    ), (
+        "second boot POST must still mirror to Carrier despite "
+        "config_dirty=True — that's the alpha.46 panel-mirror skip "
+        "regression we fixed"
+    )

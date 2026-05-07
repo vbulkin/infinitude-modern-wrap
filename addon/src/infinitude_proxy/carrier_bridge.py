@@ -25,6 +25,47 @@ Decision points mirror Perl `infinitude:259`:
 Storage is in-memory — restart resets both the cache and the windows.
 The pass_reqs default (300 s) and carrier_changes window (120 s)
 match upstream defaults; both are configurable on construction.
+
+────────────────────────────────────────────────────────────────────
+Asymmetry the bridge has to handle (alpha.47, item 3 of the
+cross-surface durability backlog)
+────────────────────────────────────────────────────────────────────
+
+Carrier learns about the device's config from two upstream paths:
+  1. The thermostat's `POST /systems/{serial}` boot/sync POST. The
+     thermostat does this on actual boot AND on its own internal
+     cadence after panel-originated changes. The body carries the
+     full `<system><config>...</config></system>` tree, ~30-60 KB.
+     Our bridge mirrors that POST to api.ing.carrier.com via
+     `_bridge_mirror`. This is how panel changes propagate upstream.
+  2. The MyInfinity app's direct PUTs against api.ing.carrier.com
+     (with mobile auth). We never see those — they go from the app
+     straight to Carrier and never traverse our addon.
+
+The thermostat decides when to do (1) based on whether it considers
+the change *device-originated* — a panel touch counts; receiving a
+config tree from `GET /systems/{serial}/config` (which our addon
+serves) does NOT, because as far as the thermostat can tell that
+config came from upstream and Carrier already knows about it. From
+the thermostat's perspective there is no wire-level distinction
+between a config we built from an HA mutation and one Carrier
+queued via the MyInfinity app — both arrive over the same `GET
+/config` channel, so the thermostat treats both the same way and
+skips the upstream re-sync.
+
+Result: HA mutations land in our local tree, get pulled by the
+thermostat on the next /config GET, and stop there. Carrier never
+hears about them. The next time Carrier opens a carrier-changes
+window for some unrelated reason and we relay /config to it,
+Carrier returns its (now-stale) tree — which can still carry the
+state HA cancelled — and the change reverts.
+
+The push_config method below addresses this by synthesizing the
+exact wire shape the thermostat would have produced after a panel
+change, using auth headers cached from the most recent inbound
+thermostat request. To Carrier this is indistinguishable from a
+real device-side config sync; Carrier updates its tree and stops
+re-asserting the stale state.
 """
 
 from __future__ import annotations
@@ -142,6 +183,16 @@ class CarrierBridge:
         self._last_attempt_at: datetime | None = None
         self._last_error: str | None = None
         self._consecutive_failures: int = 0
+        # Latest auth-relevant request headers seen on a thermostat-
+        # originated relay. Used by `push_config` so HA-driven config
+        # updates can be POSTed upstream as if they came from the
+        # device itself. Headers are stale-tolerant: Carrier accepts
+        # them as long as the most recent thermostat request landed
+        # within their TTL (which is at least the status-POST cadence,
+        # 12-30 s — far less than any reasonable token lifetime). On
+        # cold start there is no cache and `push_config` is a no-op
+        # until the thermostat's first relayed request lands.
+        self._latest_auth_headers: dict[str, str] | None = None
 
     @property
     def enabled(self) -> bool:
@@ -315,6 +366,14 @@ class CarrierBridge:
 
         outgoing_headers = self._sanitize_request_headers(headers or {})
 
+        # Cache the sanitized auth set for `push_config`. We rotate on
+        # every relay (every status POST = every 12-30 s during normal
+        # operation) so Carrier never sees auth older than one cadence
+        # tick. Cached BEFORE we send so a 401 here doesn't blank the
+        # last known-good set — push_config will discover the same 401
+        # and log; the next status POST gives us fresh auth.
+        self._latest_auth_headers = dict(outgoing_headers)
+
         start = time.monotonic()
         self._last_attempt_at = datetime.now(timezone.utc)
         try:
@@ -382,6 +441,111 @@ class CarrierBridge:
 
         await self._capture_success(method, path, query, body, response, start)
         return cached
+
+    async def push_config(self, serial: str, body: bytes) -> bool:
+        """Synthesize a thermostat-style boot POST so Carrier learns
+        about an HA-originated config change.
+
+        See the module docstring for *why* this exists. In short: when
+        a config change is initiated at the thermostat panel, the
+        thermostat naturally re-POSTs `/systems/{serial}` upstream and
+        our `_bridge_mirror` carries that to Carrier. When the change
+        is initiated in HA, the thermostat consumes our local tree via
+        `GET /config` and (correctly, from its perspective) does NOT
+        re-POST upstream — it can't distinguish HA-served bytes from
+        Carrier-served bytes, so it treats both as already-known to
+        Carrier. This method plugs that gap by emitting the wire-shape
+        the panel-originated POST would have produced.
+
+        Body is the form-encoded `<system version="1.7"><config>...
+        </config></system>` shape that the thermostat sends — see
+        `parser.serialize_system_post_body`.
+
+        Returns True iff Carrier replied 2xx. Failures (network errors,
+        4xx auth, 5xx) are logged but never propagated to the caller —
+        HA's mutation has already landed locally; the upstream sync
+        is a best-effort consistency layer, not the success criterion
+        for the user-visible action.
+
+        No-ops in three cases:
+          * `pass_reqs=0` (operator disabled the bridge entirely).
+          * httpx client not yet opened (lifespan hasn't run).
+          * No thermostat auth headers cached yet (cold start before
+            the first inbound thermostat request).
+        Each is logged at DEBUG/WARNING so the operator can tell why
+        a push didn't happen.
+        """
+        if not self.enabled:
+            logger.debug("push_config: bridge disabled (pass_reqs=0)")
+            return False
+        if self._client is None:
+            logger.debug("push_config: httpx client not initialized")
+            return False
+        if self._latest_auth_headers is None:
+            # This is genuinely common during the first ~30 s of
+            # process lifetime, before the thermostat's first status
+            # POST. Once the cache populates, every subsequent push
+            # works. WARNING (not DEBUG) so a *persistent* miss is
+            # visible — that would mean the thermostat isn't reaching
+            # us at all, which is a bigger problem than a delayed push.
+            logger.warning(
+                "push_config: no thermostat auth headers cached yet "
+                "(serial=%s, body=%d B); deferring upstream sync",
+                serial, len(body),
+            )
+            return False
+
+        path = f"/systems/{serial}"
+        url = f"https://{self._upstream_host}{path}"
+        # Re-sanitize even though _latest_auth_headers is already
+        # sanitized — defensive against future code paths that might
+        # populate the cache from a different code path. The
+        # sanitizer always sets `host` to upstream_host, so we don't
+        # leak the proxy's local host header.
+        outgoing_headers = self._sanitize_request_headers(self._latest_auth_headers)
+        # The thermostat's real POST sets this content-type; Carrier's
+        # parser is content-type-sensitive on this endpoint.
+        outgoing_headers["content-type"] = "application/x-www-form-urlencoded"
+
+        start = time.monotonic()
+        self._last_attempt_at = datetime.now(timezone.utc)
+        try:
+            response = await self._client.request(
+                "POST", url,
+                headers=outgoing_headers,
+                content=body,
+            )
+        except httpx.RequestError as e:
+            duration_ms = int((time.monotonic() - start) * 1000)
+            self._consecutive_failures += 1
+            self._last_error = f"push_config {type(e).__name__}: {e}"
+            logger.warning(
+                "push_config %s -> error %s (%dms)",
+                url, type(e).__name__, duration_ms,
+            )
+            await self._capture_failure("POST", path, None, body, str(e), start)
+            return False
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+        if 200 <= response.status_code < 500 and response.status_code != 401:
+            # Non-5xx (and not auth-expired) counts as upstream
+            # reachable. We don't update _last_success_at on 4xx
+            # because that would mask "Carrier rejected our shape"
+            # bugs — push success requires 2xx.
+            if 200 <= response.status_code < 300:
+                self._consecutive_failures = 0
+                self._last_error = None
+                self._last_success_at = self._last_attempt_at
+        else:
+            self._consecutive_failures += 1
+            self._last_error = f"push_config HTTP {response.status_code}"
+
+        logger.info(
+            "push %s %s -> %d (%dms, %d B body)",
+            "POST", url, response.status_code, duration_ms, len(body),
+        )
+        await self._capture_success("POST", path, None, body, response, start)
+        return 200 <= response.status_code < 300
 
     # ── Internal helpers ─────────────────────────────────────────────
 

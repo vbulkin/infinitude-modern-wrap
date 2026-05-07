@@ -507,6 +507,38 @@ def serialize_config_tree(tree: etree._Element) -> bytes:
     )
 
 
+def serialize_system_post_body(
+    config_tree: etree._Element, *, system_version: str = "1.7",
+) -> bytes:
+    """Build a thermostat-style boot POST body for `POST /systems/{serial}`.
+
+    The thermostat's wire format (observed in live captures, e.g.
+    `addon/tests/fixtures/thermostat/boot_01_system_config.xml`) is:
+
+        Content-Type: application/x-www-form-urlencoded
+        body:        data=<URL-encoded XML>
+
+    where the unwrapped XML is `<system version="1.7"><config>...</config></system>`.
+    `config_tree` is the bare `<config>` element our state store retains.
+
+    This helper synthesizes the full wire-format body so the addon can
+    POST it back upstream to Carrier — see `CarrierBridge.push_config`.
+    Carrier originally learned the device's config from the thermostat's
+    real boot POST; we replay that exact shape so Carrier accepts it as
+    a legitimate device-side config sync after an HA mutation.
+    """
+    inner_xml = (
+        b'<?xml version="1.0" encoding="UTF-8"?>\n'
+        b'<system version="' + system_version.encode("ascii") + b'">'
+        + etree.tostring(config_tree, encoding="utf-8")
+        + b'</system>'
+    )
+    # `quote_from_bytes` matches the thermostat's URL-encoding (RFC
+    # 3986 reserved set). The body is form-shape `data=<encoded>`.
+    from urllib.parse import quote_from_bytes
+    return b"data=" + quote_from_bytes(inner_xml).encode("ascii")
+
+
 class NotificationChange(BaseModel):
     id: str
     zone: str | None = None
