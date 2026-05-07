@@ -466,6 +466,79 @@ async def test_config_get_in_window_replays_pending_writes_onto_carrier_tree():
     await p.close()
 
 
+async def test_post_clear_carrier_overwrite_protected_by_grace_window():
+    """Harder version of the cancel-hold-revert bug: the HA-side
+    cancel-hold has already been marked applied (pull-observed clear
+    on a previous /config GET that didn't go through the bridge).
+    Then Carrier opens a window with its STALE tree (still holding
+    the queued app hold). Without the grace-window replay, the served
+    body would revert hold to on. With pending_for_replay's grace
+    window, the recently-applied system_hold_clear is re-replayed
+    onto Carrier's stale tree and the cancel sticks.
+    """
+    from lxml import etree as _et
+
+    _root = _et.fromstring(_read("boot_01_system_config.xml"))
+    _wh = _root.find(".//wholeHouse")
+    _wh.find("hold").text = "on"
+    _wh.find("holdActivity").text = "manual"
+    _otmr = _wh.find("otmr")
+    if _otmr is None:
+        _otmr = _et.SubElement(_wh, "otmr")
+    _otmr.text = "21:30"
+    carrier_stale_tree = _et.tostring(_root, xml_declaration=True, encoding="UTF-8")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/config"):
+            return httpx.Response(
+                200, content=carrier_stale_tree,
+                headers={"content-type": "application/xml"},
+            )
+        return httpx.Response(200, content=b"")
+
+    cb = _bridge_with_handler(handler)
+    p = await Persistence.open(":memory:")
+    store = StateStore(persistence=p)
+    app = create_app(store=store, carrier_bridge=cb)
+
+    with TestClient(app) as client:
+        client.post(
+            "/systems/2013W000855",
+            content=_read("boot_01_system_config.xml"),
+            headers={"content-type": "application/xml"},
+        )
+        # User cancels hold in HA → enqueue + dirty.
+        client.delete("/v1/system/hold")
+        # First /config pull (no carrier window) marks the row applied.
+        # This is what would happen on a normal HA-only write workflow:
+        # thermostat sees configHasChanges=true, pulls /config, we mark
+        # it applied via pull-observed-clear.
+        r = client.get("/systems/2013W000855/config")
+        assert r.status_code == 200
+        assert await p.unapplied_count() == 0, (
+            "first /config GET (no bridge) must mark the row applied"
+        )
+        # Row is APPLIED but still within grace.
+        replay_rows = await p.pending_for_replay("2013W000855")
+        assert len(replay_rows) == 1
+        assert replay_rows[0].applied_at is not None
+        assert replay_rows[0].kind == "system_hold_clear"
+
+        # Now Carrier opens a fresh window and serves a stale tree
+        # that still has the app's hold. The grace-window replay must
+        # re-merge our cleared hold onto it.
+        cb.open_carrier_changes_window()
+        r = client.get("/systems/2013W000855/config")
+        assert r.status_code == 200
+        assert b"<hold>off</hold>" in r.content, (
+            "grace-window replay should re-merge HA's cleared hold onto "
+            "Carrier's stale tree, even though the row was already applied"
+        )
+        assert b"<hold>on</hold>" not in r.content
+
+    await p.close()
+
+
 def test_status_post_passes_carrier_configHasChanges_through():
     """The MyInfinity round-trip hinges on this: when Carrier responds
     to the relayed status POST with `configHasChanges=true`, that

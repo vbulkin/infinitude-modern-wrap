@@ -337,6 +337,60 @@ class Persistence:
         await self._conn.commit()
         return ids
 
+    async def pending_for_replay(
+        self, serial: str, grace_seconds: int = 300,
+    ) -> list[PendingWrite]:
+        """Pending writes for replay onto an inbound config tree —
+        unapplied PLUS recently-applied within the grace window.
+
+        Rationale: when Carrier's tree (or the thermostat's boot tree)
+        overwrites our local store, recently-cleared HA-side writes
+        must still be merged onto it. Otherwise an HA mutation that
+        was already marked applied via pull-observed-clear gets
+        silently reverted by upstream stale state. Mirrors the
+        legacy Perl Infinitude proxy's "changes-window" behavior.
+
+        Side effect: deletes rows whose `applied_at` is older than the
+        grace window so the table doesn't grow unbounded.
+
+        Default grace = 300 s — long enough to absorb the natural
+        cadence of Carrier-app round-trips (status mirror → server
+        response → /config relay) plus a defensive margin, short
+        enough that genuinely-stale rows roll off before they fight
+        with newer state.
+        """
+        now = time.time()
+        threshold = now - grace_seconds
+        # Lazy GC of rows past grace. One DELETE per replay cycle is
+        # cheap on local SQLite.
+        await self._conn.execute(
+            "DELETE FROM pending_writes "
+            "WHERE applied_at IS NOT NULL AND applied_at < ?",
+            (threshold,),
+        )
+        await self._conn.commit()
+        async with self._conn.execute(
+            "SELECT id, serial, kind, target, payload_json, "
+            "       created_at, applied_at "
+            "FROM pending_writes "
+            "WHERE serial = ? AND (applied_at IS NULL OR applied_at >= ?) "
+            "ORDER BY created_at ASC",
+            (serial, threshold),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [
+            PendingWrite(
+                id=r[0],
+                serial=r[1],
+                kind=r[2],
+                target=r[3],
+                payload=json.loads(r[4]),
+                created_at=r[5],
+                applied_at=r[6],
+            )
+            for r in rows
+        ]
+
     async def pending(self, serial: str | None = None) -> list[PendingWrite]:
         """All currently-unapplied writes, oldest first. If serial is
         given, filter to that unit; otherwise every unit's queue."""

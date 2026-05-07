@@ -314,34 +314,47 @@ class StateStore:
         and skipped — the row stays pending so a newer build that knows
         how to replay it can still catch up. `config` is re-derived
         from the mutated tree when any replay actually ran.
+
+        Replay covers BOTH unapplied rows AND recently-applied rows
+        within the persistence-layer grace window (`pending_for_replay`).
+        Without the grace window, an HA mutation that was already
+        cleared via pull-observed-clear could be silently reverted by
+        a slightly-stale Carrier tree arriving moments later.
+
+        Pending fetch + replay + tree swap all run under `self._lock`
+        so a racing `mutate_config` cannot enqueue between fetch and
+        swap (which would mark the new row applied at the next /config
+        GET without ever replaying it onto the served tree).
         """
-        mutated = False
-        if self._persistence is not None:
-            pending = await self._persistence.pending(serial)
-            for pw in pending:
-                fn = REPLAY_REGISTRY.get(pw.kind)
-                if fn is None:
-                    logger.warning(
-                        "replay: no dispatcher for kind=%s id=%d; "
-                        "leaving pending", pw.kind, pw.id,
-                    )
-                    continue
-                try:
-                    fn(tree, pw.payload)
-                    mutated = True
-                except Exception:
-                    logger.exception(
-                        "replay: dispatcher %s failed on pending id=%d; "
-                        "leaving pending", pw.kind, pw.id,
-                    )
-            if mutated:
-                # Re-derive the typed snapshot so /v1/state reflects replays.
-                config = reparse_config_tree(tree)
-                logger.info(
-                    "replay: re-applied %d pending write(s) to serial=%s",
-                    len(pending), serial,
-                )
         async with self._lock:
+            mutated = False
+            pending: list = []
+            if self._persistence is not None:
+                pending = await self._persistence.pending_for_replay(serial)
+                for pw in pending:
+                    fn = REPLAY_REGISTRY.get(pw.kind)
+                    if fn is None:
+                        logger.warning(
+                            "replay: no dispatcher for kind=%s id=%d; "
+                            "leaving pending", pw.kind, pw.id,
+                        )
+                        continue
+                    try:
+                        fn(tree, pw.payload)
+                        mutated = True
+                    except Exception:
+                        logger.exception(
+                            "replay: dispatcher %s failed on pending id=%d; "
+                            "leaving pending", pw.kind, pw.id,
+                        )
+                if mutated:
+                    # Re-derive the typed snapshot so /v1/state reflects
+                    # replays.
+                    config = reparse_config_tree(tree)
+                    logger.info(
+                        "replay: re-applied %d pending write(s) to serial=%s",
+                        len(pending), serial,
+                    )
             self._config = StoredConfig(
                 serial=serial,
                 config=config,
