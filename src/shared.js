@@ -5,7 +5,7 @@ import { LitElement, html, css, nothing } from 'lit';
 
 export { LitElement, html, css, nothing };
 
-export const CARD_VERSION = '2.0.0-alpha.48';
+export const CARD_VERSION = '2.0.0-alpha.49';
 export const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 export const JS_DAY_MAP = [6,0,1,2,3,4,5];
 export const ACTIVITIES = ['home','away','sleep','wake'];
@@ -214,7 +214,7 @@ export class InfinitudeBase extends LitElement {
       case 'healthy':     return ['ok',   'Carrier cloud: connected'];
       case 'degraded':    return ['warn', 'Carrier cloud: degraded (recent failures, retrying)'];
       case 'unreachable': return ['err',  'Carrier cloud: unreachable'];
-      case 'disabled':    return ['unk',  'Carrier cloud: bridge disabled (pass_reqs=0)'];
+      case 'disabled':    return ['unk',  'Carrier cloud: bridge disabled (carrier_bridge=false)'];
       case 'unknown':     return ['unk',  'Carrier cloud: checking…'];
       default:            return ['unk',  'Carrier cloud: checking…'];
     }
