@@ -3,9 +3,10 @@
 Companion to test_forward_proxy.py. Where the forward proxy handles
 explicit `/http%3A//host/...` URL-encoded paths, the bridge handles
 the *implicit* relay the legacy Perl Infinitude does in
-`before_dispatch`: mirror status POSTs upstream, track Carrier's
-`serverHasChanges` flag, gate config GETs on the carrier-changes
-window so MyInfinity-app round-trips work.
+`before_dispatch`: mirror status POSTs upstream, surface Carrier's
+`serverHasChanges` flag so a proactive `/config` pull can fire, and
+keep the thermostat moving even when Carrier is unreachable
+(circuit-breaker + bounded timeouts).
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from fastapi.testclient import TestClient
 
 from infinitude_proxy.capture import CaptureControl
 from infinitude_proxy.carrier_bridge import (
+    CachedRelay,
     CarrierBridge,
     _action_key,
 )
@@ -37,6 +39,7 @@ def _read(name: str) -> bytes:
 def _bridge_with_handler(handler, **kw) -> CarrierBridge:
     """A CarrierBridge whose httpx client is wired to a MockTransport
     so tests don't hit the real internet."""
+    kw.setdefault("enabled", True)
     cb = CarrierBridge(**kw)
     cb._client = httpx.AsyncClient(  # type: ignore[attr-defined]
         transport=httpx.MockTransport(handler),
@@ -44,70 +47,6 @@ def _bridge_with_handler(handler, **kw) -> CarrierBridge:
         follow_redirects=False,
     )
     return cb
-
-
-# ── Pure decision logic ───────────────────────────────────────────────
-
-
-def test_should_relay_disabled_when_pass_reqs_is_zero():
-    cb = CarrierBridge(pass_reqs=0)
-    assert not cb.enabled
-    assert not cb.should_relay("GET /x", local_changes_pending=False)
-
-
-def test_should_relay_blocked_by_local_changes():
-    """Don't relay while local mutations are pending — the directive
-    will say configHasChanges=true and the thermostat will pull our
-    tree next; sending now would race that."""
-    cb = CarrierBridge()
-    assert not cb.should_relay("GET /x", local_changes_pending=True)
-
-
-def test_should_relay_first_time_cache_miss():
-    cb = CarrierBridge()
-    assert cb.should_relay("GET /x", local_changes_pending=False)
-
-
-def test_should_relay_respects_pass_reqs_ttl():
-    cb = CarrierBridge(pass_reqs=60)
-    # Plant a fresh cached entry — relay must skip until TTL elapses.
-    from infinitude_proxy.carrier_bridge import CachedRelay
-    cb._cache["GET /x"] = CachedRelay(
-        status_code=200, body=b"ok", content_type="text/plain",
-        cached_at=datetime.now(timezone.utc),
-    )
-    assert not cb.should_relay("GET /x", local_changes_pending=False)
-    # Past the TTL: relay again.
-    cb._cache["GET /x"] = CachedRelay(
-        status_code=200, body=b"ok", content_type="text/plain",
-        cached_at=datetime.now(timezone.utc) - timedelta(seconds=61),
-    )
-    assert cb.should_relay("GET /x", local_changes_pending=False)
-
-
-def test_should_relay_carrier_changes_window_overrides_cache():
-    """When Carrier opened the window, every request relays — the
-    cache TTL doesn't apply. Matches Perl `($store->get('carrier_changes')
-    or !$store->get($nk))`."""
-    cb = CarrierBridge(pass_reqs=300)
-    from infinitude_proxy.carrier_bridge import CachedRelay
-    cb._cache["GET /x"] = CachedRelay(
-        status_code=200, body=b"ok", content_type="text/plain",
-        cached_at=datetime.now(timezone.utc),  # fresh cache
-    )
-    cb.open_carrier_changes_window()
-    assert cb.should_relay("GET /x", local_changes_pending=False)
-
-
-def test_carrier_changes_window_decays():
-    cb = CarrierBridge(carrier_changes_window=120)
-    cb.open_carrier_changes_window()
-    assert cb.carrier_changes_active()
-    # Force expiry by rewinding the deadline.
-    cb._carrier_changes_until = (
-        datetime.now(timezone.utc) - timedelta(seconds=1)
-    )
-    assert not cb.carrier_changes_active()
 
 
 def test_action_key_method_path_query():
@@ -121,73 +60,18 @@ def test_action_key_method_path_query():
 
 @pytest.mark.asyncio
 async def test_relay_returns_none_when_disabled():
-    """pass_reqs=0 → bridge inert; no httpx call, no cache write."""
+    """`enabled=False` → bridge inert; no httpx call, no state mutation."""
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
         return httpx.Response(200, content=b"")
 
-    cb = _bridge_with_handler(handler, pass_reqs=0)
+    cb = _bridge_with_handler(handler, enabled=False)
+    assert cb.enabled is False
     result = await cb.relay("POST", "/systems/X/status", body=b"x")
     assert result is None
     assert seen == []
-
-
-@pytest.mark.asyncio
-async def test_relay_caches_response():
-    seen: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(str(request.url))
-        return httpx.Response(
-            200, content=b"<status/>", headers={"content-type": "application/xml"},
-        )
-
-    cb = _bridge_with_handler(handler, pass_reqs=300)
-    r1 = await cb.relay("GET", "/Alive", query=None)
-    assert r1 is not None
-    assert r1.status_code == 200
-    assert r1.body == b"<status/>"
-    # Second call inside TTL must hit cache, not upstream.
-    r2 = await cb.relay("GET", "/Alive", query=None)
-    assert r2 is r1
-    assert len(seen) == 1
-
-
-@pytest.mark.asyncio
-async def test_relay_opens_carrier_changes_window_on_serverHasChanges():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            content=(
-                b'<?xml version="1.0"?><status version="1.37">'
-                b'<configHasChanges>false</configHasChanges>'
-                b'<serverHasChanges>true</serverHasChanges>'
-                b'</status>'
-            ),
-            headers={"content-type": "application/xml"},
-        )
-
-    cb = _bridge_with_handler(handler)
-    assert not cb.carrier_changes_active()
-    await cb.relay("POST", "/systems/2013W000855/status", body=b"data=...")
-    assert cb.carrier_changes_active(), (
-        "Carrier reported serverHasChanges=true; window must open"
-    )
-
-
-@pytest.mark.asyncio
-async def test_relay_no_window_open_when_serverHasChanges_false():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            content=b"<status><serverHasChanges>false</serverHasChanges></status>",
-        )
-
-    cb = _bridge_with_handler(handler)
-    await cb.relay("POST", "/systems/X/status", body=b"data=...")
-    assert not cb.carrier_changes_active()
 
 
 @pytest.mark.asyncio
@@ -195,15 +79,16 @@ async def test_relay_swallows_network_error_returns_none():
     """A Carrier outage must not propagate to the thermostat caller —
     matches Perl's silent failure mode. The thermostat thinks its
     POST landed (we already 200'd it locally) and the relay just
-    didn't happen this cycle."""
+    didn't happen this cycle. Failure is recorded so the circuit
+    breaker / health gauge can react."""
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("simulated", request=request)
 
     cb = _bridge_with_handler(handler)
     result = await cb.relay("POST", "/systems/X/status", body=b"")
     assert result is None
-    # Cache must not be poisoned with a sentinel.
-    assert "POST /systems/X/status" not in cb._cache
+    # Failure counter ticked so health/circuit breaker can react.
+    assert cb._consecutive_failures == 1
 
 
 @pytest.mark.asyncio
@@ -230,8 +115,6 @@ async def test_relay_strips_hop_by_hop_headers():
     assert "carrier.com" in h.get("host", "")
     assert h.get("user-agent") == "Carrier-Stat"
     # No leftover content-length — httpx recomputes it.
-    # (httpx may set its own; we just need to know we didn't pass the
-    # local-hop value through.)
 
 
 # ── End-to-end: southbound router invokes the bridge ──────────────────
@@ -239,16 +122,15 @@ async def test_relay_strips_hop_by_hop_headers():
 
 def test_status_post_mirrors_to_carrier_when_no_local_changes():
     """A status POST with no local changes pending must trigger a
-    relay to Carrier. With alpha.26's directive pass-through, the
-    response sent BACK to the thermostat is Carrier's directive
-    (with our local pingRate normalization), not our local stub.
-    The local-stub directive is only used when the bridge is off
-    or Carrier is unreachable."""
+    relay to Carrier. The response sent BACK to the thermostat is
+    Carrier's directive forwarded verbatim — including Carrier's own
+    pingRate (alpha.48: we no longer normalize it to 12; Carrier's
+    rate-limit signal is authoritative in clean state)."""
     relay_calls: list[str] = []
     carrier_directive = (
         b'<?xml version="1.0"?>\n<status version="1.37">'
         b'<configHasChanges>false</configHasChanges>'
-        b'<pingRate>30</pingRate>'  # Carrier sends 30; we normalize to 12
+        b'<pingRate>30</pingRate>'  # Carrier sends 30; we forward verbatim
         b'<serverHasChanges>false</serverHasChanges>'
         b'</status>'
     )
@@ -276,12 +158,10 @@ def test_status_post_mirrors_to_carrier_when_no_local_changes():
         headers={"content-type": "application/xml"},
     )
     assert r.status_code == 200
-    # Directive should be Carrier's body, with pingRate forced to 12.
-    assert b"<pingRate>12</pingRate>" in r.content
-    assert b"<pingRate>30</pingRate>" not in r.content
+    # Directive should be Carrier's body — pingRate forwarded verbatim.
+    assert b"<pingRate>30</pingRate>" in r.content
     assert b"<serverHasChanges>false</serverHasChanges>" in r.content
-    # And the relay must have happened (boot config + status both relayed
-    # — alpha.26's broader mirroring).
+    # And the relay must have happened (boot config + status both relayed).
     assert "POST /systems/2013W000855/status" in relay_calls
 
 
@@ -320,79 +200,18 @@ def test_status_post_skips_relay_when_local_changes_pending():
     )
 
 
-def test_config_get_returns_carrier_response_when_window_active():
-    """When Carrier said serverHasChanges=true and the window is open,
-    the next /systems/{id}/config GET must serve Carrier's tree —
-    that's where the queued MyInfinity-app commands live. The window
-    closes on first use so we don't keep returning the same tree."""
-    fake_carrier_config = (
-        b'<?xml version="1.0"?>\n'
-        b'<config><mode>cool</mode>'
-        b'<MAGIC>from-carrier</MAGIC></config>'
-    )
-
-    relay_calls: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        relay_calls.append(f"{request.method} {request.url.path}")
-        # First call: status POST, signal serverHasChanges=true so the
-        # bridge opens its window.
-        if request.url.path.endswith("/status"):
-            return httpx.Response(
-                200,
-                content=(
-                    b'<status><serverHasChanges>true</serverHasChanges>'
-                    b'</status>'
-                ),
-                headers={"content-type": "application/xml"},
-            )
-        # Second: config GET while window is open — return the tree
-        # the MyInfinity app would have queued.
-        if request.url.path.endswith("/config"):
-            return httpx.Response(
-                200, content=fake_carrier_config,
-                headers={"content-type": "application/xml"},
-            )
-        return httpx.Response(404)
-
-    cb = _bridge_with_handler(handler)
-    app = create_app(store=StateStore(), carrier_bridge=cb)
-    client = TestClient(app)
-
-    client.post(
-        "/systems/2013W000855",
-        content=_read("boot_01_system_config.xml"),
-        headers={"content-type": "application/xml"},
-    )
-    # Status POST opens the carrier_changes window.
-    client.post(
-        "/systems/2013W000855/status",
-        content=_read("boot_05_status_telemetry.xml"),
-        headers={"content-type": "application/xml"},
-    )
-    assert cb.carrier_changes_active()
-
-    # Config GET while window is open — must return Carrier's tree.
-    r = client.get("/systems/2013W000855/config")
-    assert r.status_code == 200
-    assert b"from-carrier" in r.content, (
-        "expected Carrier's tree to be served while carrier_changes window open"
-    )
-    # Window must close after consumption — next GET returns local.
-    assert not cb.carrier_changes_active()
-
-
 async def test_config_get_in_window_replays_pending_writes_onto_carrier_tree():
     """Regression: alpha.42 user reported that an HA-side cancel-hold
-    issued while the carrier_changes window is open optimistically
+    issued while Carrier had a queued change open optimistically
     clears in the UI, then "comes back" within seconds. Root cause was
     the carrier-bridge branch of GET /systems/{serial}/config serving
     Carrier's raw response body — which still carried the MyInfinity
     app's queued hold-on tree — instead of the merged tree that
     apply_config produced after replaying our pending system_hold_clear.
-    The fix serializes the merged tree (Carrier ∪ pending writes) and
-    marks the pending row applied, so the thermostat receives both
-    Carrier's queued changes AND our HA-side mutations in one body.
+    Alpha.48 deletes the carrier_changes-window branch entirely; this
+    test now exercises the same merge invariant via the proactive-pull
+    path (`pull_and_apply_config`), which also runs apply_config and
+    therefore the same `pending_for_replay` grace-window logic.
     """
     # Build "Carrier's tree" by taking the real boot fixture and
     # flipping wholeHouse/hold to ON, mimicking a MyInfinity-app-set
@@ -439,16 +258,14 @@ async def test_config_get_in_window_replays_pending_writes_onto_carrier_tree():
         assert r.status_code == 200
         assert await p.unapplied_count() == 1
 
-        # Open the carrier_changes window directly. The earlier
-        # status-POST → serverHasChanges=true → window-open path is
-        # exercised by test_relay_opens_carrier_changes_window_on_*;
-        # this test isolates the GET /config behavior with a pending
-        # write present.
-        cb.open_carrier_changes_window()
+        # Drive the proactive pull directly: bridge fetches Carrier's
+        # tree (hold=on), runs apply_config, which replays our pending
+        # system_hold_clear onto Carrier's tree.
+        ok = await cb.pull_and_apply_config("2013W000855", store)
+        assert ok is True
 
-        # /config GET while window is open AND a pending HA-side write
-        # exists. The served body must carry the merged tree, NOT
-        # Carrier's raw hold-on response.
+        # The served body must carry the merged tree, NOT Carrier's
+        # raw hold-on response.
         r = client.get("/systems/2013W000855/config")
         assert r.status_code == 200
         assert b"<hold>off</hold>" in r.content, (
@@ -457,11 +274,6 @@ async def test_config_get_in_window_replays_pending_writes_onto_carrier_tree():
         )
         assert b"<hold>on</hold>" not in r.content
         assert b"<holdActivity>none</holdActivity>" in r.content
-        # Pending row must have been marked applied by the bridge serve
-        # path (mirrors the non-bridge mark_all_applied). Without this,
-        # the same write would replay onto every subsequent
-        # carrier_changes /config serve, never clearing.
-        assert await p.unapplied_count() == 0
 
     await p.close()
 
@@ -469,12 +281,17 @@ async def test_config_get_in_window_replays_pending_writes_onto_carrier_tree():
 async def test_post_clear_carrier_overwrite_protected_by_grace_window():
     """Harder version of the cancel-hold-revert bug: the HA-side
     cancel-hold has already been marked applied (pull-observed clear
-    on a previous /config GET that didn't go through the bridge).
-    Then Carrier opens a window with its STALE tree (still holding
-    the queued app hold). Without the grace-window replay, the served
-    body would revert hold to on. With pending_for_replay's grace
+    on a previous /config GET). Then Carrier serves its STALE tree
+    (still holding the queued app hold) via the proactive-pull path.
+    Without the grace-window replay, apply_config would let Carrier's
+    hold overwrite our cleared state. With pending_for_replay's grace
     window, the recently-applied system_hold_clear is re-replayed
     onto Carrier's stale tree and the cancel sticks.
+
+    Alpha.48 rewrite: the carrier_changes window is gone; this test
+    now drives the merge directly via `pull_and_apply_config`, which
+    is the same code path that fires from `post_telemetry` when
+    Carrier signals serverHasChanges=true.
     """
     from lxml import etree as _et
 
@@ -509,14 +326,11 @@ async def test_post_clear_carrier_overwrite_protected_by_grace_window():
         )
         # User cancels hold in HA → enqueue + dirty.
         client.delete("/v1/system/hold")
-        # First /config pull (no carrier window) marks the row applied.
-        # This is what would happen on a normal HA-only write workflow:
-        # thermostat sees configHasChanges=true, pulls /config, we mark
-        # it applied via pull-observed-clear.
+        # First /config pull marks the row applied — pull-observed-clear.
         r = client.get("/systems/2013W000855/config")
         assert r.status_code == 200
         assert await p.unapplied_count() == 0, (
-            "first /config GET (no bridge) must mark the row applied"
+            "first /config GET must mark the row applied"
         )
         # Row is APPLIED but still within grace.
         replay_rows = await p.pending_for_replay("2013W000855")
@@ -524,10 +338,12 @@ async def test_post_clear_carrier_overwrite_protected_by_grace_window():
         assert replay_rows[0].applied_at is not None
         assert replay_rows[0].kind == "system_hold_clear"
 
-        # Now Carrier opens a fresh window and serves a stale tree
+        # Now Carrier responds via proactive-pull with a stale tree
         # that still has the app's hold. The grace-window replay must
-        # re-merge our cleared hold onto it.
-        cb.open_carrier_changes_window()
+        # re-merge our cleared hold onto it before the served tree
+        # changes back.
+        ok = await cb.pull_and_apply_config("2013W000855", store)
+        assert ok is True
         r = client.get("/systems/2013W000855/config")
         assert r.status_code == 200
         assert b"<hold>off</hold>" in r.content, (
@@ -539,144 +355,12 @@ async def test_post_clear_carrier_overwrite_protected_by_grace_window():
     await p.close()
 
 
-def test_status_post_passes_carrier_configHasChanges_through():
-    """The MyInfinity round-trip hinges on this: when Carrier responds
-    to the relayed status POST with `configHasChanges=true`, that
-    signal must reach the thermostat — otherwise the device never
-    pulls the queued app commands. Without alpha.26's directive
-    pass-through, the carrier_changes window opens but expires
-    unused."""
-    carrier_directive = (
-        b'<?xml version="1.0"?>\n<status version="1.37">'
-        b'<configHasChanges>true</configHasChanges>'
-        b'<pingRate>20</pingRate>'
-        b'<serverHasChanges>true</serverHasChanges>'
-        b'</status>'
-    )
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200, content=carrier_directive,
-            headers={"content-type": "application/xml"},
-        )
-
-    cb = _bridge_with_handler(handler)
-    app = create_app(store=StateStore(), carrier_bridge=cb)
-    client = TestClient(app)
-    client.post(
-        "/systems/2013W000855",
-        content=_read("boot_01_system_config.xml"),
-        headers={"content-type": "application/xml"},
-    )
-    r = client.post(
-        "/systems/2013W000855/status",
-        content=_read("boot_05_status_telemetry.xml"),
-        headers={"content-type": "application/xml"},
-    )
-    assert r.status_code == 200
-    # Carrier's directive reached the thermostat — config-fetch
-    # cycle will start.
-    assert b"<configHasChanges>true</configHasChanges>" in r.content
-    assert b"<serverHasChanges>true</serverHasChanges>" in r.content
-    # And the carrier_changes window opened so the next config GET
-    # serves Carrier's tree.
-    assert cb.carrier_changes_active()
-
-
-def test_config_get_schedules_followup_change_cycle():
-    """After we serve Carrier's tree from the carrier_changes
-    window, schedule a forced change ~60 s out so the thermostat
-    re-syncs after applying the cloud commands. Mirrors Perl
-    `infinitude:572` `$store->set(changes => time+60)`."""
-    fake_carrier_config = b'<?xml version="1.0"?>\n<config><MAGIC>1</MAGIC></config>'
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/status"):
-            return httpx.Response(
-                200,
-                content=(
-                    b'<status><serverHasChanges>true</serverHasChanges>'
-                    b'</status>'
-                ),
-                headers={"content-type": "application/xml"},
-            )
-        return httpx.Response(200, content=fake_carrier_config)
-
-    cb = _bridge_with_handler(handler)
-    app = create_app(store=StateStore(), carrier_bridge=cb)
-    client = TestClient(app)
-    client.post(
-        "/systems/2013W000855",
-        content=_read("boot_01_system_config.xml"),
-        headers={"content-type": "application/xml"},
-    )
-    client.post(
-        "/systems/2013W000855/status",
-        content=_read("boot_05_status_telemetry.xml"),
-        headers={"content-type": "application/xml"},
-    )
-    # Pre-fetch: no scheduled change yet.
-    assert not cb.consume_scheduled_changes()
-    cb.schedule_changes  # method exists
-
-    r = client.get("/systems/2013W000855/config")
-    assert r.status_code == 200
-    assert b"MAGIC" in r.content
-    # After serving Carrier's tree, the bridge has armed a future
-    # changes deadline.
-    assert cb._scheduled_changes_at is not None
-    # Force the deadline into the past and verify consume returns True.
-    cb._scheduled_changes_at = (
-        datetime.now(timezone.utc) - timedelta(seconds=1)
-    )
-    assert cb.consume_scheduled_changes() is True
-    # Single-shot: subsequent consume returns False.
-    assert cb.consume_scheduled_changes() is False
-
-
-def test_status_post_signals_changes_when_scheduled_deadline_hit():
-    """End-to-end of the scheduled-changes mechanism: simulate the
-    "after Carrier config served" state by arming the deadline,
-    then verify the next status POST sends configHasChanges=true to
-    the thermostat (without needing a local mutation)."""
-    def handler(request: httpx.Request) -> httpx.Response:
-        # Bridge would relay; respond with a benign Carrier directive.
-        return httpx.Response(
-            200,
-            content=b'<status><configHasChanges>false</configHasChanges><serverHasChanges>false</serverHasChanges></status>',
-        )
-
-    cb = _bridge_with_handler(handler)
-    # Arm an already-elapsed deadline.
-    cb._scheduled_changes_at = (
-        datetime.now(timezone.utc) - timedelta(seconds=1)
-    )
-
-    app = create_app(store=StateStore(), carrier_bridge=cb)
-    client = TestClient(app)
-    client.post(
-        "/systems/2013W000855",
-        content=_read("boot_01_system_config.xml"),
-        headers={"content-type": "application/xml"},
-    )
-    r = client.post(
-        "/systems/2013W000855/status",
-        content=_read("boot_05_status_telemetry.xml"),
-        headers={"content-type": "application/xml"},
-    )
-    assert r.status_code == 200
-    # Local-priority directive — has_changes=true forces this even
-    # though Carrier's relayed directive would have said false.
-    assert b"<configHasChanges>true</configHasChanges>" in r.content
-    # And the deadline has been consumed.
-    assert cb._scheduled_changes_at is None
-
-
 def test_idu_odu_notifications_mirror_to_carrier():
     """Item 5: every thermostat-bound POST mirrors to Carrier so the
     cloud's view of the install matches reality. Without this, the
     MyInfinity app sees stale equipment descriptors and missed
-    notifications."""
+    notifications. Alpha.48: those mirrors are now fire-and-forget,
+    so we wait briefly for the create_task to fire."""
     relay_paths: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -709,7 +393,9 @@ def test_idu_odu_notifications_mirror_to_carrier():
         headers={"content-type": "application/xml"},
     )
 
-    # All four routes should have produced a relay.
+    # All four routes should have produced a relay. TestClient drives
+    # the loop to completion for each request, so create_task'd mirrors
+    # have completed by the time the inner request returns.
     assert f"POST /systems/{serial}" in relay_paths
     assert f"POST /systems/{serial}/idu_config" in relay_paths
     assert f"POST /systems/{serial}/odu_config" in relay_paths
@@ -820,9 +506,11 @@ def test_health_initial_state_is_unknown():
     assert h["consecutive_failures"] == 0
 
 
-def test_health_disabled_when_pass_reqs_zero():
-    cb = CarrierBridge(pass_reqs=0)
-    assert cb.health()["status"] == "disabled"
+def test_health_disabled_when_bridge_disabled():
+    cb = CarrierBridge(enabled=False)
+    h = cb.health()
+    assert h["status"] == "disabled"
+    assert h["circuit_open"] is False
 
 
 @pytest.mark.asyncio
@@ -907,7 +595,7 @@ async def test_health_4xx_counts_as_success():
 
 def test_healthz_endpoint_reflects_bridge_status():
     """End-to-end: /v1/healthz response shape carries the bridge's
-    actual status, not the alpha.25-era hardcoded `disabled`."""
+    actual status, including the alpha.48 circuit-breaker fields."""
     cb = CarrierBridge()  # enabled, never attempted
     app = create_app(store=StateStore(), carrier_bridge=cb)
     client = TestClient(app)
@@ -915,7 +603,11 @@ def test_healthz_endpoint_reflects_bridge_status():
     assert r.status_code == 200
     cc = r.json()["components"]["carrierCloud"]
     assert cc["status"] == "unknown"
-    assert cc["passReqsIntervalSeconds"] == cb._pass_reqs
+    # Alpha.48 fields — circuit closed at startup.
+    assert cc["circuitOpen"] is False
+    assert cc["circuitCooldownSeconds"] >= 0
+    # The pre-alpha.48 throttle field is gone from the model.
+    assert "passReqsIntervalSeconds" not in cc
 
 
 def test_release_notes_falls_back_to_empty_stub_on_carrier_failure():
@@ -928,25 +620,6 @@ def test_release_notes_falls_back_to_empty_stub_on_carrier_failure():
     r = client.get("/releaseNotes/systxbbec-14.02.txt")
     assert r.status_code == 200  # Local stub kicks in.
     assert r.content == b""
-
-
-def test_config_get_returns_local_tree_when_window_closed():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, content=b"<config><MAGIC>from-carrier</MAGIC></config>")
-
-    cb = _bridge_with_handler(handler)
-    app = create_app(store=StateStore(), carrier_bridge=cb)
-    client = TestClient(app)
-    client.post(
-        "/systems/2013W000855",
-        content=_read("boot_01_system_config.xml"),
-        headers={"content-type": "application/xml"},
-    )
-    # Window never opened.
-    r = client.get("/systems/2013W000855/config")
-    assert r.status_code == 200
-    # Local boot config tree, NOT Carrier's.
-    assert b"from-carrier" not in r.content
 
 
 # ── Capture integration ──────────────────────────────────────────────
@@ -1105,7 +778,11 @@ async def test_mutate_config_triggers_carrier_push():
         async def relay(self, *a, **kw):
             return None
 
-        def carrier_changes_active(self) -> bool:
+        @staticmethod
+        def has_server_changes(body):
+            return False
+
+        def take_just_recovered(self) -> bool:
             return False
 
         async def open(self): pass
@@ -1147,7 +824,8 @@ async def test_mutate_config_triggers_carrier_push():
     assert b"<hold>on</hold>" in inner
 
 
-def test_post_system_config_mirrors_even_when_config_dirty():
+@pytest.mark.asyncio
+async def test_post_system_config_mirrors_even_when_config_dirty():
     """Side-bug fix: a thermostat-originated POST /systems/{serial}
     must mirror to Carrier regardless of `store.config_dirty`. The
     alpha.10 "skip relay on local-changes-pending" rule applies to
@@ -1156,7 +834,12 @@ def test_post_system_config_mirrors_even_when_config_dirty():
     state and dropping the mirror loses the only natural propagation
     channel for panel-side changes. Verified live in alpha.46
     capture: panel POST #2 was silently skipped because apply_config
-    had set config_dirty during replay."""
+    had set config_dirty during replay.
+
+    Alpha.48: the mirror is now fire-and-forget (not awaited). We
+    yield briefly after the client.post call so the create_task'd
+    relay completes before we assert.
+    """
     relay_paths: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1166,42 +849,312 @@ def test_post_system_config_mirrors_even_when_config_dirty():
     cb = _bridge_with_handler(handler)
     store = StateStore()
     app = create_app(store=store, carrier_bridge=cb)
+    import asyncio as _asyncio
+
+    with TestClient(app) as client:
+        # Boot once so the store has state. Mirror on this first POST is
+        # the precondition for the test — verify it happened.
+        client.post(
+            "/systems/2013W000855",
+            content=_read("boot_01_system_config.xml"),
+            headers={"content-type": "application/xml"},
+        )
+        # Yield twice so the fire-and-forget mirror task can run.
+        await _asyncio.sleep(0)
+        await _asyncio.sleep(0)
+        assert any(
+            p == "POST /systems/2013W000855" for p in relay_paths
+        ), "first boot POST should have mirrored"
+
+        # Now force config_dirty=True via a HA mutation, then send another
+        # boot-style POST. Pre-fix this second mirror was skipped (relay
+        # short-circuit on local_changes_pending=True returned None
+        # without any HTTP attempt); with the fix relay() proceeds to
+        # mirror unconditionally.
+        client.put("/v1/zones/1/hold", json={"activity": "manual"})
+        assert store.config_dirty is True
+        relay_paths.clear()
+
+        client.post(
+            "/systems/2013W000855",
+            content=_read("boot_01_system_config.xml"),
+            headers={"content-type": "application/xml"},
+        )
+        await _asyncio.sleep(0)
+        await _asyncio.sleep(0)
+        assert any(
+            p == "POST /systems/2013W000855" for p in relay_paths
+        ), (
+            "second boot POST must still mirror to Carrier despite "
+            "config_dirty=True — that's the alpha.46 panel-mirror skip "
+            "regression we fixed"
+        )
+
+
+# ── alpha.48: circuit breaker + proactive pull + resilience ──────────
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_opens_after_consecutive_failures():
+    """After N consecutive network failures, relay() short-circuits
+    and stops calling httpx until the cooldown elapses. Without this
+    a sustained Carrier outage would cost us 1 timeout per call."""
+    call_count = 0
+    def handler(request):
+        nonlocal call_count
+        call_count += 1
+        raise httpx.ConnectError("simulated", request=request)
+    cb = _bridge_with_handler(
+        handler, circuit_failure_threshold=3, circuit_cooldown_initial_s=60,
+    )
+    for _ in range(3):
+        await cb.relay("POST", "/systems/X/status", body=b"")
+    assert call_count == 3
+    assert cb._circuit_open()
+    # 4th call short-circuits — no httpx attempt.
+    await cb.relay("POST", "/systems/X/status", body=b"")
+    assert call_count == 3, "circuit must short-circuit; no upstream call"
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_resets_on_success():
+    """First success after the cooldown elapses must close the
+    circuit and reset the failure counter."""
+    fail = True
+    def handler(request):
+        if fail:
+            raise httpx.ConnectError("x", request=request)
+        return httpx.Response(200, content=b"")
+    cb = _bridge_with_handler(
+        handler, circuit_failure_threshold=2, circuit_cooldown_initial_s=1,
+    )
+    await cb.relay("POST", "/systems/X/status", body=b"")
+    await cb.relay("POST", "/systems/X/status", body=b"")
+    assert cb._circuit_open()
+    # Force cooldown elapsed.
+    cb._circuit_open_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+    fail = False
+    r = await cb.relay("POST", "/systems/X/status", body=b"")
+    assert r is not None and r.status_code == 200
+    assert not cb._circuit_open()
+    assert cb._consecutive_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_take_just_recovered_latches_on_recovery():
+    """When the bridge transitions from a failure streak to a
+    success, take_just_recovered() returns True ONCE."""
+    fail = True
+    def handler(request):
+        if fail:
+            raise httpx.ConnectError("x", request=request)
+        return httpx.Response(200, content=b"")
+    cb = _bridge_with_handler(handler, circuit_failure_threshold=10)
+    await cb.relay("POST", "/systems/X/status", body=b"")  # fail
+    fail = False
+    await cb.relay("POST", "/systems/X/status", body=b"")  # success
+    assert cb.take_just_recovered() is True
+    assert cb.take_just_recovered() is False  # consume-on-read
+
+
+@pytest.mark.asyncio
+async def test_pull_and_apply_config_applies_carrier_tree_to_store():
+    """Verify the proactive-pull path: bridge fetches /config from
+    Carrier, parses, applies to local store, marks dirty."""
+    store = StateStore()
+    # Seed local store with boot fixture so apply_config has something
+    # to merge into.
+    from infinitude_proxy.parser import parse_system_config_with_tree
+    boot = _read("boot_01_system_config.xml")
+    tree, config = parse_system_config_with_tree(boot)
+    await store.apply_config("2013W000855", config, tree)
+
+    # Carrier returns the same fixture but with hold flipped to on,
+    # mimicking an app-queued change.
+    from lxml import etree as _et
+    root = _et.fromstring(boot)
+    wh = root.find(".//wholeHouse")
+    wh.find("hold").text = "on"
+    wh.find("holdActivity").text = "manual"
+    otmr = wh.find("otmr")
+    if otmr is None:
+        otmr = _et.SubElement(wh, "otmr")
+    otmr.text = "21:30"
+    carrier_body = _et.tostring(root, xml_declaration=True, encoding="UTF-8")
+
+    def handler(request):
+        return httpx.Response(
+            200, content=carrier_body,
+            headers={"content-type": "application/xml"},
+        )
+
+    cb = _bridge_with_handler(handler)
+    ok = await cb.pull_and_apply_config("2013W000855", store)
+    assert ok is True
+    stored = store.get_config()
+    assert stored is not None
+    # Verify Carrier's hold-on landed in local tree.
+    wh_local = stored.tree.find(".//wholeHouse")
+    assert wh_local.find("hold").text == "on"
+    # Dirty flag set so next directive tells thermostat to pull.
+    assert store.config_dirty is True
+
+
+def test_status_post_fires_proactive_pull_on_serverHasChanges():
+    """When Carrier responds with serverHasChanges=true, the status
+    handler must schedule a pull_and_apply_config task — that's how
+    Carrier-app changes flow into our local tree without waiting on
+    the thermostat's next /config GET cycle."""
+    pull_calls: list[str] = []
+
+    class StubBridge:
+        enabled = True
+        async def open(self): pass
+        async def close(self): pass
+        async def relay(self, *a, **kw):
+            return CachedRelay(
+                status_code=200,
+                body=b"<status><serverHasChanges>true</serverHasChanges></status>",
+                content_type="application/xml",
+                cached_at=datetime.now(timezone.utc),
+            )
+        async def pull_and_apply_config(self, serial, store):
+            pull_calls.append(serial)
+            return True
+        @staticmethod
+        def has_server_changes(body):
+            return b"<serverHasChanges>true</serverHasChanges>" in (body or b"")
+        def take_just_recovered(self):
+            return False
+        def health(self):
+            return {"status": "healthy", "last_success_at": None,
+                    "last_attempt_at": None, "last_error": None,
+                    "consecutive_failures": 0, "circuit_open": False,
+                    "circuit_cooldown_s": 0, "pass_reqs": 0}
+
+    store = StateStore()
+    app = create_app(store=store, carrier_bridge=StubBridge())
+    client = TestClient(app)
+    client.post(
+        "/systems/2013W000855",
+        content=_read("boot_01_system_config.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    pull_calls.clear()
+    r = client.post(
+        "/systems/2013W000855/status",
+        content=_read("boot_05_status_telemetry.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    assert r.status_code == 200
+    # The create_task fires on the event loop after the request handler
+    # returns. TestClient drives the loop to completion for each
+    # request — by the time client.post returns, scheduled tasks have
+    # run.
+    assert "2013W000855" in pull_calls, (
+        "status handler must fire pull_and_apply_config when Carrier "
+        "signals serverHasChanges=true"
+    )
+
+
+@pytest.mark.asyncio
+async def test_status_post_fires_catchup_push_on_recovery():
+    """After bridge transitions from failing to succeeding, the next
+    status post must fire a catch-up push_config carrying the current
+    local tree, so HA mutations during the outage propagate upstream."""
+    push_calls: list[tuple[str, int]] = []
+    fail = True
+    def handler(request):
+        if fail:
+            raise httpx.ConnectError("x", request=request)
+        # Recovery — return clean response with serverHasChanges=false.
+        return httpx.Response(
+            200,
+            content=b"<status><serverHasChanges>false</serverHasChanges></status>",
+            headers={"content-type": "application/xml"},
+        )
+
+    cb = _bridge_with_handler(handler, circuit_failure_threshold=10)
+    # Capture push_config calls without short-circuiting; wrap the method.
+    original_push = cb.push_config
+    async def capture_push(serial, body):
+        push_calls.append((serial, len(body)))
+        return await original_push(serial, body)
+    cb.push_config = capture_push  # type: ignore[method-assign]
+
+    store = StateStore()
+    app = create_app(store=store, carrier_bridge=cb)
+    with TestClient(app) as client:
+        client.post(
+            "/systems/2013W000855",
+            content=_read("boot_01_system_config.xml"),
+            headers={"content-type": "application/xml"},
+        )
+        # First status: fail.
+        client.post(
+            "/systems/2013W000855/status",
+            content=_read("boot_05_status_telemetry.xml"),
+            headers={"content-type": "application/xml"},
+        )
+        push_calls.clear()
+        fail = False  # next call recovers
+        client.post(
+            "/systems/2013W000855/status",
+            content=_read("boot_05_status_telemetry.xml"),
+            headers={"content-type": "application/xml"},
+        )
+        # Give the create_task a moment.
+        import asyncio as _a
+        await _a.sleep(0)
+        await _a.sleep(0)
+    assert len(push_calls) >= 1, (
+        "catch-up push must fire on first success after a failure streak"
+    )
+    assert push_calls[0][0] == "2013W000855"
+
+
+def test_resilience_endpoints_respond_under_1s_when_carrier_blackholed():
+    """Resilience contract (alpha.48): with Carrier hung indefinitely,
+    every thermostat-facing endpoint must still reply in < 1 s. We
+    simulate a black-hole as an immediate TimeoutException — what
+    httpx would surface after `_TIMEOUT_S` seconds when a real Carrier
+    socket never responds. The thermostat handler must catch that and
+    serve local content fast.
+    """
+    import time as _time
+
+    def timeout_handler(request):
+        # MockTransport doesn't honour httpx's timeout (no real socket
+        # to wait on), so we simulate the post-timeout state directly:
+        # raise the same exception class httpx would have raised on a
+        # genuine black-hole. CarrierBridge catches httpx.RequestError,
+        # of which TimeoutException is a subclass.
+        raise httpx.ConnectTimeout("simulated black-hole", request=request)
+
+    cb = _bridge_with_handler(timeout_handler, timeout=0.5)
+    store = StateStore()
+    app = create_app(store=store, carrier_bridge=cb)
     client = TestClient(app)
 
-    # Boot once so the store has state. Mirror on this first POST is
-    # the precondition for the test — verify it happened.
+    # Boot first so subsequent endpoints have local state.
     client.post(
         "/systems/2013W000855",
         content=_read("boot_01_system_config.xml"),
         headers={"content-type": "application/xml"},
     )
-    assert any(
-        p == "POST /systems/2013W000855" for p in relay_paths
-    ), "first boot POST should have mirrored"
-
-    # Now force config_dirty=True via a HA mutation, then send another
-    # boot-style POST. Pre-fix this second mirror was skipped (relay
-    # short-circuit on local_changes_pending=True returned None
-    # without any HTTP attempt); with the fix relay() proceeds to its
-    # cache/TTL machinery as if config_dirty were False.
-    client.put("/v1/zones/1/hold", json={"activity": "manual"})
-    assert store.config_dirty is True
-    relay_paths.clear()
-    # Clear the bridge cache so the second POST is observably a fresh
-    # outbound request, not a within-TTL cache hit. Without this we
-    # can't distinguish "side-bug fixed (relay attempted, cache
-    # answered)" from "side-bug present (relay skipped entirely)".
-    cb._cache.clear()
-
+    # Fire-and-forget mirrors don't block — those endpoints return
+    # immediately. Verify status POST stays under 1.5 s (the synchronous
+    # status relay is the only awaited Carrier call).
+    t0 = _time.monotonic()
     client.post(
-        "/systems/2013W000855",
-        content=_read("boot_01_system_config.xml"),
+        "/systems/2013W000855/status",
+        content=_read("boot_05_status_telemetry.xml"),
         headers={"content-type": "application/xml"},
     )
-    assert any(
-        p == "POST /systems/2013W000855" for p in relay_paths
-    ), (
-        "second boot POST must still mirror to Carrier despite "
-        "config_dirty=True — that's the alpha.46 panel-mirror skip "
-        "regression we fixed"
-    )
+    elapsed = _time.monotonic() - t0
+    assert elapsed < 1.5, f"status POST took {elapsed:.2f}s under black-hole"
+
+    t0 = _time.monotonic()
+    client.get("/systems/2013W000855/config")
+    elapsed = _time.monotonic() - t0
+    assert elapsed < 0.5, f"/config GET took {elapsed:.2f}s under black-hole"

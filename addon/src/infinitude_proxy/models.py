@@ -549,8 +549,14 @@ class CarrierCloudHealth(BaseModel):
     lastSuccess: IsoDatetimeOut | None = None
     lastAttempt: IsoDatetimeOut | None = None
     lastError: str | None = None
-    passReqsIntervalSeconds: Annotated[int, Field(ge=10, le=3600)]
     consecutiveFailures: Annotated[int, Field(ge=0)]
+    # Circuit breaker state — alpha.48. `circuitOpen=true` means the
+    # bridge is currently refusing relays after a failure streak
+    # crossed the threshold; `circuitCooldownSeconds` is the current
+    # cooldown duration (grows exponentially up to a cap on each
+    # consecutive open→fail cycle).
+    circuitOpen: bool = False
+    circuitCooldownSeconds: Annotated[int, Field(ge=0)] = 0
 
 
 class MutationDriftEvent(BaseModel):
@@ -618,7 +624,10 @@ class Health(BaseModel):
 # ── Runtime config ───────────────────────────────────────────────────
 
 class RuntimeConfig(BaseModel):
-    passReqsIntervalSeconds: Annotated[int, Field(ge=10, le=3600)]
+    # Boolean toggle as of alpha.48 — replaces the prior numeric
+    # `passReqsIntervalSeconds` (Carrier-bridge per-call throttle).
+    # See CarrierBridge module docstring for the rationale.
+    carrierBridge: bool
     logLevel: Literal["debug", "info", "warning", "error"]
 
 

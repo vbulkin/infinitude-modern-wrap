@@ -282,14 +282,18 @@ def create_app(
         forward_proxy = ForwardProxy(capture_control=control)
     fproxy = forward_proxy
     # CarrierBridge is the implicit-relay path — mirrors thermostat
-    # status posts up to Carrier (so MyInfinity sees fresh state) and
-    # gates /systems/{id}/config on the carrier_changes window so
-    # app-initiated changes flow back down. Defaults to enabled at
-    # `pass_reqs` cadence; disable by passing a CarrierBridge with
-    # pass_reqs=0 if you want offline-first behavior.
+    # status posts up to Carrier (so MyInfinity sees fresh state),
+    # detects `serverHasChanges=true` and proactively pulls /config
+    # so app-initiated changes flow into our local tree, and pushes
+    # HA mutations upstream so Carrier's tree never drifts (alpha.47).
+    # Single boolean toggle: `Settings.carrier_bridge`. False makes
+    # the bridge fully inert — useful for offline-first deployments
+    # or when debugging upstream-related behavior. As of alpha.48
+    # there's no per-call throttle (`pass_reqs` removed); Carrier's
+    # own pingRate signal handles device-side rate limiting natively.
     if carrier_bridge is None:
         carrier_bridge = CarrierBridge(
-            pass_reqs=settings.pass_reqs, capture_control=control,
+            enabled=settings.carrier_bridge, capture_control=control,
         )
     cbridge = carrier_bridge
     # Wire the bridge into the state store so HA-originated mutations
@@ -444,8 +448,9 @@ def create_app(
                     lastSuccess=bridge_h["last_success_at"],
                     lastAttempt=bridge_h["last_attempt_at"],
                     lastError=bridge_h["last_error"],
-                    passReqsIntervalSeconds=bridge_h["pass_reqs"],
                     consecutiveFailures=bridge_h["consecutive_failures"],
+                    circuitOpen=bridge_h.get("circuit_open", False),
+                    circuitCooldownSeconds=bridge_h.get("circuit_cooldown_s", 0),
                 ),
                 stateStore=StateStoreHealth(
                     status="healthy",
@@ -490,7 +495,7 @@ def create_app(
     @app.get("/v1/config", response_model=RuntimeConfig, tags=["meta"])
     def get_config() -> RuntimeConfig:
         return RuntimeConfig(
-            passReqsIntervalSeconds=settings.pass_reqs,
+            carrierBridge=settings.carrier_bridge,
             logLevel=settings.log_level,  # type: ignore[arg-type]
         )
 

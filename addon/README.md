@@ -31,7 +31,7 @@ See [`design/DESIGN.md`](../design/DESIGN.md) for architecture and
 
 - `GET /v1/healthz` — component-scoped roll-up with thermostat staleness, state-store zones tracked, pending-write age, SSE subscriber count.
 - `GET /v1/version` — proxy version, api version, commit SHA, build time.
-- `GET /v1/config` — effective `pass_reqs` and `log_level` options.
+- `GET /v1/config` — effective `carrier_bridge` (bool, alpha.48 — replaces the prior numeric `pass_reqs`) and `log_level` options.
 
 ### State (read)
 
@@ -71,7 +71,7 @@ See [`design/DESIGN.md`](../design/DESIGN.md) for architecture and
 ### Carrier cloud relay
 
 - **Forward proxy** (catch-all): `GET/POST/PUT/PATCH /http%3A//host/...` — URL-encoded explicit forward. Allowlist-gated against `*.carrier.com` / `*.bryant.com`. Used by the thermostat for firmware OTA (`/http%3A//www.ota.ing.carrier.com/releaseNotes/...`).
-- **Implicit bridge**: every thermostat-bound POST (`/systems/{serial}/status`, `/notifications`, `/idu_config`, `/odu_config`, fallback metadata) is mirrored to `https://www.api.ing.carrier.com/...` with `pass_reqs` cache TTL. Mirrors Perl Infinitude's `before_dispatch` hook.
+- **Implicit bridge**: every thermostat-bound POST (`/systems/{serial}/status`, `/notifications`, `/idu_config`, `/odu_config`, fallback metadata) is mirrored to `https://www.api.ing.carrier.com/...` (no per-call throttle as of alpha.48 — Carrier's pingRate signal handles device-side rate-limiting natively, and a second proxy-side throttle was actively defeating that signal). Non-status mirrors fire-and-forget so a slow Carrier never makes the thermostat wait. Single boolean `carrier_bridge` (default `true`) toggles the entire bridge off for offline-first deployments.
 - **`carrier_changes` window** — when Carrier responds to a status mirror with `serverHasChanges=true`, a 120 s window opens; the next `/systems/{serial}/config` GET serves Carrier's tree (carrying app-queued MyInfinity commands), schedules a forced re-sync at +60 s, then closes the window.
 - **Directive pass-through** — when no local mutations are pending, the thermostat's status response IS Carrier's directive (with `pingRate` forced to 12). This is what surfaces Carrier's `serverHasChanges=true` to the thermostat so it actually fetches config.
 - **Per-request access log** at INFO: `relay POST https://www.api.ing.carrier.com/systems/.../status -> 200 (143ms, 287 B)` mirrors uvicorn's access-log shape so outbound traffic sits alongside inbound in the same log stream.

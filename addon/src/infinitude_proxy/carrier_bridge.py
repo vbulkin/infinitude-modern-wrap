@@ -8,41 +8,59 @@ in `before_dispatch`:
   - Mirror thermostat status posts up to Carrier so Carrier's view of
     the device matches reality. Without this, app-side state in the
     MyInfinity app stays stale.
-  - Track Carrier's `serverHasChanges` flag and open a 120 s
-    carrier-changes window when it flips on. While the window is open
-    the next `/systems/{id}/config` GET serves Carrier's tree (which
-    carries the queued app-initiated changes) instead of the local
-    one, so app commands actually reach the device.
-  - Cache by request key with `pass_reqs` TTL (default 5 min) so we
-    don't hammer Carrier on every poll. Cache bypassed while the
-    carrier-changes window is open or while local mutations are
-    pending.
+  - Detect Carrier's `serverHasChanges=true` flag in relayed status
+    responses and proactively pull `/systems/{id}/config` from Carrier
+    so HA picks up app-initiated changes within one telemetry tick
+    instead of waiting for a thermostat re-fetch cycle.
 
-Decision points mirror Perl `infinitude:259`:
-    if pass_reqs and !local_changes and (carrier_changes or !cached):
-        relay; cache response; stash for downstream handlers.
-
-Storage is in-memory — restart resets both the cache and the windows.
-The pass_reqs default (300 s) and carrier_changes window (120 s)
-match upstream defaults; both are configurable on construction.
+Storage is in-memory — restart resets bridge state. Configuration is
+a single boolean: `Settings.carrier_bridge` (default True). When
+disabled, the bridge is fully inert: zero outbound calls, all
+thermostat-facing endpoints serve local-only state.
 
 ────────────────────────────────────────────────────────────────────
-Asymmetry the bridge has to handle (alpha.47, item 3 of the
-cross-surface durability backlog)
+Why we no longer throttle / cache (alpha.48 simplification)
 ────────────────────────────────────────────────────────────────────
 
-Carrier learns about the device's config from two upstream paths:
-  1. The thermostat's `POST /systems/{serial}` boot/sync POST. The
-     thermostat does this on actual boot AND on its own internal
-     cadence after panel-originated changes. The body carries the
-     full `<system><config>...</config></system>` tree, ~30-60 KB.
-     Our bridge mirrors that POST to api.ing.carrier.com via
-     `_bridge_mirror`. This is how panel changes propagate upstream.
-  2. The MyInfinity app's direct PUTs against api.ing.carrier.com
-     (with mobile auth). We never see those — they go from the app
-     straight to Carrier and never traverse our addon.
+Earlier alphas (≤ alpha.47) carried a `pass_reqs` cadence (default
+120 s) keyed by request path that gated outbound relays — modeled
+on Perl Infinitude's `pass_reqs`. The original purpose was to limit
+how often the proxy could ask Carrier "is anything queued?" so we
+didn't hammer the API. That made sense in Perl because there was no
+push-up channel for HA mutations: every Carrier round-trip risked
+re-asserting stale state, so throttling was bug mitigation.
 
-The thermostat decides when to do (1) based on whether it considers
+We deleted that throttle (and the matching `_cache`,
+`carrier_changes_until` window, and `_scheduled_changes_at` future-
+flag mechanisms) when we landed two new pieces:
+  * `push_config` (alpha.47) — every HA mutation fires a synthetic
+    boot-style POST to Carrier so Carrier learns about it within
+    seconds. Carrier's tree is now always at-or-ahead of ours.
+  * Proactive pull (`pull_and_apply_config`, this alpha) — when we
+    see Carrier signal `serverHasChanges=true`, we pull `/config`
+    from Carrier ourselves and apply it to local state. The
+    thermostat's next `GET /config` then serves the merged tree
+    naturally; no carrier-changes window needed.
+
+Carrier's existing `pingRate` directive *already* lets it throttle
+the device-side cadence end-to-end; layering a second proxy-side
+throttle was actively defeating that signal (we were stripping
+Carrier's pingRate and forcing 12 s, even when Carrier asked for 30 s
+during their maintenance windows). After alpha.48 we forward
+Carrier's pingRate verbatim in clean state and only override when
+we have local pending writes (DIRTY=20).
+
+────────────────────────────────────────────────────────────────────
+Asymmetry that necessitated push_config (carried over from alpha.47)
+────────────────────────────────────────────────────────────────────
+
+Carrier learns about device-side config from one upstream path: the
+thermostat's `POST /systems/{serial}` boot/sync POST. The thermostat
+does this on actual boot AND on its own internal cadence after
+panel-originated changes. Our bridge mirrors that POST to
+api.ing.carrier.com. This is how panel changes propagate upstream.
+
+The thermostat decides when to re-POST based on whether it considers
 the change *device-originated* — a panel touch counts; receiving a
 config tree from `GET /systems/{serial}/config` (which our addon
 serves) does NOT, because as far as the thermostat can tell that
@@ -50,22 +68,42 @@ config came from upstream and Carrier already knows about it. From
 the thermostat's perspective there is no wire-level distinction
 between a config we built from an HA mutation and one Carrier
 queued via the MyInfinity app — both arrive over the same `GET
-/config` channel, so the thermostat treats both the same way and
-skips the upstream re-sync.
+/config` channel.
 
-Result: HA mutations land in our local tree, get pulled by the
-thermostat on the next /config GET, and stop there. Carrier never
-hears about them. The next time Carrier opens a carrier-changes
-window for some unrelated reason and we relay /config to it,
-Carrier returns its (now-stale) tree — which can still carry the
-state HA cancelled — and the change reverts.
+Result without `push_config`: HA mutations land in our local tree,
+get pulled by the thermostat on the next /config GET, and stop
+there. Carrier never hears about them. The `push_config` method
+synthesizes the exact wire shape the thermostat would have produced
+after a panel change, using auth headers cached from the most
+recent inbound thermostat request, so Carrier's tree matches HA's
+within ~1 s of every HA mutation.
 
-The push_config method below addresses this by synthesizing the
-exact wire shape the thermostat would have produced after a panel
-change, using auth headers cached from the most recent inbound
-thermostat request. To Carrier this is indistinguishable from a
-real device-side config sync; Carrier updates its tree and stops
-re-asserting the stale state.
+────────────────────────────────────────────────────────────────────
+Resilience contract (alpha.48)
+────────────────────────────────────────────────────────────────────
+
+The addon must remain fully operational when Carrier is unreachable
+— internet down, Carrier's API in maintenance, DNS failure, etc.
+Concretely:
+
+  1. Errors never propagate. Every outbound call (`relay`,
+     `push_config`, `pull_and_apply_config`) catches network errors
+     and returns False/None; the calling thermostat handler always
+     responds locally.
+
+  2. Latency is bounded. Thermostat-facing endpoints respond in
+     < 1 s even when Carrier has been black-holed for hours, via:
+       * A 3 s ceiling on every outbound httpx call (`_TIMEOUT_S`).
+       * A circuit breaker that short-circuits relay attempts after
+         N consecutive failures, opening for an exponentially-growing
+         cooldown up to 5 min. Reset on first success.
+       * Fire-and-forget for non-status mirrors (notifications,
+         idu_config, etc.) — those don't need Carrier's response.
+
+  3. Catch-up on recovery. When the bridge transitions from failing
+     to succeeding, we fire one synthetic `push_config` carrying the
+     current local tree, so any HA mutations that occurred during
+     the outage propagate to Carrier without operator intervention.
 """
 
 from __future__ import annotations
@@ -83,29 +121,25 @@ from .capture import CaptureControl
 
 logger = logging.getLogger(__name__)
 
-# Carrier's HTTPS endpoint hosts. The thermostat is configured with
+# Carrier's HTTPS endpoint host. The thermostat is configured with
 # the API host and reaches it via DNS-overridden routing to our addon;
-# we mirror to the real cloud over HTTPS. The bryant.com mirror is
-# kept as a fallback for Bryant-branded units.
+# we mirror to the real cloud over HTTPS.
 _DEFAULT_UPSTREAM_HOST = "www.api.ing.carrier.com"
 
-# Default pass_reqs cadence (seconds). 120 was chosen to match the
-# addon's `config.yaml` default — this constructor default is only
-# used by direct instantiation (tests / standalone scripts);
-# production reads `settings.pass_reqs`. Upstream Perl Infinitude's
-# default is `60*5=300` (`infinitude:47`), but a faster cadence keeps
-# Carrier's view of the device fresher for MyInfinity-app round-trips.
-# Set to 0 to disable mirroring entirely.
-_DEFAULT_PASS_REQS_S = 120
+# httpx total request timeout. Tight ceiling — thermostat is awaiting
+# our reply on inline-await calls (status POST, /config GET fallback).
+# Carrier responses observed live well under 1 s; 3 s gives headroom
+# without making the thermostat hang on a slow Carrier.
+_TIMEOUT_S = 3.0
 
-# Length of the carrier-changes window opened when Carrier reports
-# `serverHasChanges=true` in a relayed status POST. Matches upstream
-# `$store->set(carrier_changes => time, 120)` in `infinitude:610`.
-_DEFAULT_CARRIER_CHANGES_S = 120
-
-# httpx total request timeout. Carrier's API is generally fast; we
-# bound it so a hung relay can't block thermostat replies.
-_TIMEOUT_S = 10.0
+# Circuit breaker — bridge enters open state after this many
+# consecutive failures, refusing relays for the cooldown duration.
+# Each open/re-fail extends the cooldown exponentially up to the cap,
+# so a sustained Carrier outage costs us at most one timeout per
+# `_CIRCUIT_COOLDOWN_MAX_S`, not one per call.
+_CIRCUIT_FAILURE_THRESHOLD = 3
+_CIRCUIT_COOLDOWN_INITIAL_S = 30
+_CIRCUIT_COOLDOWN_MAX_S = 300
 
 # `serverHasChanges` extraction — small XML fragment, no need for a
 # full parse (and parsing would couple us to the response shape).
@@ -127,62 +161,67 @@ _HOP_BY_HOP_REQUEST = frozenset({
 
 @dataclass(frozen=True)
 class CachedRelay:
-    """One Carrier round-trip's bytes, kept by request key."""
+    """One Carrier round-trip's bytes.
+
+    Name is historic — alpha.0–47 cached these by request key with a
+    `pass_reqs` TTL. Cache layer was deleted in alpha.48; the type
+    is kept as the structured return value of `relay()` and the
+    capture-traffic table column shape so we don't churn unrelated
+    code.
+    """
     status_code: int
     body: bytes
     content_type: str | None
     cached_at: datetime
 
 
-def _action_key(method: str, path: str, query: str | None) -> str:
-    """Cache key — method + path + query (no Host since we always
-    relay to the same upstream host). Path-only would collide
-    cross-method; mirroring upstream's `nk = path` keying because
-    in practice GET and POST never share a path."""
-    base = f"{method.upper()} {path}"
-    if query:
-        base = f"{base}?{query}"
-    return base
-
-
 class CarrierBridge:
     """Per-app singleton wired into the southbound router.
 
-    `pass_reqs=0` disables the bridge entirely — use this when the
-    operator wants the addon's local processing to be authoritative
-    and never reaches out to Carrier (offline-first deployments).
+    `enabled=False` makes the bridge fully inert — no outbound calls,
+    no httpx client opened. Use this for offline-first deployments
+    where the operator wants the addon to never reach Carrier.
     """
 
     def __init__(
         self,
         *,
+        enabled: bool = True,
         upstream_host: str = _DEFAULT_UPSTREAM_HOST,
-        pass_reqs: int = _DEFAULT_PASS_REQS_S,
-        carrier_changes_window: int = _DEFAULT_CARRIER_CHANGES_S,
         timeout: float = _TIMEOUT_S,
         capture_control: CaptureControl | None = None,
+        circuit_failure_threshold: int = _CIRCUIT_FAILURE_THRESHOLD,
+        circuit_cooldown_initial_s: int = _CIRCUIT_COOLDOWN_INITIAL_S,
+        circuit_cooldown_max_s: int = _CIRCUIT_COOLDOWN_MAX_S,
     ) -> None:
+        self._enabled = enabled
         self._upstream_host = upstream_host
-        self._pass_reqs = pass_reqs
-        self._window_seconds = carrier_changes_window
         self._timeout = timeout
         self._capture = capture_control
         self._client: httpx.AsyncClient | None = None
-        self._cache: dict[str, CachedRelay] = {}
-        self._carrier_changes_until: datetime | None = None
-        # Future-timestamp scheduled-changes flag — set after we serve
-        # Carrier's tree from `/systems/{id}/config` to force a follow-up
-        # config-fetch cycle ~60 s later, mirroring Perl
-        # `infinitude:572`'s `$store->set(changes => time+60)`. The next
-        # status POST consumes it once `now > scheduled_at`.
-        self._scheduled_changes_at: datetime | None = None
         # Health stats — surfaced via /v1/healthz so the addon UI's
-        # carrierCloud indicator reflects actual upstream reachability
-        # rather than a hardcoded "disabled".
+        # carrierCloud indicator reflects actual upstream reachability.
         self._last_success_at: datetime | None = None
         self._last_attempt_at: datetime | None = None
         self._last_error: str | None = None
         self._consecutive_failures: int = 0
+        # Latch flipped when a relay succeeds after a failure streak;
+        # consumed by the caller (`southbound.post_telemetry`) to fire
+        # a catch-up `push_config` so any HA mutations that happened
+        # during the outage propagate to Carrier without operator
+        # intervention. Single-use semantics: set on transition,
+        # cleared by `take_just_recovered()`.
+        self._just_recovered: bool = False
+        # Circuit breaker state. `_circuit_open_until` is the wall
+        # time after which we'll attempt another relay. While open we
+        # short-circuit `relay()` to None without touching httpx.
+        # `_circuit_cooldown_s` is the current cooldown duration; it
+        # doubles on each open→fail until capped at the max.
+        self._circuit_open_until: datetime | None = None
+        self._circuit_cooldown_s: int = circuit_cooldown_initial_s
+        self._circuit_failure_threshold = circuit_failure_threshold
+        self._circuit_cooldown_initial_s = circuit_cooldown_initial_s
+        self._circuit_cooldown_max_s = circuit_cooldown_max_s
         # Latest auth-relevant request headers seen on a thermostat-
         # originated relay. Used by `push_config` so HA-driven config
         # updates can be POSTed upstream as if they came from the
@@ -196,10 +235,10 @@ class CarrierBridge:
 
     @property
     def enabled(self) -> bool:
-        return self._pass_reqs > 0
+        return self._enabled
 
     async def open(self) -> None:
-        if self._client is not None or not self.enabled:
+        if self._client is not None or not self._enabled:
             return
         self._client = httpx.AsyncClient(
             timeout=self._timeout, follow_redirects=False,
@@ -210,51 +249,25 @@ class CarrierBridge:
             await self._client.aclose()
             self._client = None
 
-    # ── Public state accessors ───────────────────────────────────────
-
-    def carrier_changes_active(self) -> bool:
-        """True iff Carrier signalled `serverHasChanges` recently and
-        the 120 s window hasn't elapsed."""
-        until = self._carrier_changes_until
-        return until is not None and datetime.now(timezone.utc) < until
-
-    def open_carrier_changes_window(self) -> None:
-        self._carrier_changes_until = (
-            datetime.now(timezone.utc) + timedelta(seconds=self._window_seconds)
-        )
-
-    def close_carrier_changes_window(self) -> None:
-        self._carrier_changes_until = None
-
-    def get_cached(self, key: str) -> CachedRelay | None:
-        return self._cache.get(key)
-
-    def schedule_changes(self, seconds: int = 60) -> None:
-        """Arm the delayed-changes flag — at `now + seconds` and beyond,
-        the next call to `consume_scheduled_changes()` returns True.
-        Mirrors Perl's `$store->set(changes => time+60)` after a Carrier
-        config has been served. Idempotent: calling again replaces the
-        deadline rather than queuing multiple."""
-        self._scheduled_changes_at = (
-            datetime.now(timezone.utc) + timedelta(seconds=seconds)
-        )
+    # ── Health / circuit breaker ────────────────────────────────────
 
     def health(self) -> dict:
         """Snapshot the bridge's reachability state for /v1/healthz.
 
-        - `disabled` when `pass_reqs=0` (operator turned the bridge off).
+        - `disabled` when the operator turned the bridge off.
         - `unknown` when enabled but no relay has been attempted yet
           (process just started, no thermostat traffic yet).
-        - `healthy` when the most recent attempt succeeded.
-        - `degraded` when one or more recent attempts failed (consecutive
-          failures > 0). The /v1/healthz overall status downgrades to
-          `degraded` whenever any component is in this state.
+        - `healthy` when the most recent attempt succeeded and the
+          circuit breaker is closed.
+        - `degraded` when consecutive failures > 0 OR the circuit
+          breaker is open. The /v1/healthz overall status downgrades
+          to `degraded` whenever any component is in this state.
         """
-        if not self.enabled:
+        if not self._enabled:
             status = "disabled"
         elif self._last_attempt_at is None:
             status = "unknown"
-        elif self._consecutive_failures > 0:
+        elif self._consecutive_failures > 0 or self._circuit_open():
             status = "degraded"
         else:
             status = "healthy"
@@ -264,47 +277,82 @@ class CarrierBridge:
             "last_attempt_at": self._last_attempt_at,
             "last_error": self._last_error,
             "consecutive_failures": self._consecutive_failures,
-            "pass_reqs": self._pass_reqs,
+            "circuit_open": self._circuit_open(),
+            "circuit_cooldown_s": self._circuit_cooldown_s,
+            # Kept for backwards-compatible /v1/healthz consumers
+            # that read `pass_reqs`. Always 0 now (no throttle).
+            "pass_reqs": 0,
         }
 
-    def consume_scheduled_changes(self) -> bool:
-        """Atomic: return True iff a scheduled-changes deadline exists
-        and has elapsed; clear it on success. Returns False otherwise.
-
-        Called from the status-POST handler. The semantics match Perl
-        `infinitude:589`: `if ($changes =~ /\\d+/) { $changes = (time>$changes) ? 'true' : '' }`
-        followed by `$store->set(changes=>'')` on consumption.
-        """
-        deadline = self._scheduled_changes_at
-        if deadline is None:
+    def _circuit_open(self) -> bool:
+        """True iff we're currently refusing relays due to past
+        failures. Self-closing on deadline elapsed."""
+        if self._circuit_open_until is None:
             return False
-        if datetime.now(timezone.utc) < deadline:
+        if datetime.now(timezone.utc) >= self._circuit_open_until:
+            self._circuit_open_until = None
             return False
-        self._scheduled_changes_at = None
         return True
 
+    def _record_success(self) -> None:
+        """Reset failure counters + circuit breaker. Latches
+        `_just_recovered` if we transitioned from a failing state so
+        a caller can fire a catch-up push (consumed via
+        `take_just_recovered`)."""
+        was_failing = (
+            self._consecutive_failures > 0 or self._circuit_open_until is not None
+        )
+        self._consecutive_failures = 0
+        self._last_error = None
+        self._last_success_at = self._last_attempt_at
+        self._circuit_open_until = None
+        self._circuit_cooldown_s = self._circuit_cooldown_initial_s
+        if was_failing:
+            self._just_recovered = True
+            logger.info(
+                "carrier_bridge: recovered (consecutive failures cleared); "
+                "next caller should fire a catch-up push to resync upstream",
+            )
+
+    def take_just_recovered(self) -> bool:
+        """Atomic check-and-clear of the recovery latch. Returns True
+        once after the bridge transitions failing → succeeding;
+        subsequent calls return False until the next failure streak."""
+        if self._just_recovered:
+            self._just_recovered = False
+            return True
+        return False
+
+    def _record_failure(self, error: str) -> None:
+        """Increment failure counter and open the circuit breaker if
+        we've crossed the threshold. Cooldown grows exponentially up
+        to the cap on each consecutive open→fail cycle."""
+        self._consecutive_failures += 1
+        self._last_error = error
+        if self._consecutive_failures >= self._circuit_failure_threshold:
+            self._circuit_open_until = (
+                datetime.now(timezone.utc)
+                + timedelta(seconds=self._circuit_cooldown_s)
+            )
+            # Double the cooldown for the *next* open → fail cycle,
+            # so a persistent outage doesn't keep retrying every
+            # `_CIRCUIT_COOLDOWN_INITIAL_S`. Capped at the max.
+            self._circuit_cooldown_s = min(
+                self._circuit_cooldown_s * 2,
+                self._circuit_cooldown_max_s,
+            )
+            logger.warning(
+                "carrier_bridge: circuit opened after %d consecutive "
+                "failures; cooldown=%ds (last error: %s)",
+                self._consecutive_failures,
+                int(
+                    (self._circuit_open_until
+                     - datetime.now(timezone.utc)).total_seconds()
+                ),
+                error,
+            )
+
     # ── Mirror flow ──────────────────────────────────────────────────
-
-    def should_relay(self, action_key: str, *, local_changes_pending: bool) -> bool:
-        """Decision matches `infinitude:266`:
-
-            pass_reqs enabled
-            AND no local changes pending (don't leak in-flight state
-                to Carrier; we want the thermostat to pull our local
-                tree first)
-            AND (carrier_changes window open OR cache miss / stale)
-        """
-        if not self.enabled:
-            return False
-        if local_changes_pending:
-            return False
-        if self.carrier_changes_active():
-            return True
-        cached = self._cache.get(action_key)
-        if cached is None:
-            return True
-        age = (datetime.now(timezone.utc) - cached.cached_at).total_seconds()
-        return age >= self._pass_reqs
 
     async def relay(
         self,
@@ -316,46 +364,40 @@ class CarrierBridge:
         body: bytes | None = None,
         local_changes_pending: bool = False,
     ) -> CachedRelay | None:
-        """Forward one request to Carrier and cache the response.
+        """Forward one request to Carrier and return the response.
 
-        Returns the relayed (or cached) `CachedRelay` if mirroring was
-        eligible, else None — callers fall back to local-only handling.
-
-        Network failures return None and are logged at WARNING; we
-        deliberately do *not* propagate them to the thermostat caller,
-        matching the Perl behavior where a Carrier outage is
+        Returns the relayed response if the bridge is enabled, the
+        circuit breaker is closed, and `local_changes_pending=False`
+        — else returns None and the caller falls back to local-only
+        handling. Network failures return None and are logged at
+        WARNING; we deliberately do *not* propagate them to the
+        caller, matching the Perl behavior where a Carrier outage is
         transparent to the device.
+
+        `local_changes_pending`: pass True only for thermostat-facing
+        outbound polls where HA has a write queued (the thermostat
+        will pull our local tree next, and Carrier's stale view
+        shouldn't race that). Pass False for thermostat-originated
+        POSTs (the body IS the device's authoritative state — see
+        the alpha.46 panel-mirror-skip side bug for why this matters).
         """
-        key = _action_key(method, path, query)
-        if not self.should_relay(key, local_changes_pending=local_changes_pending):
-            cached_hit = self._cache.get(key)
-            # Log at DEBUG so the operator can ask "why did/didn't we
-            # relay?" without the per-poll INFO noise. Three reasons
-            # short-circuit a relay: bridge disabled (pass_reqs=0),
-            # local mutation pending, or cache hit within TTL.
-            if not self.enabled:
-                reason = "disabled (pass_reqs=0)"
-            elif local_changes_pending:
-                reason = "local-changes-pending"
-            elif self.carrier_changes_active():
-                reason = "window-open (should not happen — bug)"
-            elif cached_hit is not None:
-                age = (
-                    datetime.now(timezone.utc) - cached_hit.cached_at
-                ).total_seconds()
-                reason = f"cache-hit age={age:.0f}s ttl={self._pass_reqs}s"
-            else:
-                reason = "unknown"
+        if not self._enabled:
+            return None
+        if local_changes_pending:
             logger.debug(
-                "skip %s %s — %s%s",
-                method.upper(), path, reason,
-                f" (returning cached status={cached_hit.status_code})"
-                if cached_hit is not None else "",
+                "carrier_bridge: skip %s %s — local changes pending",
+                method.upper(), path,
             )
-            return cached_hit
+            return None
+        if self._circuit_open():
+            logger.debug(
+                "carrier_bridge: skip %s %s — circuit open",
+                method.upper(), path,
+            )
+            return None
         if self._client is None:
             logger.debug(
-                "skip %s %s — client not initialized",
+                "carrier_bridge: skip %s %s — client not initialized",
                 method.upper(), path,
             )
             return None
@@ -384,11 +426,7 @@ class CarrierBridge:
             )
         except httpx.RequestError as e:
             duration_ms = int((time.monotonic() - start) * 1000)
-            self._consecutive_failures += 1
-            self._last_error = f"{type(e).__name__}: {e}"
-            # Match the access-log shape (method url -> status (Nms))
-            # so failures sit alongside successes when the operator
-            # tail's the addon log.
+            self._record_failure(f"{type(e).__name__}: {e}")
             logger.warning(
                 'relay %s %s -> error %s (%dms)',
                 method.upper(), url, type(e).__name__, duration_ms,
@@ -401,46 +439,30 @@ class CarrierBridge:
         # (we sent something they didn't like) and counts as success
         # since the round-trip itself worked.
         if response.status_code >= 500:
-            self._consecutive_failures += 1
-            self._last_error = f"HTTP {response.status_code}"
+            self._record_failure(f"HTTP {response.status_code}")
         else:
-            self._consecutive_failures = 0
-            self._last_error = None
-            self._last_success_at = self._last_attempt_at
+            self._record_success()
 
         duration_ms = int((time.monotonic() - start) * 1000)
-        cached = CachedRelay(
+        relay_response = CachedRelay(
             status_code=response.status_code,
             body=response.content,
             content_type=response.headers.get("content-type"),
             cached_at=datetime.now(timezone.utc),
         )
-        self._cache[key] = cached
 
         # Per-request access-log — INFO level, formatted like uvicorn's
         # access log so outbound Carrier traffic is visible in the
         # same `journalctl`/Apps log stream as inbound thermostat
-        # traffic. Body length helps spot empty / truncated responses
-        # at a glance.
+        # traffic.
         logger.info(
             'relay %s %s -> %d (%dms, %d B)',
             method.upper(), url,
-            response.status_code, duration_ms, len(cached.body),
+            response.status_code, duration_ms, len(relay_response.body),
         )
 
-        # The carrier-changes window is opened on Carrier saying
-        # `serverHasChanges=true` in a relayed STATUS post. Don't
-        # extend on cache hits — the trigger is a fresh signal, not a
-        # stored one.
-        if path.endswith("/status") and self._has_server_changes(cached.body):
-            self.open_carrier_changes_window()
-            logger.info(
-                "opened carrier_changes window (%ds) on serverHasChanges=true",
-                self._window_seconds,
-            )
-
         await self._capture_success(method, path, query, body, response, start)
-        return cached
+        return relay_response
 
     async def push_config(self, serial: str, body: bytes) -> bool:
         """Synthesize a thermostat-style boot POST so Carrier learns
@@ -467,19 +489,23 @@ class CarrierBridge:
         is a best-effort consistency layer, not the success criterion
         for the user-visible action.
 
-        No-ops in three cases:
-          * `pass_reqs=0` (operator disabled the bridge entirely).
+        No-ops in four cases:
+          * bridge disabled by operator (`enabled=False`).
           * httpx client not yet opened (lifespan hasn't run).
+          * circuit breaker is open (recent failures).
           * No thermostat auth headers cached yet (cold start before
             the first inbound thermostat request).
-        Each is logged at DEBUG/WARNING so the operator can tell why
-        a push didn't happen.
+        Each is logged so the operator can tell why a push didn't
+        happen.
         """
-        if not self.enabled:
-            logger.debug("push_config: bridge disabled (pass_reqs=0)")
+        if not self._enabled:
+            logger.debug("push_config: bridge disabled")
             return False
         if self._client is None:
             logger.debug("push_config: httpx client not initialized")
+            return False
+        if self._circuit_open():
+            logger.debug("push_config: circuit open; deferring upstream sync")
             return False
         if self._latest_auth_headers is None:
             # This is genuinely common during the first ~30 s of
@@ -497,14 +523,7 @@ class CarrierBridge:
 
         path = f"/systems/{serial}"
         url = f"https://{self._upstream_host}{path}"
-        # Re-sanitize even though _latest_auth_headers is already
-        # sanitized — defensive against future code paths that might
-        # populate the cache from a different code path. The
-        # sanitizer always sets `host` to upstream_host, so we don't
-        # leak the proxy's local host header.
         outgoing_headers = self._sanitize_request_headers(self._latest_auth_headers)
-        # The thermostat's real POST sets this content-type; Carrier's
-        # parser is content-type-sensitive on this endpoint.
         outgoing_headers["content-type"] = "application/x-www-form-urlencoded"
 
         start = time.monotonic()
@@ -517,8 +536,7 @@ class CarrierBridge:
             )
         except httpx.RequestError as e:
             duration_ms = int((time.monotonic() - start) * 1000)
-            self._consecutive_failures += 1
-            self._last_error = f"push_config {type(e).__name__}: {e}"
+            self._record_failure(f"push_config {type(e).__name__}: {e}")
             logger.warning(
                 "push_config %s -> error %s (%dms)",
                 url, type(e).__name__, duration_ms,
@@ -527,18 +545,10 @@ class CarrierBridge:
             return False
 
         duration_ms = int((time.monotonic() - start) * 1000)
-        if 200 <= response.status_code < 500 and response.status_code != 401:
-            # Non-5xx (and not auth-expired) counts as upstream
-            # reachable. We don't update _last_success_at on 4xx
-            # because that would mask "Carrier rejected our shape"
-            # bugs — push success requires 2xx.
-            if 200 <= response.status_code < 300:
-                self._consecutive_failures = 0
-                self._last_error = None
-                self._last_success_at = self._last_attempt_at
-        else:
-            self._consecutive_failures += 1
-            self._last_error = f"push_config HTTP {response.status_code}"
+        if 200 <= response.status_code < 300:
+            self._record_success()
+        elif response.status_code >= 500:
+            self._record_failure(f"push_config HTTP {response.status_code}")
 
         logger.info(
             "push %s %s -> %d (%dms, %d B body)",
@@ -546,6 +556,68 @@ class CarrierBridge:
         )
         await self._capture_success("POST", path, None, body, response, start)
         return 200 <= response.status_code < 300
+
+    async def pull_and_apply_config(self, serial: str, store) -> bool:
+        """Proactively fetch Carrier's `/config` tree and apply it
+        locally.
+
+        Triggered by `southbound.post_telemetry` when a relayed status
+        response carried `serverHasChanges=true`. This collapses the
+        legacy "carrier_changes window" mechanism into a direct state
+        apply: instead of waiting for the thermostat to do its next
+        `GET /config`, relaying that to Carrier, and merging in-band,
+        we pull from Carrier ourselves on the same status-POST tick
+        and apply the result to local state. The thermostat's next
+        `GET /config` then serves our merged local tree naturally.
+
+        Side effects:
+          * `store.apply_config` runs the pending-write replay path,
+            so any HA-side mutations queued in `pending_writes`
+            (within the grace window) are merged onto Carrier's tree.
+          * After apply, we mark `config_dirty=True` so the next
+            status-POST directive tells the thermostat to pull the
+            fresh tree.
+
+        Returns True iff Carrier returned a 200 with a parseable body
+        we successfully applied. Failures are logged but not
+        propagated — HA's view of state stays whatever it was; the
+        thermostat keeps running on its existing tree.
+        """
+        if not self._enabled or self._client is None:
+            return False
+        # Re-use the same relay machinery (circuit breaker, auth
+        # capture, capture-traffic insertion all consistent).
+        relayed = await self.relay(
+            "GET", f"/systems/{serial}/config",
+            local_changes_pending=False,
+        )
+        if relayed is None or relayed.status_code != 200 or not relayed.body:
+            return False
+        # Local imports to avoid circular: parser/state_store both
+        # import this module's name.
+        from .parser import parse_system_config_with_tree
+        try:
+            tree, config = parse_system_config_with_tree(relayed.body)
+        except Exception as e:
+            logger.warning(
+                "pull_and_apply_config: parse failed for serial=%s: %s",
+                serial, e,
+            )
+            return False
+        await store.apply_config(serial, config, tree)
+        # Force dirty so the next status-POST directive signals
+        # configHasChanges=true and the thermostat fetches the new
+        # tree. apply_config only sets dirty automatically when its
+        # replay layer mutates the tree (i.e. there were pending HA
+        # writes); on a clean Carrier-app-set apply with no pending
+        # writes, dirty would otherwise stay False and the device
+        # wouldn't pick up the change until something else flipped it.
+        await store.mark_config_dirty()
+        logger.info(
+            "pull_and_apply_config: applied Carrier tree to local "
+            "store (serial=%s, %d B)", serial, len(relayed.body),
+        )
+        return True
 
     # ── Internal helpers ─────────────────────────────────────────────
 
@@ -562,7 +634,10 @@ class CarrierBridge:
         return out
 
     @staticmethod
-    def _has_server_changes(body: bytes) -> bool:
+    def has_server_changes(body: bytes) -> bool:
+        """True iff a relayed status response carries
+        `<serverHasChanges>true</serverHasChanges>`. Public so
+        southbound can decide whether to fire `pull_and_apply_config`."""
         m = _SERVER_HAS_CHANGES_RE.search(body or b"")
         return m is not None and m.group(1).lower() == b"true"
 
@@ -638,9 +713,6 @@ class CarrierBridge:
                 captured_at=time.time(),
                 direction="carrier_out",
                 method=method,
-                # Store the full target URL so the operator can tell
-                # bridge-relayed traffic apart from forward-proxy
-                # at a glance — both share direction='carrier_out'.
                 path=f"https://{self._upstream_host}{path}",
                 query=query,
                 status_code=status_code,
@@ -657,3 +729,18 @@ class CarrierBridge:
                 "carrier_bridge: capture insert failed for %s %s",
                 method, path,
             )
+
+
+def _action_key(method: str, path: str, query: str | None) -> str:
+    """Compose a stable identifier for a Carrier-bound request.
+
+    Kept after the alpha.48 cache deletion because tests still use it
+    as a stable label and a future capture-correlation column would
+    need the same shape. Path-only keying mirrored upstream Perl
+    `$nk = $url->path->to_string` (with a `-` separator instead of
+    `/`).
+    """
+    base = f"{method.upper()} {path}"
+    if query:
+        base = f"{base}?{query}"
+    return base

@@ -11,9 +11,9 @@ server settings and at what interval.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
-import re
 from pathlib import Path
 from urllib.parse import unquote_to_bytes
 
@@ -31,6 +31,7 @@ from .parser import (
     parse_system_config_with_tree,
     parse_telemetry,
     serialize_config_tree,
+    serialize_system_post_body,
 )
 from .state_store import StateStore
 
@@ -111,22 +112,6 @@ def _unwrap_form(body: bytes) -> bytes:
     return body
 
 
-# Match Perl `infinitude:597-601`: when we replay Carrier's directive
-# verbatim to the thermostat, force `pingRate` to the clean cadence
-# regardless of what Carrier returned. Carrier sometimes returns its
-# own pingRate hint (e.g. 30 s during planned-server-maintenance) that
-# we don't want governing local writes — the thermostat would then
-# re-poll us 2.5x slower than our own dirty-flag dictates.
-_PING_RATE_RE = re.compile(rb"<pingRate>\s*\d+\s*</pingRate>")
-
-
-def _override_ping_rate(body: bytes, rate: int) -> bytes:
-    return _PING_RATE_RE.sub(
-        f"<pingRate>{rate}</pingRate>".encode("ascii"),
-        body, count=1,
-    )
-
-
 def create_southbound_router(
     store: StateStore,
     bridge: CarrierBridge | None = None,
@@ -138,20 +123,14 @@ def create_southbound_router(
         body = await request.body()
         snapshot = parse_telemetry(_unwrap_form(body))
         await store.apply_telemetry(serial, snapshot)
-        # Combine local-mutation flag and the post-Carrier-config
-        # scheduled flag into one "any changes pending" decision —
-        # mirrors Perl `infinitude:589` where `changes` can be either
-        # 'true' or a future timestamp that becomes true when reached.
         local_changes = await store.take_config_dirty()
-        scheduled_due = (
-            bridge.consume_scheduled_changes() if bridge is not None else False
-        )
-        has_changes = local_changes or scheduled_due
-        # Mirror status post to Carrier when the bridge is enabled
-        # AND no local changes pending — Perl `infinitude:266`. Local
-        # changes mean our directive says configHasChanges=true; the
-        # thermostat will pull our local tree, and Carrier's stale
-        # view shouldn't race that.
+        # Mirror status post to Carrier (every tick — no throttle as of
+        # alpha.48; Carrier's pingRate handles device-side rate limiting
+        # natively). Skip the relay only when HA has a write queued —
+        # the thermostat will pull our local tree next, and Carrier's
+        # stale view shouldn't race that. Otherwise we always relay so
+        # Carrier's view of telemetry stays current and we get to see
+        # `serverHasChanges=true` as soon as Carrier flips it.
         relayed: CachedRelay | None = None
         if bridge is not None:
             relayed = await bridge.relay(
@@ -160,44 +139,104 @@ def create_southbound_router(
                 query=str(request.url.query) or None,
                 headers=dict(request.headers),
                 body=body,
-                local_changes_pending=has_changes,
+                local_changes_pending=local_changes,
             )
-        # Directive selection — Perl `infinitude:597-601`:
-        #   - Local changes pending: send our local directive with
-        #     configHasChanges=true. Carrier's response is ignored
-        #     for this cycle (we already skipped the relay anyway).
+        # Proactive pull on serverHasChanges=true. Carrier signals this
+        # when the MyInfinity app has queued a config change for the
+        # device. Pre-alpha.48 we'd open a 120 s "carrier_changes
+        # window" and wait for the thermostat to do GET /config, then
+        # relay that GET to Carrier and merge in-band. That worked but
+        # tied state propagation to the thermostat's polling cadence
+        # and forced merge-on-the-critical-path. Now we pull from
+        # Carrier ourselves on this same status tick (background
+        # task — doesn't block the directive reply), apply the merged
+        # tree to local state, and mark dirty so the next directive
+        # tells the thermostat to fetch our updated tree. Net latency
+        # is the same or better, and the carrier_changes-window
+        # mechanism becomes vestigial.
+        if (
+            bridge is not None
+            and not local_changes
+            and relayed is not None
+            and relayed.status_code == 200
+            and bridge.has_server_changes(relayed.body)
+        ):
+            asyncio.create_task(
+                bridge.pull_and_apply_config(serial, store),
+                name=f"carrier_pull_{serial}",
+            )
+
+        # Catch-up push on bridge recovery. If the bridge just
+        # transitioned from failing → succeeding, fire one synthetic
+        # push_config carrying the current local tree so any HA
+        # mutations that occurred during the outage propagate to
+        # Carrier without operator intervention. take_just_recovered
+        # is consume-on-read so this only fires once per recovery.
+        if bridge is not None and bridge.take_just_recovered():
+            stored = store.get_config()
+            if stored is not None:
+                catchup_body = serialize_system_post_body(stored.tree)
+                asyncio.create_task(
+                    bridge.push_config(serial, catchup_body),
+                    name=f"carrier_catchup_{serial}",
+                )
+                logger.info(
+                    "carrier_bridge: firing catch-up push_config after "
+                    "recovery (serial=%s, %d B)", serial, len(catchup_body),
+                )
+        # Directive selection:
+        #   - Local changes pending: send configHasChanges=true with
+        #     our DIRTY pingRate so the thermostat re-polls fast and
+        #     picks up our local tree.
         #   - Otherwise, if Carrier responded with a directive body,
-        #     replay it to the thermostat with pingRate forced to
-        #     the clean cadence. This is the path that propagates
-        #     Carrier's `serverHasChanges=true` to the thermostat so
-        #     it actually fetches config (without this, the
-        #     `carrier_changes` window would expire unused after
-        #     120 s).
-        #   - Else build our local directive normally.
-        if has_changes:
+        #     forward it VERBATIM (including Carrier's pingRate).
+        #     Pre-alpha.48 we stripped Carrier's pingRate and forced
+        #     12 s — that defeated Carrier's authoritative rate-limit
+        #     signal. Carrier's pingRate is now respected end-to-end
+        #     in clean state; only DIRTY state overrides.
+        #   - Else build our local directive normally (CLEAN cadence).
+        if local_changes:
             content = _directive_xml(True)
         elif relayed is not None and relayed.status_code == 200 and relayed.body:
-            content = _override_ping_rate(relayed.body, DIRECTIVE_PING_RATE_CLEAN)
+            content = relayed.body
         else:
             content = _directive_xml(False)
         return Response(content=content, media_type="application/xml")
 
-    async def _bridge_mirror(method: str, path: str, request: Request, body: bytes | None = None) -> CachedRelay | None:
-        """Fire-and-forget mirror to Carrier — used by routes whose
-        local response shape we own (we ignore Carrier's response
-        body but still want Carrier to see the same traffic the
-        thermostat sends). Returns None when the bridge is disabled
-        or the relay fails. Local-changes flag is read non-
-        destructively here: these routes don't dictate the directive,
-        so they shouldn't consume the dirty bit."""
+    def _bridge_mirror_fire_and_forget(
+        method: str, path: str, request: Request, body: bytes | None = None,
+    ) -> None:
+        """Fire-and-forget mirror to Carrier for routes whose local
+        response shape we own (we ignore Carrier's response body but
+        still want Carrier to see the same traffic the thermostat
+        sends). Used by notifications, idu_config, odu_config,
+        equipment_events, energy, boot POST.
+
+        Why fire-and-forget: these routes don't depend on Carrier's
+        response, but pre-alpha.48 the relay was synchronously
+        awaited — so a slow or unreachable Carrier would make the
+        thermostat wait up to 10 s per call. With the change, the
+        thermostat replies in the local response time (<10 ms) and
+        the upstream mirror runs on the event loop in the background.
+        Errors inside the relay are caught + logged; a discarded task
+        can't surface an unhandled exception.
+
+        local_changes_pending=False because these are thermostat-
+        originated POSTs — the body IS the device's authoritative
+        state, NOT a poll where HA-side dirty bit could race. (See
+        the alpha.46 panel-mirror-skip side bug fix for context.)
+        """
         if bridge is None:
-            return None
-        return await bridge.relay(
-            method, path,
-            query=str(request.url.query) or None,
-            headers=dict(request.headers),
-            body=body,
-            local_changes_pending=store.config_dirty,
+            return
+        asyncio.create_task(
+            bridge.relay(
+                method, path,
+                query=str(request.url.query) or None,
+                headers=dict(request.headers),
+                body=body,
+                local_changes_pending=False,
+            ),
+            name=f"carrier_mirror_{method}_{path}",
         )
 
     async def _bridge_relay_or_local(
@@ -208,8 +247,21 @@ def create_southbound_router(
         else fall through to a local stub. The release-notes /
         manifest / utility-events stubs all use this — Carrier may
         actually have content for any of them, and our local stub
-        is just to keep the thermostat from retry-storming."""
-        relayed = await _bridge_mirror(method, path, request, body=None)
+        is just to keep the thermostat from retry-storming.
+
+        Synchronous because the response body is what we serve back
+        to the thermostat. Bounded by `CarrierBridge._timeout` (3 s
+        in alpha.48) so a slow Carrier can't make the thermostat hang.
+        """
+        if bridge is None:
+            return Response(content=local_body, media_type=local_media_type)
+        relayed = await bridge.relay(
+            method, path,
+            query=str(request.url.query) or None,
+            headers=dict(request.headers),
+            body=None,
+            local_changes_pending=False,
+        )
         if relayed is not None and relayed.status_code == 200 and relayed.body:
             return Response(
                 content=relayed.body,
@@ -219,37 +271,27 @@ def create_southbound_router(
 
     @router.post("/systems/{serial}")
     async def post_system_config(serial: str, request: Request) -> Response:
+        """Boot/sync POST from the thermostat — full config tree.
+
+        Mirror is fire-and-forget as of alpha.48: this body IS the
+        device's authoritative state, and we don't read Carrier's
+        response back, so awaiting it just makes the thermostat wait
+        on Carrier's latency for no functional gain.
+
+        `local_changes_pending=False` is correct here, NOT
+        `store.config_dirty` — the thermostat is *pushing* its
+        current view, not polling. Skipping the mirror because HA
+        happens to also have a pending write would silently drop the
+        only natural panel-change propagation channel (verified live
+        alpha.46 capture: panel POST #2 silently skipped because
+        apply_config's replay had set config_dirty).
+        """
         body = await request.body()
         tree, config = parse_system_config_with_tree(_unwrap_form(body))
         await store.apply_config(serial, config, tree)
-        # Mirror boot/sync POST to Carrier unconditionally —
-        # `local_changes_pending=False` here, NOT `store.config_dirty`.
-        #
-        # Why force False: the alpha.10 "skip relay when local changes
-        # pending" rule exists to stop us from leaking in-flight HA
-        # state to Carrier on *outbound* polls (status post, etc.).
-        # That logic doesn't apply to a thermostat-originated
-        # `POST /systems/{serial}`: the thermostat is *pushing* its
-        # current view here (post-panel-change or post-boot), and
-        # this body IS the device's authoritative state. Skipping the
-        # mirror because HA happens to also have a pending write
-        # would silently drop the only natural propagation channel
-        # for panel-side changes — verified live alpha.46 (capture
-        # showed two panel POSTs, one mirrored, one skipped because
-        # apply_config's replay had set config_dirty).
-        #
-        # Perl `infinitude:259` likewise relays unconditionally on
-        # boot POST (`!$store->get('changes')` is checked in
-        # `before_dispatch`, but the boot-style POST hits that hook
-        # before the local store's dirty bit can interfere).
-        if bridge is not None:
-            await bridge.relay(
-                "POST", f"/systems/{serial}",
-                query=str(request.url.query) or None,
-                headers=dict(request.headers),
-                body=body,
-                local_changes_pending=False,
-            )
+        _bridge_mirror_fire_and_forget(
+            "POST", f"/systems/{serial}", request, body=body,
+        )
         return Response(status_code=200)
 
     @router.get("/systems/{serial}/config")
@@ -261,9 +303,7 @@ def create_southbound_router(
         which includes any northbound mutations — as
         `<?xml ...?>\\n<config>...</config>`, matching the live
         Mojolicious wire format. 404 until the thermostat's boot POST
-        to /systems/{serial} has populated the store; serial is
-        currently not cross-checked against the store entry (single-
-        unit deployment assumption, documented in DESIGN.md).
+        to /systems/{serial} has populated the store.
 
         Pull-observed clear: when the thermostat pulls config, any
         writes queued against this serial are assumed landed and are
@@ -273,99 +313,13 @@ def create_southbound_router(
         after we signal configHasChanges, and it won't pull without
         then saving the payload.
 
-        Carrier-changes pass-through: when the bridge has a fresh
-        Carrier response cached AND its carrier_changes window is
-        open (Carrier reported `serverHasChanges=true` recently in a
-        relayed status POST), we serve Carrier's tree instead of
-        ours — that tree carries the queued MyInfinity-app commands.
-        Mirrors Perl `infinitude:567`. The window closes on first
-        use so we don't keep returning the same response.
+        As of alpha.48 there is no carrier_changes window branch:
+        Carrier-app changes reach our local tree via the proactive
+        `pull_and_apply_config` fired in the status-POST handler
+        (see post_telemetry above). By the time the thermostat does
+        a /config GET, our local tree already includes any merged
+        Carrier state, so this handler is uniformly local-tree-only.
         """
-        if bridge is not None and bridge.carrier_changes_active():
-            cached = bridge.get_cached(f"GET /systems/{serial}/config")
-            # Try to fetch a fresh Carrier config too — when the app
-            # has queued changes, we want them, not the stale cache.
-            # Forward the thermostat's auth headers (and querystring) —
-            # without them Carrier replies 401 "consumer not found" and
-            # we silently fall through to the local cached tree, which
-            # is what masked the MyInfinity-app hold propagation bug.
-            relayed = await bridge.relay(
-                "GET", f"/systems/{serial}/config",
-                query=str(request.url.query) or None,
-                headers=dict(request.headers),
-                local_changes_pending=False,
-            )
-            response = relayed or cached
-            if response is not None and response.status_code == 200 and response.body:
-                bridge.close_carrier_changes_window()
-                # Persist Carrier's tree as our local store. Without
-                # this the +60s re-sync below (and any northbound
-                # write that flips config_dirty) would serve our
-                # *stale* tree on the next /config GET, reverting
-                # whatever Carrier just queued — exactly the
-                # alpha.40 oscillation user saw: hold appears
-                # (Carrier tree applied), 60s later hold reverts
-                # (local stale tree applied), repeat.
-                #
-                # apply_config also runs REPLAY_REGISTRY on any
-                # pending_writes, mutating `tree` in place. We then
-                # serve the merged tree (Carrier's queued commands +
-                # our pending HA-side writes) so the thermostat sees
-                # both. Without merging here, an HA-side cancel-hold
-                # issued while a Carrier-app hold was queued would be
-                # silently reverted: the device receives Carrier's
-                # raw tree (hold-on), local store reflects the merged
-                # tree (hold-off), telemetry then re-confirms hold-on
-                # and the cancel-hold "bounces back" — alpha.42 user
-                # report.
-                served_body = response.body
-                served_ctype = response.content_type or "application/xml"
-                try:
-                    tree, config = parse_system_config_with_tree(response.body)
-                    await store.apply_config(serial, config, tree)
-                    merged = store.get_config()
-                    if merged is not None:
-                        served_body = serialize_config_tree(merged.tree)
-                        served_ctype = "application/xml"
-                    logger.info(
-                        "carrier_bridge: synced local store from Carrier tree "
-                        "(serial=%s, in=%d B, out=%d B)",
-                        serial, len(response.body), len(served_body),
-                    )
-                except Exception as e:
-                    # Don't block serving Carrier's tree on parse failure —
-                    # the thermostat applies it either way. Log so the
-                    # operator can tell why local store may be stale.
-                    logger.warning(
-                        "carrier_bridge: failed to parse Carrier tree for local "
-                        "store sync (serial=%s): %s — serving body anyway",
-                        serial, e,
-                    )
-                # Mark pending writes applied: the thermostat is about
-                # to receive the merged tree, mirroring the non-bridge
-                # serve path's mark_all_applied. Skipping this would
-                # keep replaying the same writes onto every subsequent
-                # carrier_changes serve.
-                if store.persistence is not None:
-                    applied_ids = await store.persistence.mark_all_applied(serial)
-                    if applied_ids:
-                        logger.info(
-                            "persistence: marked %d pending write(s) applied "
-                            "on carrier-bridge config serve serial=%s",
-                            len(applied_ids), serial,
-                        )
-                # Schedule a forced config-fetch ~60 s out so the
-                # thermostat re-syncs after applying the merged tree —
-                # mirrors Perl `infinitude:572`.
-                bridge.schedule_changes(60)
-                logger.info(
-                    "carrier_bridge: serving merged config to thermostat "
-                    "(window consumed, scheduled changes 60s)"
-                )
-                return Response(
-                    content=served_body,
-                    media_type=served_ctype,
-                )
         stored = store.get_config()
         if stored is None:
             return Response(status_code=404)
@@ -388,7 +342,7 @@ def create_southbound_router(
         await store.append_notifications(serial, events)
         # Mirror notifications to Carrier so the MyInfinity app can
         # surface alerts (filter due, fault codes, etc.).
-        await _bridge_mirror(
+        _bridge_mirror_fire_and_forget(
             "POST", f"/systems/{serial}/notifications", request, body=body,
         )
         return Response(status_code=200)
@@ -401,7 +355,7 @@ def create_southbound_router(
         await store.apply_idu(serial, config, raw_xml=raw)
         # Mirror equipment descriptor — Carrier needs it to know what
         # hardware is talking (fancoil vs. furnace, etc.).
-        await _bridge_mirror(
+        _bridge_mirror_fire_and_forget(
             "POST", f"/systems/{serial}/idu_config", request, body=body,
         )
         return Response(status_code=200)
@@ -412,7 +366,7 @@ def create_southbound_router(
         raw = _unwrap_form(body)
         config = parse_odu_config(raw)
         await store.apply_odu(serial, config, raw_xml=raw)
-        await _bridge_mirror(
+        _bridge_mirror_fire_and_forget(
             "POST", f"/systems/{serial}/odu_config", request, body=body,
         )
         return Response(status_code=200)
@@ -425,7 +379,7 @@ def create_southbound_router(
         body = await request.body()
         energy = parse_energy(_unwrap_form(body))
         await store.apply_energy(serial, energy)
-        await _bridge_mirror(
+        _bridge_mirror_fire_and_forget(
             "POST", f"/systems/{serial}/energy", request, body=body,
         )
         logger.info(
@@ -442,7 +396,7 @@ def create_southbound_router(
         body = await request.body()
         status = parse_odu_status(_unwrap_form(body))
         await store.apply_odu_status(serial, status)
-        await _bridge_mirror(
+        _bridge_mirror_fire_and_forget(
             "POST", f"/systems/{serial}/odu_status", request, body=body,
         )
         logger.info(
@@ -460,7 +414,7 @@ def create_southbound_router(
         body = await request.body()
         status = parse_idu_status(_unwrap_form(body))
         await store.apply_idu_status(serial, status)
-        await _bridge_mirror(
+        _bridge_mirror_fire_and_forget(
             "POST", f"/systems/{serial}/idu_status", request, body=body,
         )
         logger.info(
@@ -478,7 +432,7 @@ def create_southbound_router(
         body = await request.body()
         events = parse_equipment_events(_unwrap_form(body))
         await store.apply_equipment_events(serial, events)
-        await _bridge_mirror(
+        _bridge_mirror_fire_and_forget(
             "POST", f"/systems/{serial}/equipment_events", request, body=body,
         )
         active = sum(1 for e in events.events if e.active)
@@ -507,7 +461,7 @@ def create_southbound_router(
         # Mirror unhandled metadata posts too — Carrier might use
         # them (utility_events, history, energy, etc.). Cheap to
         # forward; ignored locally.
-        await _bridge_mirror(
+        _bridge_mirror_fire_and_forget(
             "POST", f"/systems/{serial}/{subpath}", request, body=body,
         )
         return Response(status_code=200)
