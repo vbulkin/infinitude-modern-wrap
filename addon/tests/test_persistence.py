@@ -52,12 +52,75 @@ async def test_partial_upsert_preserves_other_columns():
     await p.save_config("S1", b"<config/>")
     await p.save_idu("S1", b"<idu_config/>")
     await p.save_odu("S1", b"<odu_config/>")
+    await p.save_odu_status("S1", b"<odu_status/>")
+    await p.save_idu_status("S1", b"<idu_status/>")
     snap = await p.load("S1")
     assert snap is not None
     assert snap.config_xml == b"<config/>"
     assert snap.idu_xml == b"<idu_config/>"
     assert snap.odu_xml == b"<odu_config/>"
+    assert snap.odu_status_xml == b"<odu_status/>"
+    assert snap.idu_status_xml == b"<idu_status/>"
     await p.close()
+
+
+async def test_save_odu_status_round_trips():
+    """v3 column: ODU live status persists across load."""
+    p = await Persistence.open(":memory:")
+    blob = _read("odu_status_idle.xml")
+    await p.save_odu_status("S1", blob)
+    snap = await p.load("S1")
+    assert snap is not None
+    assert snap.odu_status_xml == blob
+    await p.close()
+
+
+async def test_save_idu_status_round_trips():
+    p = await Persistence.open(":memory:")
+    blob = _read("idu_status_idle.xml")
+    await p.save_idu_status("S1", blob)
+    snap = await p.load("S1")
+    assert snap is not None
+    assert snap.idu_status_xml == blob
+    await p.close()
+
+
+async def test_state_store_restore_rehydrates_odu_idu_status(tmp_path: Path):
+    """Restart-survival contract for HA stage / RPM / pressure
+    sensors: persistent ODU/IDU status XML must rehydrate on
+    `restore_from_persistence` so an idle system after a redeploy
+    still shows last-known compressor stage instead of `unavailable`.
+    """
+    db = tmp_path / "state.db"
+    p1 = await Persistence.open(db)
+    s1 = StateStore(persistence=p1)
+    # Populate via the apply path — same code path the southbound
+    # handler hits — so we exercise persist-on-write too.
+    from infinitude_proxy.parser import (
+        parse_odu_status as _po, parse_idu_status as _pi,
+    )
+    odu_blob = _read("odu_status_idle.xml")
+    idu_blob = _read("idu_status_idle.xml")
+    await s1.apply_odu_status("S1", _po(odu_blob), raw_xml=odu_blob)
+    await s1.apply_idu_status("S1", _pi(idu_blob), raw_xml=idu_blob)
+    await p1.close()
+
+    p2 = await Persistence.open(db)
+    s2 = StateStore(persistence=p2)
+    # Need a config_xml seeded for restore to consider this serial,
+    # since restore_from_persistence loads the most-recent state row
+    # (load_any) — which exists if any save_* has run for the serial.
+    snap = await p2.load("S1")
+    assert snap is not None
+    assert snap.odu_status_xml == odu_blob
+    assert snap.idu_status_xml == idu_blob
+    await s2.restore_from_persistence()
+    # Parsed snapshots in memory match what we persisted.
+    odu_stored = s2.get_odu_status()
+    idu_stored = s2.get_idu_status()
+    assert odu_stored is not None and odu_stored.serial == "S1"
+    assert idu_stored is not None and idu_stored.serial == "S1"
+    await p2.close()
 
 
 async def test_save_config_dirty_round_trips():

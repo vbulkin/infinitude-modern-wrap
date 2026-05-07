@@ -33,7 +33,9 @@ from .parser import (
     SystemConfig,
     TelemetrySnapshot,
     parse_idu_config,
+    parse_idu_status,
     parse_odu_config,
+    parse_odu_status,
     parse_system_config_with_tree,
     reparse_config_tree,
     serialize_config_tree,
@@ -271,6 +273,36 @@ class StateStore:
                 except Exception:
                     logger.exception(
                         "state_store: failed to restore odu_xml for %s",
+                        snap.serial,
+                    )
+            # v3 (alpha.50): rehydrate ODU/IDU live-status snapshots
+            # so HA's compressor-stage / RPM / pressure sensors don't
+            # show `unavailable` for hours on the dashboard after a
+            # restart. The thermostat only POSTs /odu_status while
+            # the unit is actively running, so without persistence an
+            # idle system stays blank until something kicks on.
+            if snap.odu_status_xml is not None:
+                try:
+                    self._odu_status = StoredOduStatus(
+                        serial=snap.serial,
+                        status=parse_odu_status(snap.odu_status_xml),
+                        receivedAt=received,
+                    )
+                except Exception:
+                    logger.exception(
+                        "state_store: failed to restore odu_status_xml for %s",
+                        snap.serial,
+                    )
+            if snap.idu_status_xml is not None:
+                try:
+                    self._idu_status = StoredIduStatus(
+                        serial=snap.serial,
+                        status=parse_idu_status(snap.idu_status_xml),
+                        receivedAt=received,
+                    )
+                except Exception:
+                    logger.exception(
+                        "state_store: failed to restore idu_status_xml for %s",
                         snap.serial,
                     )
             self._config_dirty = snap.config_dirty
@@ -589,19 +621,57 @@ class StateStore:
                 receivedAt=datetime.now(timezone.utc),
             )
 
-    async def apply_odu_status(self, serial: str, status: OduStatus) -> None:
+    async def apply_odu_status(
+        self,
+        serial: str,
+        status: OduStatus,
+        raw_xml: bytes | None = None,
+    ) -> None:
+        """Snapshot the latest ODU live-status (compressor stage / RPM /
+        refrigerant pressures / superheat / OAT / lockout). Persisted
+        alongside the parsed value so HA's stage / RPM / pressure
+        sensors keep their last-known reading across an addon restart;
+        without this, an idle system shows `unavailable` cells in the
+        dashboard for hours after a redeploy until the unit next
+        runs and POSTs a fresh /odu_status.
+
+        `raw_xml` is the unwrapped POST body (caller is southbound's
+        `post_odu_status`, which already unwraps the form-data
+        envelope). None is accepted for backward compat / tests that
+        construct a parsed OduStatus directly.
+        """
         async with self._lock:
             self._odu_status = StoredOduStatus(
                 serial=serial, status=status,
                 receivedAt=datetime.now(timezone.utc),
             )
+            if self._persistence is not None and raw_xml is not None:
+                await self._try_persist(
+                    self._persistence.save_odu_status(serial, raw_xml),
+                    what="save_odu_status",
+                )
 
-    async def apply_idu_status(self, serial: str, status: IduStatus) -> None:
+    async def apply_idu_status(
+        self,
+        serial: str,
+        status: IduStatus,
+        raw_xml: bytes | None = None,
+    ) -> None:
+        """Snapshot the latest IDU live-status (blower RPM, airflow CFM,
+        static pressure, coil temp). Persisted same as ODU status —
+        survives addon restart so HA sensors aren't blanked when the
+        unit is idle on redeploy. See `apply_odu_status` for the
+        rationale."""
         async with self._lock:
             self._idu_status = StoredIduStatus(
                 serial=serial, status=status,
                 receivedAt=datetime.now(timezone.utc),
             )
+            if self._persistence is not None and raw_xml is not None:
+                await self._try_persist(
+                    self._persistence.save_idu_status(serial, raw_xml),
+                    what="save_idu_status",
+                )
 
     async def mark_config_dirty(self) -> None:
         """Signal to the next telemetry directive that the thermostat

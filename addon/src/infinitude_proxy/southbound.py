@@ -392,10 +392,13 @@ def create_southbound_router(
     async def post_odu_status(serial: str, request: Request) -> Response:
         """Outdoor-unit live runtime — compressor stage + RPM,
         refrigerant pressures, blower state. Surfaces northbound at
-        `GET /v1/system/odu_status`."""
+        `GET /v1/system/odu_status`. Raw XML is persisted (alpha.50)
+        so HA stage/RPM/pressure sensors don't go `unavailable` for
+        hours after an addon restart on an idle system."""
         body = await request.body()
-        status = parse_odu_status(_unwrap_form(body))
-        await store.apply_odu_status(serial, status)
+        raw = _unwrap_form(body)
+        status = parse_odu_status(raw)
+        await store.apply_odu_status(serial, status, raw_xml=raw)
         _bridge_mirror_fire_and_forget(
             "POST", f"/systems/{serial}/odu_status", request, body=body,
         )
@@ -410,10 +413,12 @@ def create_southbound_router(
     async def post_idu_status(serial: str, request: Request) -> Response:
         """Indoor-unit live runtime — blower RPM, airflow CFM,
         static pressure, coil temp. Surfaces northbound at
-        `GET /v1/system/idu_status`."""
+        `GET /v1/system/idu_status`. Raw XML is persisted (alpha.50);
+        same rationale as odu_status."""
         body = await request.body()
-        status = parse_idu_status(_unwrap_form(body))
-        await store.apply_idu_status(serial, status)
+        raw = _unwrap_form(body)
+        status = parse_idu_status(raw)
+        await store.apply_idu_status(serial, status, raw_xml=raw)
         _bridge_mirror_fire_and_forget(
             "POST", f"/systems/{serial}/idu_status", request, body=body,
         )

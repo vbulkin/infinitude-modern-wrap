@@ -30,7 +30,7 @@ import aiosqlite
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -88,6 +88,20 @@ CREATE INDEX IF NOT EXISTS idx_capture_time ON capture_traffic(captured_at);
 CREATE INDEX IF NOT EXISTS idx_capture_path ON capture_traffic(path);
 """
 
+# v3: persist ODU and IDU live-status snapshots so HA's compressor-stage
+# / blower-RPM / refrigerant-pressure sensors keep their last-known
+# values across an addon restart. Pre-v3 these were in-memory only
+# (state_store.py) — restart blanked them until the unit's next status
+# POST, which only happens while the equipment is actively running. A
+# user looking at the dashboard right after a restart on an idle system
+# would see a row of `unavailable` cells. Same data shape as
+# config/idu/odu — raw POST-body XML, COALESCE-upserted, NULL until
+# the first status arrives.
+_SCHEMA_V3_ADD = """
+ALTER TABLE state_cache ADD COLUMN odu_status_xml BLOB;
+ALTER TABLE state_cache ADD COLUMN idu_status_xml BLOB;
+"""
+
 
 @dataclass
 class StateSnapshot:
@@ -98,6 +112,10 @@ class StateSnapshot:
     odu_xml: bytes | None
     config_dirty: bool
     updated_at: float
+    # v3 (alpha.50): live-status snapshots persisted so HA stage /
+    # RPM / pressure sensors survive addon restarts.
+    odu_status_xml: bytes | None = None
+    idu_status_xml: bytes | None = None
 
 
 @dataclass
@@ -154,6 +172,7 @@ class Persistence:
             # Fresh DB: apply every version's additive DDL before
             # stamping the version row.
             await self._conn.executescript(_SCHEMA_V2_ADD)
+            await self._conn.executescript(_SCHEMA_V3_ADD)
             await self._conn.execute(
                 "INSERT INTO schema_version (version) VALUES (?)",
                 (SCHEMA_VERSION,),
@@ -168,11 +187,29 @@ class Persistence:
                 f" this build ({SCHEMA_VERSION}); downgrade not supported"
             )
         if current < SCHEMA_VERSION:
-            # Forward-only migrations. IF NOT EXISTS in the DDL makes
-            # each step idempotent if the upgrade is interrupted and
-            # retried on next startup.
+            # Forward-only migrations. IF NOT EXISTS in DDL makes each
+            # step idempotent if interrupted; ALTER TABLE doesn't
+            # support IF NOT EXISTS so we wrap v3's add-columns in a
+            # PRAGMA-table-info check.
             if current < 2:
                 await self._conn.executescript(_SCHEMA_V2_ADD)
+            if current < 3:
+                # SQLite has no ALTER COLUMN IF NOT EXISTS, so check
+                # the table_info pragma first to make this re-runnable
+                # on a partial v3 (rare — the two ALTERs are atomic
+                # under the same connection — but cheap insurance).
+                async with self._conn.execute(
+                    "PRAGMA table_info(state_cache)"
+                ) as cur:
+                    cols = {r[1] for r in await cur.fetchall()}
+                if "odu_status_xml" not in cols:
+                    await self._conn.execute(
+                        "ALTER TABLE state_cache ADD COLUMN odu_status_xml BLOB"
+                    )
+                if "idu_status_xml" not in cols:
+                    await self._conn.execute(
+                        "ALTER TABLE state_cache ADD COLUMN idu_status_xml BLOB"
+                    )
             await self._conn.execute(
                 "UPDATE schema_version SET version = ?", (SCHEMA_VERSION,)
             )
@@ -194,6 +231,19 @@ class Persistence:
     async def save_odu(self, serial: str, xml: bytes) -> None:
         await self._upsert_state(serial, odu_xml=xml)
 
+    async def save_odu_status(self, serial: str, xml: bytes) -> None:
+        """Persist the most recent ODU live-status XML so HA's
+        compressor-stage / RPM / pressure / superheat sensors survive
+        an addon restart. Each new POST supersedes the prior — we
+        only ever care about latest, not history."""
+        await self._upsert_state(serial, odu_status_xml=xml)
+
+    async def save_idu_status(self, serial: str, xml: bytes) -> None:
+        """Persist the most recent IDU live-status XML so HA's
+        blower-RPM / airflow / static-pressure sensors survive an
+        addon restart. Each new POST supersedes the prior."""
+        await self._upsert_state(serial, idu_status_xml=xml)
+
     async def save_config_dirty(self, serial: str, dirty: bool) -> None:
         """Persist the dirty flag so a proxy restart doesn't silently
         re-clear it mid-cycle (the thermostat has already been told to
@@ -208,6 +258,8 @@ class Persistence:
         config_xml: bytes | None = None,
         idu_xml: bytes | None = None,
         odu_xml: bytes | None = None,
+        odu_status_xml: bytes | None = None,
+        idu_status_xml: bytes | None = None,
         config_dirty: bool | None = None,
     ) -> None:
         now = time.time()
@@ -222,36 +274,53 @@ class Persistence:
         await self._conn.execute(
             """
             INSERT INTO state_cache
-                (serial, config_xml, idu_xml, odu_xml, config_dirty, updated_at)
-            VALUES (?, ?, ?, ?, COALESCE(?, 0), ?)
+                (serial, config_xml, idu_xml, odu_xml,
+                 odu_status_xml, idu_status_xml,
+                 config_dirty, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, 0), ?)
             ON CONFLICT(serial) DO UPDATE SET
-                config_xml   = COALESCE(excluded.config_xml,   state_cache.config_xml),
-                idu_xml      = COALESCE(excluded.idu_xml,      state_cache.idu_xml),
-                odu_xml      = COALESCE(excluded.odu_xml,      state_cache.odu_xml),
-                config_dirty = COALESCE(?, state_cache.config_dirty),
-                updated_at   = excluded.updated_at
+                config_xml     = COALESCE(excluded.config_xml,     state_cache.config_xml),
+                idu_xml        = COALESCE(excluded.idu_xml,        state_cache.idu_xml),
+                odu_xml        = COALESCE(excluded.odu_xml,        state_cache.odu_xml),
+                odu_status_xml = COALESCE(excluded.odu_status_xml, state_cache.odu_status_xml),
+                idu_status_xml = COALESCE(excluded.idu_status_xml, state_cache.idu_status_xml),
+                config_dirty   = COALESCE(?, state_cache.config_dirty),
+                updated_at     = excluded.updated_at
             """,
-            (serial, config_xml, idu_xml, odu_xml, dirty_val, now, dirty_val),
+            (
+                serial, config_xml, idu_xml, odu_xml,
+                odu_status_xml, idu_status_xml,
+                dirty_val, now, dirty_val,
+            ),
         )
         await self._conn.commit()
 
-    async def load(self, serial: str) -> StateSnapshot | None:
-        async with self._conn.execute(
-            "SELECT serial, config_xml, idu_xml, odu_xml, config_dirty, updated_at "
-            "FROM state_cache WHERE serial = ?",
-            (serial,),
-        ) as cursor:
-            row = await cursor.fetchone()
-        if row is None:
-            return None
+    _STATE_COLS = (
+        "serial, config_xml, idu_xml, odu_xml, "
+        "odu_status_xml, idu_status_xml, "
+        "config_dirty, updated_at"
+    )
+
+    @staticmethod
+    def _row_to_snapshot(row: tuple) -> "StateSnapshot":
         return StateSnapshot(
             serial=row[0],
             config_xml=row[1],
             idu_xml=row[2],
             odu_xml=row[3],
-            config_dirty=bool(row[4]),
-            updated_at=row[5],
+            odu_status_xml=row[4],
+            idu_status_xml=row[5],
+            config_dirty=bool(row[6]),
+            updated_at=row[7],
         )
+
+    async def load(self, serial: str) -> StateSnapshot | None:
+        async with self._conn.execute(
+            f"SELECT {self._STATE_COLS} FROM state_cache WHERE serial = ?",
+            (serial,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return self._row_to_snapshot(row) if row else None
 
     async def load_any(self) -> StateSnapshot | None:
         """Return the most-recently-updated cached state across all
@@ -259,20 +328,11 @@ class Persistence:
         serial is known (no telemetry POST yet); multi-unit callers
         should use load(serial) directly."""
         async with self._conn.execute(
-            "SELECT serial, config_xml, idu_xml, odu_xml, config_dirty, updated_at "
-            "FROM state_cache ORDER BY updated_at DESC LIMIT 1"
+            f"SELECT {self._STATE_COLS} FROM state_cache "
+            "ORDER BY updated_at DESC LIMIT 1"
         ) as cursor:
             row = await cursor.fetchone()
-        if row is None:
-            return None
-        return StateSnapshot(
-            serial=row[0],
-            config_xml=row[1],
-            idu_xml=row[2],
-            odu_xml=row[3],
-            config_dirty=bool(row[4]),
-            updated_at=row[5],
-        )
+        return self._row_to_snapshot(row) if row else None
 
     # ── pending_writes ───────────────────────────────────────────────
 
