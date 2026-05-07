@@ -382,6 +382,90 @@ def test_config_get_returns_carrier_response_when_window_active():
     assert not cb.carrier_changes_active()
 
 
+async def test_config_get_in_window_replays_pending_writes_onto_carrier_tree():
+    """Regression: alpha.42 user reported that an HA-side cancel-hold
+    issued while the carrier_changes window is open optimistically
+    clears in the UI, then "comes back" within seconds. Root cause was
+    the carrier-bridge branch of GET /systems/{serial}/config serving
+    Carrier's raw response body — which still carried the MyInfinity
+    app's queued hold-on tree — instead of the merged tree that
+    apply_config produced after replaying our pending system_hold_clear.
+    The fix serializes the merged tree (Carrier ∪ pending writes) and
+    marks the pending row applied, so the thermostat receives both
+    Carrier's queued changes AND our HA-side mutations in one body.
+    """
+    # Build "Carrier's tree" by taking the real boot fixture and
+    # flipping wholeHouse/hold to ON, mimicking a MyInfinity-app-set
+    # hold queued at Carrier. Using the fixture (not a hand-rolled
+    # minimal tree) ensures parse_system_config_with_tree's strict
+    # SystemConfig validation accepts the body.
+    from lxml import etree as _et
+
+    _root = _et.fromstring(_read("boot_01_system_config.xml"))
+    _wh = _root.find(".//wholeHouse")
+    assert _wh is not None
+    _wh.find("hold").text = "on"
+    _wh.find("holdActivity").text = "manual"
+    _otmr = _wh.find("otmr")
+    if _otmr is None:
+        _otmr = _et.SubElement(_wh, "otmr")
+    _otmr.text = "21:30"
+    carrier_tree_with_hold = _et.tostring(_root, xml_declaration=True, encoding="UTF-8")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/config"):
+            return httpx.Response(
+                200, content=carrier_tree_with_hold,
+                headers={"content-type": "application/xml"},
+            )
+        return httpx.Response(200, content=b"")
+
+    cb = _bridge_with_handler(handler)
+    p = await Persistence.open(":memory:")
+    store = StateStore(persistence=p)
+    app = create_app(store=store, carrier_bridge=cb)
+
+    with TestClient(app) as client:
+        # Boot — populates the local store with a real fixture (no hold).
+        client.post(
+            "/systems/2013W000855",
+            content=_read("boot_01_system_config.xml"),
+            headers={"content-type": "application/xml"},
+        )
+        # HA cancels hold → enqueues a system_hold_clear pending write.
+        # Idempotent at the local-tree layer (the fixture's wholeHouse
+        # is already hold=off) but the pending row is what matters here.
+        r = client.delete("/v1/system/hold")
+        assert r.status_code == 200
+        assert await p.unapplied_count() == 1
+
+        # Open the carrier_changes window directly. The earlier
+        # status-POST → serverHasChanges=true → window-open path is
+        # exercised by test_relay_opens_carrier_changes_window_on_*;
+        # this test isolates the GET /config behavior with a pending
+        # write present.
+        cb.open_carrier_changes_window()
+
+        # /config GET while window is open AND a pending HA-side write
+        # exists. The served body must carry the merged tree, NOT
+        # Carrier's raw hold-on response.
+        r = client.get("/systems/2013W000855/config")
+        assert r.status_code == 200
+        assert b"<hold>off</hold>" in r.content, (
+            "served body should reflect HA's pending cancel-hold replayed "
+            "onto Carrier's tree, not Carrier's raw hold-on"
+        )
+        assert b"<hold>on</hold>" not in r.content
+        assert b"<holdActivity>none</holdActivity>" in r.content
+        # Pending row must have been marked applied by the bridge serve
+        # path (mirrors the non-bridge mark_all_applied). Without this,
+        # the same write would replay onto every subsequent
+        # carrier_changes /config serve, never clearing.
+        assert await p.unapplied_count() == 0
+
+    await p.close()
+
+
 def test_status_post_passes_carrier_configHasChanges_through():
     """The MyInfinity round-trip hinges on this: when Carrier responds
     to the relayed status POST with `configHasChanges=true`, that

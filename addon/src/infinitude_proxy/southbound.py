@@ -283,12 +283,31 @@ def create_southbound_router(
                 # alpha.40 oscillation user saw: hold appears
                 # (Carrier tree applied), 60s later hold reverts
                 # (local stale tree applied), repeat.
+                #
+                # apply_config also runs REPLAY_REGISTRY on any
+                # pending_writes, mutating `tree` in place. We then
+                # serve the merged tree (Carrier's queued commands +
+                # our pending HA-side writes) so the thermostat sees
+                # both. Without merging here, an HA-side cancel-hold
+                # issued while a Carrier-app hold was queued would be
+                # silently reverted: the device receives Carrier's
+                # raw tree (hold-on), local store reflects the merged
+                # tree (hold-off), telemetry then re-confirms hold-on
+                # and the cancel-hold "bounces back" — alpha.42 user
+                # report.
+                served_body = response.body
+                served_ctype = response.content_type or "application/xml"
                 try:
                     tree, config = parse_system_config_with_tree(response.body)
                     await store.apply_config(serial, config, tree)
+                    merged = store.get_config()
+                    if merged is not None:
+                        served_body = serialize_config_tree(merged.tree)
+                        served_ctype = "application/xml"
                     logger.info(
                         "carrier_bridge: synced local store from Carrier tree "
-                        "(serial=%s, %d B)", serial, len(response.body),
+                        "(serial=%s, in=%d B, out=%d B)",
+                        serial, len(response.body), len(served_body),
                     )
                 except Exception as e:
                     # Don't block serving Carrier's tree on parse failure —
@@ -299,19 +318,30 @@ def create_southbound_router(
                         "store sync (serial=%s): %s — serving body anyway",
                         serial, e,
                     )
+                # Mark pending writes applied: the thermostat is about
+                # to receive the merged tree, mirroring the non-bridge
+                # serve path's mark_all_applied. Skipping this would
+                # keep replaying the same writes onto every subsequent
+                # carrier_changes serve.
+                if store.persistence is not None:
+                    applied_ids = await store.persistence.mark_all_applied(serial)
+                    if applied_ids:
+                        logger.info(
+                            "persistence: marked %d pending write(s) applied "
+                            "on carrier-bridge config serve serial=%s",
+                            len(applied_ids), serial,
+                        )
                 # Schedule a forced config-fetch ~60 s out so the
-                # thermostat re-syncs after applying Carrier's tree —
-                # mirrors Perl `infinitude:572`. Now that the local
-                # store matches Carrier's tree, this re-sync is a
-                # no-op confirmation rather than a stale-tree revert.
+                # thermostat re-syncs after applying the merged tree —
+                # mirrors Perl `infinitude:572`.
                 bridge.schedule_changes(60)
                 logger.info(
-                    "carrier_bridge: serving Carrier config to thermostat "
+                    "carrier_bridge: serving merged config to thermostat "
                     "(window consumed, scheduled changes 60s)"
                 )
                 return Response(
-                    content=response.body,
-                    media_type=response.content_type or "application/xml",
+                    content=served_body,
+                    media_type=served_ctype,
                 )
         stored = store.get_config()
         if stored is None:
