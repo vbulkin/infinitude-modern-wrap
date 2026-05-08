@@ -203,63 +203,6 @@ async def test_mark_applied_is_idempotent():
     await p.close()
 
 
-async def test_pending_for_replay_includes_recently_applied():
-    """Grace-window semantics: rows applied within the window must
-    still be returned to the replay caller, so an inbound config tree
-    (Carrier-relayed or thermostat-boot) gets the user's recent
-    mutations re-merged onto it before being committed locally."""
-    p = await Persistence.open(":memory:")
-    id1 = await p.enqueue_write("S1", "system_hold_clear", "system", {})
-    id2 = await p.enqueue_write("S1", "zone_setpoints_set", "1", {"cool": 72})
-    # Mark both applied (simulates pull-observed-clear).
-    await p.mark_all_applied("S1")
-    # Default grace is 300 s; both rows are within it.
-    rows = await p.pending_for_replay("S1")
-    assert [r.id for r in rows] == [id1, id2]
-    assert all(r.applied_at is not None for r in rows)
-    # `pending()` (unapplied-only view) must NOT see them — that view
-    # drives healthz / status-POST decisions and shouldn't keep
-    # signalling configHasChanges for already-applied writes.
-    assert await p.pending("S1") == []
-    await p.close()
-
-
-async def test_pending_for_replay_excludes_old_applied_and_prunes_them():
-    p = await Persistence.open(":memory:")
-    id_recent = await p.enqueue_write("S1", "zone_hold_set", "1", {})
-    id_old = await p.enqueue_write("S1", "zone_hold_set", "2", {})
-    await p.mark_all_applied("S1")
-    # Force `id_old`'s applied_at into deep history (well past grace).
-    await p._conn.execute(
-        "UPDATE pending_writes SET applied_at = ? WHERE id = ?",
-        (1.0, id_old),  # 1970 — definitively pre-grace
-    )
-    await p._conn.commit()
-    rows = await p.pending_for_replay("S1", grace_seconds=60)
-    assert [r.id for r in rows] == [id_recent], (
-        "only the recently-applied row should be replayed"
-    )
-    # And the lazy GC inside pending_for_replay should have deleted
-    # the rotted row, not just hidden it — keeps the table from growing.
-    async with p._conn.execute(
-        "SELECT COUNT(*) FROM pending_writes WHERE id = ?", (id_old,),
-    ) as cur:
-        gone = (await cur.fetchone())[0]
-    assert gone == 0, "rotted applied row should have been pruned"
-    await p.close()
-
-
-async def test_pending_for_replay_filters_by_serial():
-    p = await Persistence.open(":memory:")
-    await p.enqueue_write("S1", "zone_hold_set", "1", {})
-    await p.enqueue_write("S2", "zone_hold_set", "1", {})
-    rows_s1 = await p.pending_for_replay("S1")
-    rows_s2 = await p.pending_for_replay("S2")
-    assert len(rows_s1) == 1 and rows_s1[0].serial == "S1"
-    assert len(rows_s2) == 1 and rows_s2[0].serial == "S2"
-    await p.close()
-
-
 async def test_unapplied_count_and_oldest_age():
     p = await Persistence.open(":memory:")
     assert await p.unapplied_count() == 0
@@ -447,8 +390,6 @@ async def test_apply_config_survives_persistence_write_failure():
         async def save_config_dirty(self, serial, dirty):
             raise RuntimeError("disk full (simulated)")
         async def pending(self, serial=None):
-            return []
-        async def pending_for_replay(self, serial, grace_seconds=300):
             return []
 
     store = StateStore(persistence=BrokenPersistence())  # type: ignore[arg-type]

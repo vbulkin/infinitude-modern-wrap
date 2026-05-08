@@ -20,11 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from infinitude_proxy.capture import CaptureControl
-from infinitude_proxy.carrier_bridge import (
-    CachedRelay,
-    CarrierBridge,
-    _action_key,
-)
+from infinitude_proxy.carrier_bridge import CarrierBridge, _action_key
 from infinitude_proxy.main import create_app
 from infinitude_proxy.persistence import Persistence
 from infinitude_proxy.state_store import StateStore
@@ -36,19 +32,11 @@ def _read(name: str) -> bytes:
     return (FIXTURES / name).read_bytes()
 
 
-def _bridge_with_handler(handler, *, seed_auth: bool = True, **kw) -> CarrierBridge:
+def _bridge_with_handler(handler, **kw) -> CarrierBridge:
     """A CarrierBridge whose httpx client is wired to a MockTransport
-    so tests don't hit the real internet.
-
-    `seed_auth=True` (default) pre-populates `_auth_by_route` for the
-    routes most tests care about (status POST, /config GET, boot POST)
-    so background-path tests (push_config, pull_and_apply_config) can
-    run without an explicit priming `relay()` call. Pass
-    `seed_auth=False` to test the cold-start refusal path explicitly.
-    The single-chokepoint `_outbound` method (alpha.51) refuses
-    requests when no auth is cached for the requested route, and the
-    cache became per-route in alpha.52 (Carrier validates auth
-    per-(method, path)).
+    so tests don't hit the real internet. `_outbound` requires
+    `source_headers` on every call — tests that drive `relay()`
+    directly must pass `headers=...`.
     """
     kw.setdefault("enabled", True)
     cb = CarrierBridge(**kw)
@@ -57,19 +45,10 @@ def _bridge_with_handler(handler, *, seed_auth: bool = True, **kw) -> CarrierBri
         timeout=cb._timeout,
         follow_redirects=False,
     )
-    if seed_auth:
-        seed = {
-            "authorization": "Basic test-seed",
-            "host": "www.api.ing.carrier.com",
-        }
-        # Seed the routes most tests touch. Tests that need a specific
-        # cold-start route can clear individual entries or use
-        # seed_auth=False.
-        for serial in ("X", "2013W000855"):
-            cb._auth_by_route[("POST", f"/systems/{serial}/status")] = dict(seed)
-            cb._auth_by_route[("GET", f"/systems/{serial}/config")] = dict(seed)
-            cb._auth_by_route[("POST", f"/systems/{serial}")] = dict(seed)
     return cb
+
+
+_DEFAULT_HEADERS = {"Authorization": "Basic test-source="}
 
 
 def test_action_key_method_path_query():
@@ -92,7 +71,9 @@ async def test_relay_returns_none_when_disabled():
 
     cb = _bridge_with_handler(handler, enabled=False)
     assert cb.enabled is False
-    result = await cb.relay("POST", "/systems/X/status", body=b"x")
+    result = await cb.relay(
+        "POST", "/systems/X/status", body=b"x", headers=_DEFAULT_HEADERS,
+    )
     assert result is None
     assert seen == []
 
@@ -108,7 +89,9 @@ async def test_relay_swallows_network_error_returns_none():
         raise httpx.ConnectError("simulated", request=request)
 
     cb = _bridge_with_handler(handler)
-    result = await cb.relay("POST", "/systems/X/status", body=b"")
+    result = await cb.relay(
+        "POST", "/systems/X/status", body=b"", headers=_DEFAULT_HEADERS,
+    )
     assert result is None
     # Failure counter ticked so health/circuit breaker can react.
     assert cb._consecutive_failures == 1
@@ -223,24 +206,21 @@ def test_status_post_skips_relay_when_local_changes_pending():
     )
 
 
-async def test_config_get_in_window_replays_pending_writes_onto_carrier_tree():
+async def test_config_get_pull_through_replays_pending_writes_onto_carrier_tree():
     """Regression: alpha.42 user reported that an HA-side cancel-hold
-    issued while Carrier had a queued change open optimistically
-    clears in the UI, then "comes back" within seconds. Root cause was
-    the carrier-bridge branch of GET /systems/{serial}/config serving
-    Carrier's raw response body — which still carried the MyInfinity
-    app's queued hold-on tree — instead of the merged tree that
-    apply_config produced after replaying our pending system_hold_clear.
-    Alpha.48 deletes the carrier_changes-window branch entirely; this
-    test now exercises the same merge invariant via the proactive-pull
-    path (`pull_and_apply_config`), which also runs apply_config and
-    therefore the same `pending_for_replay` grace-window logic.
+    issued while Carrier had a queued change open optimistically clears
+    in the UI, then "comes back" within seconds. Root cause: the
+    /config GET handler served Carrier's raw body — which still
+    carried the MyInfinity app's queued hold-on tree — instead of the
+    merged tree that apply_config produced after replaying our pending
+    system_hold_clear.
+
+    alpha.55: the only path Carrier-app changes reach HA is the
+    pull-through in `get_system_config`. This test exercises that
+    path: latch `pending_carrier_pull`, drive a thermostat /config
+    GET, verify the served body has HA's pending cancel-hold replayed
+    onto Carrier's hold-on tree.
     """
-    # Build "Carrier's tree" by taking the real boot fixture and
-    # flipping wholeHouse/hold to ON, mimicking a MyInfinity-app-set
-    # hold queued at Carrier. Using the fixture (not a hand-rolled
-    # minimal tree) ensures parse_system_config_with_tree's strict
-    # SystemConfig validation accepts the body.
     from lxml import etree as _et
 
     _root = _et.fromstring(_read("boot_01_system_config.xml"))
@@ -268,28 +248,27 @@ async def test_config_get_in_window_replays_pending_writes_onto_carrier_tree():
     app = create_app(store=store, carrier_bridge=cb)
 
     with TestClient(app) as client:
-        # Boot — populates the local store with a real fixture (no hold).
         client.post(
             "/systems/2013W000855",
             content=_read("boot_01_system_config.xml"),
             headers={"content-type": "application/xml"},
         )
-        # HA cancels hold → enqueues a system_hold_clear pending write.
-        # Idempotent at the local-tree layer (the fixture's wholeHouse
-        # is already hold=off) but the pending row is what matters here.
+        # HA cancels hold → enqueues system_hold_clear.
         r = client.delete("/v1/system/hold")
         assert r.status_code == 200
         assert await p.unapplied_count() == 1
 
-        # Drive the proactive pull directly: bridge fetches Carrier's
-        # tree (hold=on), runs apply_config, which replays our pending
-        # system_hold_clear onto Carrier's tree.
-        ok = await cb.pull_and_apply_config("2013W000855", store)
-        assert ok is True
+        # Latch pending_carrier_pull as if a previous status POST had
+        # observed serverHasChanges=true.
+        cb.signal_carrier_has_changes()
 
-        # The served body must carry the merged tree, NOT Carrier's
-        # raw hold-on response.
-        r = client.get("/systems/2013W000855/config")
+        # Thermostat /config GET drives the pull-through. apply_config
+        # replays our pending system_hold_clear onto Carrier's hold-on
+        # tree before serving it back.
+        r = client.get(
+            "/systems/2013W000855/config",
+            headers={"Authorization": "Basic real-config-get="},
+        )
         assert r.status_code == 200
         assert b"<hold>off</hold>" in r.content, (
             "served body should reflect HA's pending cancel-hold replayed "
@@ -297,83 +276,6 @@ async def test_config_get_in_window_replays_pending_writes_onto_carrier_tree():
         )
         assert b"<hold>on</hold>" not in r.content
         assert b"<holdActivity>none</holdActivity>" in r.content
-
-    await p.close()
-
-
-async def test_post_clear_carrier_overwrite_protected_by_grace_window():
-    """Harder version of the cancel-hold-revert bug: the HA-side
-    cancel-hold has already been marked applied (pull-observed clear
-    on a previous /config GET). Then Carrier serves its STALE tree
-    (still holding the queued app hold) via the proactive-pull path.
-    Without the grace-window replay, apply_config would let Carrier's
-    hold overwrite our cleared state. With pending_for_replay's grace
-    window, the recently-applied system_hold_clear is re-replayed
-    onto Carrier's stale tree and the cancel sticks.
-
-    Alpha.48 rewrite: the carrier_changes window is gone; this test
-    now drives the merge directly via `pull_and_apply_config`, which
-    is the same code path that fires from `post_telemetry` when
-    Carrier signals serverHasChanges=true.
-    """
-    from lxml import etree as _et
-
-    _root = _et.fromstring(_read("boot_01_system_config.xml"))
-    _wh = _root.find(".//wholeHouse")
-    _wh.find("hold").text = "on"
-    _wh.find("holdActivity").text = "manual"
-    _otmr = _wh.find("otmr")
-    if _otmr is None:
-        _otmr = _et.SubElement(_wh, "otmr")
-    _otmr.text = "21:30"
-    carrier_stale_tree = _et.tostring(_root, xml_declaration=True, encoding="UTF-8")
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/config"):
-            return httpx.Response(
-                200, content=carrier_stale_tree,
-                headers={"content-type": "application/xml"},
-            )
-        return httpx.Response(200, content=b"")
-
-    cb = _bridge_with_handler(handler)
-    p = await Persistence.open(":memory:")
-    store = StateStore(persistence=p)
-    app = create_app(store=store, carrier_bridge=cb)
-
-    with TestClient(app) as client:
-        client.post(
-            "/systems/2013W000855",
-            content=_read("boot_01_system_config.xml"),
-            headers={"content-type": "application/xml"},
-        )
-        # User cancels hold in HA → enqueue + dirty.
-        client.delete("/v1/system/hold")
-        # First /config pull marks the row applied — pull-observed-clear.
-        r = client.get("/systems/2013W000855/config")
-        assert r.status_code == 200
-        assert await p.unapplied_count() == 0, (
-            "first /config GET must mark the row applied"
-        )
-        # Row is APPLIED but still within grace.
-        replay_rows = await p.pending_for_replay("2013W000855")
-        assert len(replay_rows) == 1
-        assert replay_rows[0].applied_at is not None
-        assert replay_rows[0].kind == "system_hold_clear"
-
-        # Now Carrier responds via proactive-pull with a stale tree
-        # that still has the app's hold. The grace-window replay must
-        # re-merge our cleared hold onto it before the served tree
-        # changes back.
-        ok = await cb.pull_and_apply_config("2013W000855", store)
-        assert ok is True
-        r = client.get("/systems/2013W000855/config")
-        assert r.status_code == 200
-        assert b"<hold>off</hold>" in r.content, (
-            "grace-window replay should re-merge HA's cleared hold onto "
-            "Carrier's stale tree, even though the row was already applied"
-        )
-        assert b"<hold>on</hold>" not in r.content
 
     await p.close()
 
@@ -480,7 +382,9 @@ async def test_relay_emits_access_log_line_on_success():
     cap_handler, records = _attach_test_handler()
     try:
         cb = _bridge_with_handler(handler)
-        await cb.relay("POST", "/systems/X/status", body=b"x")
+        await cb.relay(
+        "POST", "/systems/X/status", body=b"x", headers=_DEFAULT_HEADERS,
+    )
     finally:
         logging.getLogger("infinitude_proxy").removeHandler(cap_handler)
 
@@ -505,7 +409,9 @@ async def test_relay_emits_warning_on_network_failure():
     cap_handler, records = _attach_test_handler()
     try:
         cb = _bridge_with_handler(handler)
-        await cb.relay("POST", "/systems/X/status", body=b"x")
+        await cb.relay(
+        "POST", "/systems/X/status", body=b"x", headers=_DEFAULT_HEADERS,
+    )
     finally:
         logging.getLogger("infinitude_proxy").removeHandler(cap_handler)
 
@@ -542,7 +448,9 @@ async def test_health_healthy_after_successful_relay():
         return httpx.Response(200, content=b"<status/>")
 
     cb = _bridge_with_handler(handler)
-    await cb.relay("POST", "/systems/X/status", body=b"x")
+    await cb.relay(
+        "POST", "/systems/X/status", body=b"x", headers=_DEFAULT_HEADERS,
+    )
     h = cb.health()
     assert h["status"] == "healthy"
     assert h["last_success_at"] is not None
@@ -557,7 +465,9 @@ async def test_health_degraded_after_consecutive_failures():
 
     cb = _bridge_with_handler(handler)
     for _ in range(3):
-        await cb.relay("POST", "/systems/X/status", body=b"x")
+        await cb.relay(
+        "POST", "/systems/X/status", body=b"x", headers=_DEFAULT_HEADERS,
+    )
     h = cb.health()
     assert h["status"] == "degraded"
     assert h["consecutive_failures"] == 3
@@ -575,11 +485,15 @@ async def test_health_recovers_after_success_following_failures():
         return httpx.Response(200, content=b"<status/>")
 
     cb = _bridge_with_handler(handler)
-    await cb.relay("POST", "/systems/X/status", body=b"x")
+    await cb.relay(
+        "POST", "/systems/X/status", body=b"x", headers=_DEFAULT_HEADERS,
+    )
     assert cb.health()["consecutive_failures"] == 1
 
     state["fail"] = False
-    await cb.relay("POST", "/systems/X/status", body=b"x")
+    await cb.relay(
+        "POST", "/systems/X/status", body=b"x", headers=_DEFAULT_HEADERS,
+    )
     h = cb.health()
     assert h["status"] == "healthy"
     assert h["consecutive_failures"] == 0
@@ -595,7 +509,9 @@ async def test_health_5xx_counts_as_failure():
         return httpx.Response(503, content=b"")
 
     cb = _bridge_with_handler(handler)
-    await cb.relay("POST", "/systems/X/status", body=b"x")
+    await cb.relay(
+        "POST", "/systems/X/status", body=b"x", headers=_DEFAULT_HEADERS,
+    )
     h = cb.health()
     assert h["status"] == "degraded"
     assert h["consecutive_failures"] == 1
@@ -610,9 +526,6 @@ async def test_health_4xx_counts_as_success():
         return httpx.Response(404, content=b"not found")
 
     cb = _bridge_with_handler(handler)
-    # Pass headers explicitly so the per-route cache (alpha.52)
-    # accepts the request — _bridge_with_handler seeds common routes
-    # but not arbitrary test paths like "/some-unknown-path".
     await cb.relay(
         "GET", "/some-unknown-path",
         headers={"Authorization": "Basic test-explicit="},
@@ -668,7 +581,10 @@ async def test_relay_writes_carrier_out_capture_when_enabled():
             )
 
         cb = _bridge_with_handler(handler, capture_control=control)
-        await cb.relay("POST", "/systems/X/status", body=b"data=...")
+        await cb.relay(
+            "POST", "/systems/X/status",
+            body=b"data=...", headers=_DEFAULT_HEADERS,
+        )
 
         rows = await persistence.capture_list(limit=10, direction="carrier_out")
         assert len(rows) == 1
@@ -680,196 +596,6 @@ async def test_relay_writes_carrier_out_capture_when_enabled():
         assert control.submitted == 1
     finally:
         await persistence.close()
-
-
-# ── push_config (alpha.47): HA-mutation upstream sync ─────────────────
-
-
-@pytest.mark.asyncio
-async def test_relay_caches_auth_headers_for_later_push():
-    """Every successful inbound thermostat relay must rotate the auth
-    cache the bridge keeps for `push_config`. Without this, HA-side
-    pushes have nothing to authenticate with on cold start beyond the
-    very first relay's headers."""
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, content=b"")
-
-    cb = _bridge_with_handler(handler, seed_auth=False)
-    assert cb._auth_by_route == {}  # type: ignore[attr-defined]
-    await cb.relay(
-        "POST", "/systems/2013W000855/status",
-        headers={"Authorization": "Basic abc=", "User-Agent": "carrier"},
-        body=b"data=...",
-    )
-    # Per-route cache (alpha.52): keyed on (method, path).
-    cached = cb._auth_by_route.get(  # type: ignore[attr-defined]
-        ("POST", "/systems/2013W000855/status")
-    )
-    assert cached is not None
-    # The sanitizer preserves header-name case as supplied; lookup
-    # case-insensitively here (httpx normalizes on the wire).
-    lower = {k.lower(): v for k, v in cached.items()}
-    assert lower.get("authorization") == "Basic abc="
-    # Sanitizer always overrides Host to the upstream so we don't leak
-    # the proxy's local hostname back at Carrier.
-    assert lower.get("host") == "www.api.ing.carrier.com"
-
-
-@pytest.mark.asyncio
-async def test_push_config_noop_when_no_auth_cached():
-    """Cold start: no thermostat request has landed yet, so the auth
-    cache is empty. push_config must be a no-op (return False) rather
-    than POST-with-empty-headers, which Carrier would reject as 401
-    and we'd burn a consecutive-failure on the bridge health gauge."""
-    seen: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request)
-        return httpx.Response(200, content=b"")
-
-    cb = _bridge_with_handler(handler, seed_auth=False)
-    ok = await cb.push_config("2013W000855", b"data=fake")
-    assert ok is False
-    assert seen == [], "no upstream request should have been made"
-
-
-@pytest.mark.asyncio
-async def test_push_config_uses_cached_auth_and_correct_target():
-    """push_config posts to /systems/{serial} on the upstream host
-    using the cached thermostat auth FOR THAT EXACT ROUTE (alpha.52
-    per-route cache), with the supplied body and form-urlencoded
-    content-type — same wire shape Carrier accepts from a real
-    device boot/sync POST.
-
-    Prime the boot-POST route (`POST /systems/{serial}`) — same
-    route push_config uses. Status-POST auth would NOT satisfy
-    push_config's lookup; that's exactly the per-route discipline.
-    """
-    seen: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request)
-        return httpx.Response(200, content=b"")
-
-    cb = _bridge_with_handler(handler, seed_auth=False)
-    # Prime auth for the boot-POST route — push_config's exact route.
-    await cb.relay(
-        "POST", "/systems/2013W000855",
-        headers={"Authorization": "Basic xyz="},
-        body=b"data=initial-boot",
-    )
-    seen.clear()
-    body = b"data=" + b"%3Csystem%20version%3D%221.7%22%3E..."
-    ok = await cb.push_config("2013W000855", body)
-    assert ok is True
-    assert len(seen) == 1
-    req = seen[0]
-    assert req.method == "POST"
-    assert str(req.url) == (
-        "https://www.api.ing.carrier.com/systems/2013W000855"
-    )
-    assert req.headers.get("authorization") == "Basic xyz="
-    assert req.headers.get("content-type") == "application/x-www-form-urlencoded"
-    assert req.content == body
-
-
-@pytest.mark.asyncio
-async def test_push_config_logs_failure_does_not_raise():
-    """Carrier returning 5xx (or a network error) must not propagate —
-    push_config is best-effort upstream sync, not a precondition for
-    the local mutation."""
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(503, content=b"upstream busy")
-
-    cb = _bridge_with_handler(handler)
-    await cb.relay(
-        "POST", "/systems/X/status",
-        headers={"Authorization": "Basic z="},
-        body=b"data=...",
-    )
-    ok = await cb.push_config("X", b"data=fake")
-    assert ok is False  # 503 is not 2xx
-    # Bridge health should reflect the failure so /v1/healthz can
-    # surface it; failures count toward consecutive_failures.
-    assert cb._consecutive_failures > 0
-
-
-@pytest.mark.asyncio
-async def test_mutate_config_triggers_carrier_push():
-    """End-to-end: a HA-side mutation (PUT /v1/system/hold) must fire
-    `bridge.push_config` so Carrier learns about it. Without this,
-    Carrier's tree stays stale and re-asserts the pre-mutation state
-    on its next `serverHasChanges=true` window — the exact alpha.45
-    grace-window-expiration revert the 2026-05-07 capture caught."""
-    pushes: list[tuple[str, bytes]] = []
-
-    class StubBridge:
-        # Match the surface state_store / southbound rely on. Keeps
-        # the test free of an httpx mock since we're proving the wire-
-        # up, not the HTTP behavior (covered by the cb tests above).
-        enabled = True
-
-        async def push_config(self, serial: str, body: bytes) -> bool:
-            pushes.append((serial, body))
-            return True
-
-        async def relay(self, *a, **kw):
-            return None
-
-        @staticmethod
-        def has_server_changes(body):
-            return False
-
-        def take_just_recovered(self) -> bool:
-            return False
-
-        # alpha.52 surface — stubs need these to satisfy southbound.
-        def has_route_auth(self, method, path):
-            return False
-
-        def signal_carrier_has_changes(self):
-            pass
-
-        def take_pending_carrier_pull(self):
-            return False
-
-        async def open(self): pass
-        async def close(self): pass
-
-    bridge = StubBridge()
-    store = StateStore()
-    app = create_app(store=store, carrier_bridge=bridge)
-    client = TestClient(app)
-
-    client.post(
-        "/systems/2013W000855",
-        content=_read("boot_01_system_config.xml"),
-        headers={"content-type": "application/xml"},
-    )
-    pushes.clear()
-    r = client.put("/v1/system/hold", json={"activity": "home"})
-    assert r.status_code == 200
-
-    # mutate_config schedules push_config via asyncio.create_task; it
-    # runs on the event loop after the request handler returns. Yield
-    # once so the task gets to execute before we assert.
-    import asyncio as _asyncio
-    await _asyncio.sleep(0)
-    await _asyncio.sleep(0)  # give create_task two ticks to settle
-
-    assert len(pushes) == 1, (
-        f"mutate_config should have fired exactly one push; got {len(pushes)}"
-    )
-    serial, body = pushes[0]
-    assert serial == "2013W000855"
-    assert body.startswith(b"data=")
-    # Body decodes to <system version="1.7"><config>...</config></system>
-    # carrying the post-mutation hold=on state.
-    from urllib.parse import unquote_to_bytes
-    inner = unquote_to_bytes(body[5:])
-    assert b"<system version=" in inner
-    assert b"<config>" in inner or b"<config " in inner
-    assert b"<hold>on</hold>" in inner
 
 
 @pytest.mark.asyncio
@@ -956,11 +682,15 @@ async def test_circuit_breaker_opens_after_consecutive_failures():
         handler, circuit_failure_threshold=3, circuit_cooldown_initial_s=60,
     )
     for _ in range(3):
-        await cb.relay("POST", "/systems/X/status", body=b"")
+        await cb.relay(
+            "POST", "/systems/X/status", body=b"", headers=_DEFAULT_HEADERS,
+        )
     assert call_count == 3
     assert cb._circuit_open()
     # 4th call short-circuits — no httpx attempt.
-    await cb.relay("POST", "/systems/X/status", body=b"")
+    await cb.relay(
+        "POST", "/systems/X/status", body=b"", headers=_DEFAULT_HEADERS,
+    )
     assert call_count == 3, "circuit must short-circuit; no upstream call"
 
 
@@ -976,226 +706,70 @@ async def test_circuit_breaker_resets_on_success():
     cb = _bridge_with_handler(
         handler, circuit_failure_threshold=2, circuit_cooldown_initial_s=1,
     )
-    await cb.relay("POST", "/systems/X/status", body=b"")
-    await cb.relay("POST", "/systems/X/status", body=b"")
+    await cb.relay(
+        "POST", "/systems/X/status", body=b"", headers=_DEFAULT_HEADERS,
+    )
+    await cb.relay(
+        "POST", "/systems/X/status", body=b"", headers=_DEFAULT_HEADERS,
+    )
     assert cb._circuit_open()
     # Force cooldown elapsed.
     cb._circuit_open_until = datetime.now(timezone.utc) - timedelta(seconds=1)
     fail = False
-    r = await cb.relay("POST", "/systems/X/status", body=b"")
+    r = await cb.relay(
+        "POST", "/systems/X/status", body=b"", headers=_DEFAULT_HEADERS,
+    )
     assert r is not None and r.status_code == 200
     assert not cb._circuit_open()
     assert cb._consecutive_failures == 0
 
 
-@pytest.mark.asyncio
-async def test_take_just_recovered_latches_on_recovery():
-    """When the bridge transitions from a failure streak to a
-    success, take_just_recovered() returns True ONCE."""
-    fail = True
-    def handler(request):
-        if fail:
-            raise httpx.ConnectError("x", request=request)
-        return httpx.Response(200, content=b"")
-    cb = _bridge_with_handler(handler, circuit_failure_threshold=10)
-    await cb.relay("POST", "/systems/X/status", body=b"")  # fail
-    fail = False
-    await cb.relay("POST", "/systems/X/status", body=b"")  # success
-    assert cb.take_just_recovered() is True
-    assert cb.take_just_recovered() is False  # consume-on-read
-
-
-@pytest.mark.asyncio
-async def test_pull_and_apply_config_applies_carrier_tree_to_store():
-    """Verify the proactive-pull path: bridge fetches /config from
-    Carrier, parses, applies to local store, marks dirty."""
-    store = StateStore()
-    # Seed local store with boot fixture so apply_config has something
-    # to merge into.
-    from infinitude_proxy.parser import parse_system_config_with_tree
-    boot = _read("boot_01_system_config.xml")
-    tree, config = parse_system_config_with_tree(boot)
-    await store.apply_config("2013W000855", config, tree)
-
-    # Carrier returns the same fixture but with hold flipped to on,
-    # mimicking an app-queued change.
-    from lxml import etree as _et
-    root = _et.fromstring(boot)
-    wh = root.find(".//wholeHouse")
-    wh.find("hold").text = "on"
-    wh.find("holdActivity").text = "manual"
-    otmr = wh.find("otmr")
-    if otmr is None:
-        otmr = _et.SubElement(wh, "otmr")
-    otmr.text = "21:30"
-    carrier_body = _et.tostring(root, xml_declaration=True, encoding="UTF-8")
-
-    def handler(request):
+def test_status_post_latches_pending_pull_on_serverHasChanges():
+    """When Carrier signals `serverHasChanges=true` on a relayed
+    status response, the bridge must latch `pending_carrier_pull` so
+    the next thermostat /config GET drives the pull-through. The
+    addon has no auth of its own (Carrier OAuth nonces are single-use,
+    secrets in firmware — see carrier_bridge module docstring), so
+    this is the only mechanism by which Carrier-app changes reach HA.
+    """
+    def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
-            200, content=carrier_body,
+            200,
+            content=b"<status><serverHasChanges>true</serverHasChanges></status>",
             headers={"content-type": "application/xml"},
         )
 
     cb = _bridge_with_handler(handler)
-    ok = await cb.pull_and_apply_config("2013W000855", store)
-    assert ok is True
-    stored = store.get_config()
-    assert stored is not None
-    # Verify Carrier's hold-on landed in local tree.
-    wh_local = stored.tree.find(".//wholeHouse")
-    assert wh_local.find("hold").text == "on"
-    # Dirty flag set so next directive tells thermostat to pull.
-    assert store.config_dirty is True
-
-
-def test_status_post_fires_proactive_pull_on_serverHasChanges():
-    """When Carrier responds with serverHasChanges=true, the status
-    handler must schedule a pull_and_apply_config task — that's how
-    Carrier-app changes flow into our local tree without waiting on
-    the thermostat's next /config GET cycle."""
-    pull_calls: list[str] = []
-
-    class StubBridge:
-        enabled = True
-        async def open(self): pass
-        async def close(self): pass
-        async def relay(self, *a, **kw):
-            return CachedRelay(
-                status_code=200,
-                body=b"<status><serverHasChanges>true</serverHasChanges></status>",
-                content_type="application/xml",
-                cached_at=datetime.now(timezone.utc),
-            )
-        async def pull_and_apply_config(self, serial, store):
-            pull_calls.append(serial)
-            return True
-        @staticmethod
-        def has_server_changes(body):
-            return b"<serverHasChanges>true</serverHasChanges>" in (body or b"")
-        def take_just_recovered(self):
-            return False
-        def has_route_auth(self, method, path):
-            # Test setup: pretend the cache is warm for /config GET
-            # so the proactive-pull path fires (this test specifically
-            # asserts pull_and_apply_config gets called).
-            return True
-        def signal_carrier_has_changes(self):
-            pass
-        def take_pending_carrier_pull(self):
-            return False
-        def consume_perturb_next_status(self):
-            return False  # alpha.54 diagnostic: not armed in this test
-        def health(self):
-            return {"status": "healthy", "last_success_at": None,
-                    "last_attempt_at": None, "last_error": None,
-                    "consecutive_failures": 0, "circuit_open": False,
-                    "circuit_cooldown_s": 0, "pass_reqs": 0}
-
     store = StateStore()
-    app = create_app(store=store, carrier_bridge=StubBridge())
+    app = create_app(store=store, carrier_bridge=cb)
     client = TestClient(app)
     client.post(
         "/systems/2013W000855",
         content=_read("boot_01_system_config.xml"),
         headers={"content-type": "application/xml"},
     )
-    pull_calls.clear()
     r = client.post(
         "/systems/2013W000855/status",
         content=_read("boot_05_status_telemetry.xml"),
         headers={"content-type": "application/xml"},
     )
     assert r.status_code == 200
-    # The create_task fires on the event loop after the request handler
-    # returns. TestClient drives the loop to completion for each
-    # request — by the time client.post returns, scheduled tasks have
-    # run.
-    assert "2013W000855" in pull_calls, (
-        "status handler must fire pull_and_apply_config when Carrier "
+    assert cb.take_pending_carrier_pull() is True, (
+        "status handler must latch pending_carrier_pull when Carrier "
         "signals serverHasChanges=true"
     )
 
 
-def test_status_post_latches_pending_pull_when_route_auth_cold():
-    """Cold-cache fallback (alpha.52): when /config GET auth is NOT
-    yet cached and Carrier signals serverHasChanges=true, the status
-    handler must NOT fire a proactive pull (it would 401). Instead
-    it latches `signal_carrier_has_changes()` so the next thermostat
-    /config GET handles the relay with the inbound request's
-    headers.
-    """
-    pull_calls: list[str] = []
-    signaled: list[bool] = []
-
-    class StubBridge:
-        enabled = True
-        async def open(self): pass
-        async def close(self): pass
-        async def relay(self, *a, **kw):
-            return CachedRelay(
-                status_code=200,
-                body=b"<status><serverHasChanges>true</serverHasChanges></status>",
-                content_type="application/xml",
-                cached_at=datetime.now(timezone.utc),
-            )
-        async def pull_and_apply_config(self, serial, store):
-            pull_calls.append(serial); return True
-        @staticmethod
-        def has_server_changes(body):
-            return b"<serverHasChanges>true</serverHasChanges>" in (body or b"")
-        def has_route_auth(self, method, path):
-            return False  # cold cache for this route
-        def signal_carrier_has_changes(self):
-            signaled.append(True)
-        def take_pending_carrier_pull(self):
-            return False
-        def take_just_recovered(self):
-            return False
-        def consume_perturb_next_status(self):
-            return False  # alpha.54 diagnostic: not armed
-        def health(self):
-            return {"status": "healthy", "last_success_at": None,
-                    "last_attempt_at": None, "last_error": None,
-                    "consecutive_failures": 0, "circuit_open": False,
-                    "circuit_cooldown_s": 0, "pass_reqs": 0}
-
-    store = StateStore()
-    app = create_app(store=store, carrier_bridge=StubBridge())
-    client = TestClient(app)
-    client.post(
-        "/systems/2013W000855",
-        content=_read("boot_01_system_config.xml"),
-        headers={"content-type": "application/xml"},
-    )
-    pull_calls.clear()
-    signaled.clear()
-    r = client.post(
-        "/systems/2013W000855/status",
-        content=_read("boot_05_status_telemetry.xml"),
-        headers={"content-type": "application/xml"},
-    )
-    assert r.status_code == 200
-    assert pull_calls == [], (
-        "cold-cache path must NOT fire proactive pull (would 401)"
-    )
-    assert signaled == [True], (
-        "cold-cache path must latch signal_carrier_has_changes so the "
-        "next thermostat /config GET drives the relay"
-    )
-
-
-def test_config_get_cold_start_relays_thermostat_request_to_carrier():
-    """Cold-start fallback end-to-end: bridge has pending_carrier_pull
+def test_config_get_pull_through_relays_thermostat_request_to_carrier():
+    """Pull-through end-to-end: bridge has `pending_carrier_pull`
     latched, thermostat does /config GET. The southbound handler must
-    relay the GET to Carrier with the inbound request's headers,
-    apply the response to local store, and serve the merged tree.
-    The relay also populates the per-route auth cache so subsequent
-    serverHasChanges signals can use the proactive-pull path.
+    relay the GET to Carrier with the inbound request's headers
+    (Carrier OAuth nonces are single-use; only the thermostat's own
+    fresh signature works), apply the response to local store, and
+    serve the merged tree.
     """
     relay_calls: list[tuple[str, str]] = []
     seen_auths: list[str | None] = []
-    # Carrier returns a tree with a hold engaged — represents the
-    # Carrier-app-set state we need to merge into local.
     from lxml import etree as _et
     boot = _read("boot_01_system_config.xml")
     root = _et.fromstring(boot)
@@ -1216,24 +790,19 @@ def test_config_get_cold_start_relays_thermostat_request_to_carrier():
             headers={"content-type": "application/xml"},
         )
 
-    cb = _bridge_with_handler(handler, seed_auth=False)
+    cb = _bridge_with_handler(handler)
     store = StateStore()
     app = create_app(store=store, carrier_bridge=cb)
     client = TestClient(app)
-    # Boot — populates store, primes the boot-POST route auth.
     client.post(
         "/systems/2013W000855",
         content=boot,
         headers={"content-type": "application/xml"},
     )
-    # Latch the pending-pull signal as if a status post had just
-    # observed serverHasChanges=true.
     cb.signal_carrier_has_changes()
     relay_calls.clear()
     seen_auths.clear()
 
-    # Thermostat does /config GET with its own headers — these will
-    # be forwarded to Carrier.
     r = client.get(
         "/systems/2013W000855/config",
         headers={
@@ -1242,18 +811,11 @@ def test_config_get_cold_start_relays_thermostat_request_to_carrier():
         },
     )
     assert r.status_code == 200
-    # Relay must have fired with the inbound /config-GET auth.
     assert any(
         m == "GET" and "/config" in p for m, p in relay_calls
-    ), "cold-start fallback must relay /config GET to Carrier"
+    ), "pull-through must relay /config GET to Carrier"
     assert "Basic config-get-real=" in seen_auths, (
-        "the relay must forward the inbound thermostat headers, not "
-        "any cached cross-route auth"
-    )
-    # Per-route cache must be warm now for /config GET so the next
-    # serverHasChanges signal can use the proactive-pull path.
-    assert ("GET", "/systems/2013W000855/config") in cb._auth_by_route, (
-        "cold-start fallback must populate the cache as a side effect"
+        "the relay must forward the inbound thermostat headers"
     )
     # Local store reflects Carrier's tree (hold-on landed).
     stored = store.get_config()
@@ -1262,91 +824,14 @@ def test_config_get_cold_start_relays_thermostat_request_to_carrier():
 
 
 @pytest.mark.asyncio
-async def test_status_post_fires_catchup_push_on_recovery():
-    """After bridge transitions from failing to succeeding, the next
-    status post must fire a catch-up push_config carrying the current
-    local tree, so HA mutations during the outage propagate upstream."""
-    push_calls: list[tuple[str, int]] = []
-    fail = True
-    def handler(request):
-        if fail:
-            raise httpx.ConnectError("x", request=request)
-        # Recovery — return clean response with serverHasChanges=false.
-        return httpx.Response(
-            200,
-            content=b"<status><serverHasChanges>false</serverHasChanges></status>",
-            headers={"content-type": "application/xml"},
-        )
-
-    cb = _bridge_with_handler(handler, circuit_failure_threshold=10)
-    # Capture push_config calls without short-circuiting; wrap the method.
-    original_push = cb.push_config
-    async def capture_push(serial, body):
-        push_calls.append((serial, len(body)))
-        return await original_push(serial, body)
-    cb.push_config = capture_push  # type: ignore[method-assign]
-
-    store = StateStore()
-    app = create_app(store=store, carrier_bridge=cb)
-    with TestClient(app) as client:
-        client.post(
-            "/systems/2013W000855",
-            content=_read("boot_01_system_config.xml"),
-            headers={"content-type": "application/xml"},
-        )
-        # First status: fail.
-        client.post(
-            "/systems/2013W000855/status",
-            content=_read("boot_05_status_telemetry.xml"),
-            headers={"content-type": "application/xml"},
-        )
-        push_calls.clear()
-        fail = False  # next call recovers
-        client.post(
-            "/systems/2013W000855/status",
-            content=_read("boot_05_status_telemetry.xml"),
-            headers={"content-type": "application/xml"},
-        )
-        # Give the create_task a moment.
-        import asyncio as _a
-        await _a.sleep(0)
-        await _a.sleep(0)
-    assert len(push_calls) >= 1, (
-        "catch-up push must fire on first success after a failure streak"
-    )
-    assert push_calls[0][0] == "2013W000855"
-
-
-@pytest.mark.asyncio
-async def test_every_public_outbound_method_routes_through_outbound():
-    """Architectural invariant (alpha.51): every public method that
-    makes a Carrier-bound HTTP call must go through `_outbound`. This
-    test wraps `_outbound` with a spy and exercises each public
-    method, asserting the spy was called for every one.
-
-    Without this invariant, a future contributor adding a new
-    outbound feature could write `await self._client.request(...)`
-    directly, bypassing the auth resolver / circuit breaker / health
-    update / capture insertion. That's exactly what produced the
-    alpha.48 bug where `pull_and_apply_config` shipped without auth
-    forwarding and silently 401'd every Carrier-app change.
+async def test_relay_routes_through_outbound():
+    """Architectural invariant: `relay()` is a thin wrapper around
+    `_outbound`. With the alpha.55 cleanup, `relay()` is the only
+    public outbound method left, so this test just locks down the
+    chokepoint discipline.
     """
-    from infinitude_proxy.parser import parse_system_config_with_tree
-    from infinitude_proxy.state_store import StateStore
-
     def handler(request: httpx.Request) -> httpx.Response:
-        # Return a minimal valid <config> for pull_and_apply_config's
-        # parse step. Auth presence is what we're locking down — any
-        # 200 with a parseable body is fine.
-        return httpx.Response(
-            200,
-            content=(
-                b'<?xml version="1.0"?>\n<config>'
-                b'<wholeHouse><hold>off</hold><holdActivity>none</holdActivity><otmr/></wholeHouse>'
-                b'</config>'
-            ),
-            headers={"content-type": "application/xml"},
-        )
+        return httpx.Response(200, content=b"")
 
     cb = _bridge_with_handler(handler)
     calls: list[tuple[str, str]] = []
@@ -1357,8 +842,6 @@ async def test_every_public_outbound_method_routes_through_outbound():
         return await original(method, path, **kw)
 
     cb._outbound = spy  # type: ignore[attr-defined]
-
-    # 1) relay (request-scoped path).
     await cb.relay(
         "POST", "/systems/X/status",
         headers={"Authorization": "Basic test="},
@@ -1367,32 +850,14 @@ async def test_every_public_outbound_method_routes_through_outbound():
     assert any("/systems/X/status" in p for _, p in calls), (
         "relay() must route through _outbound"
     )
-    calls.clear()
-
-    # 2) push_config (background path, cached auth).
-    await cb.push_config("X", b"data=fake")
-    assert any(p == "/systems/X" for _, p in calls), (
-        "push_config() must route through _outbound"
-    )
-    calls.clear()
-
-    # 3) pull_and_apply_config (background path, cached auth).
-    # Seed local store first so apply_config has something to work on.
-    store = StateStore()
-    boot = _read("boot_01_system_config.xml")
-    tree, config = parse_system_config_with_tree(boot)
-    await store.apply_config("X", config, tree)
-    await cb.pull_and_apply_config("X", store)
-    assert any(p == "/systems/X/config" for _, p in calls), (
-        "pull_and_apply_config() must route through _outbound"
-    )
 
 
 @pytest.mark.asyncio
-async def test_outbound_refuses_cold_start_without_auth():
-    """The chokepoint must refuse to call Carrier when no auth is
-    available — no source_headers and no cache. Returns None and
-    does not increment the failure counter (a guaranteed-401 isn't
+async def test_outbound_refuses_when_no_source_headers():
+    """The chokepoint must refuse when no `source_headers` is provided.
+    The addon has no way to mint Carrier OAuth on its own — only a
+    real thermostat-originated request carries valid auth. Refusal
+    does NOT increment the failure counter (a guaranteed-401 isn't
     the bridge's fault and shouldn't flap the circuit breaker)."""
     seen: list = []
 
@@ -1400,81 +865,11 @@ async def test_outbound_refuses_cold_start_without_auth():
         seen.append(request)
         return httpx.Response(200, content=b"")
 
-    cb = _bridge_with_handler(handler, seed_auth=False)
+    cb = _bridge_with_handler(handler)
     result = await cb._outbound("GET", "/systems/X/config")  # type: ignore[attr-defined]
     assert result is None
     assert seen == []
     assert cb._consecutive_failures == 0
-
-
-@pytest.mark.asyncio
-async def test_outbound_caches_auth_only_when_source_headers_provided():
-    """Cache discipline: `_outbound` updates `_auth_by_route` ONLY
-    when called with `source_headers` (a real thermostat-originated
-    relay for THIS route). Background calls that fall back to cached
-    auth must NOT re-cache themselves."""
-    def handler(request):
-        return httpx.Response(200, content=b"")
-
-    cb = _bridge_with_handler(handler, seed_auth=False)
-    assert cb._auth_by_route == {}  # type: ignore[attr-defined]
-
-    # source_headers provided → entry populates for THIS route.
-    await cb._outbound(  # type: ignore[attr-defined]
-        "POST", "/systems/X/status",
-        body=b"data=...",
-        source_headers={"Authorization": "Basic real="},
-    )
-    status_key = ("POST", "/systems/X/status")
-    assert status_key in cb._auth_by_route
-    cached_before = dict(cb._auth_by_route[status_key])
-
-    # Background call for a DIFFERENT route. Cache miss expected
-    # (per-route discipline) — no cross-route fallback. The original
-    # status entry is unchanged; no /config GET entry is added.
-    result = await cb._outbound(  # type: ignore[attr-defined]
-        "GET", "/systems/X/config",
-    )
-    assert result is None, "background call without route-specific auth must refuse"
-    assert cb._auth_by_route[status_key] == cached_before
-    assert ("GET", "/systems/X/config") not in cb._auth_by_route
-
-
-@pytest.mark.asyncio
-async def test_outbound_per_route_isolation_status_auth_does_not_satisfy_config():
-    """Architectural invariant (alpha.52): cached status-POST headers
-    must NOT satisfy a /config GET lookup. This is the entire reason
-    we have the per-route cache — Carrier validates per-route and
-    cross-route reuse causes the 401s observed live alpha.48-51."""
-    def handler(request):
-        return httpx.Response(200, content=b"")
-
-    cb = _bridge_with_handler(handler, seed_auth=False)
-
-    # Populate ONLY the status route.
-    await cb.relay(
-        "POST", "/systems/X/status",
-        headers={"Authorization": "Basic status="},
-        body=b"data=...",
-    )
-    assert ("POST", "/systems/X/status") in cb._auth_by_route
-    assert ("GET", "/systems/X/config") not in cb._auth_by_route
-
-    # push_config (POST /systems/X) and pull_and_apply_config
-    # (GET /systems/X/config) are DIFFERENT routes from the populated
-    # status entry. Both must refuse — pre-alpha.52 the single cache
-    # would have satisfied them and produced the live 401s.
-    push_ok = await cb.push_config("X", b"data=...")
-    assert push_ok is False, (
-        "push_config must NOT use status-POST auth — different route, "
-        "Carrier rejects it (verified live)."
-    )
-    from infinitude_proxy.state_store import StateStore
-    pull_ok = await cb.pull_and_apply_config("X", StateStore())
-    assert pull_ok is False, (
-        "pull_and_apply_config must NOT use status-POST auth on "
-        "/config GET — different route, Carrier rejects it."
-    )
 
 
 def test_resilience_endpoints_respond_under_1s_when_carrier_blackholed():

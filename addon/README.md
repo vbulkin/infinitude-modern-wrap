@@ -22,8 +22,14 @@ See [`design/DESIGN.md`](../design/DESIGN.md) for architecture and
 | 5 | Conditional polling (off while SSE up; resumes on disconnect) | ✅ shipped (alpha.31) |
 | 6 | Legacy Mojolicious HTML UI (humidity / vacation / service reminders) | ⛔ obsolete; user-facing surfaces are now the HACS integration's Lovelace cards. The Python add-on does not serve `infinitude-ui.html`. |
 | 7 | Carrier cloud passthrough — explicit forward proxy | ✅ shipped (alpha.24) |
-| 7 | Carrier cloud passthrough — implicit bridge (status mirror, `carrier_changes` window, scheduled changes, directive pass-through) | ✅ shipped (alpha.25–26) |
-| 7 | Vacation HA-side surface | ⏳ deferred to project tail |
+| 7 | Carrier cloud passthrough — implicit bridge (status mirror, pull-through on `serverHasChanges`, directive pass-through) | ✅ shipped (alpha.25–55) |
+| 7 | Vacation HA-side surface | ✅ shipped (alpha.46) |
+
+> **Propagation behavior — read this first.** HA mutations propagate
+> to the thermostat in seconds and to the Carrier app on the
+> thermostat's own re-sync schedule (hours, sometimes). See
+> [`design/LIMITATIONS.md`](../design/LIMITATIONS.md) for the empirical
+> evidence behind this asymmetry and what the addon can / cannot do.
 
 ## API surface
 
@@ -71,10 +77,11 @@ See [`design/DESIGN.md`](../design/DESIGN.md) for architecture and
 ### Carrier cloud relay
 
 - **Forward proxy** (catch-all): `GET/POST/PUT/PATCH /http%3A//host/...` — URL-encoded explicit forward. Allowlist-gated against `*.carrier.com` / `*.bryant.com`. Used by the thermostat for firmware OTA (`/http%3A//www.ota.ing.carrier.com/releaseNotes/...`).
-- **Implicit bridge**: every thermostat-bound POST (`/systems/{serial}/status`, `/notifications`, `/idu_config`, `/odu_config`, fallback metadata) is mirrored to `https://www.api.ing.carrier.com/...` (no per-call throttle as of alpha.48 — Carrier's pingRate signal handles device-side rate-limiting natively, and a second proxy-side throttle was actively defeating that signal). Non-status mirrors fire-and-forget so a slow Carrier never makes the thermostat wait. Single boolean `carrier_bridge` (default `true`) toggles the entire bridge off for offline-first deployments.
-- **`carrier_changes` window** — when Carrier responds to a status mirror with `serverHasChanges=true`, a 120 s window opens; the next `/systems/{serial}/config` GET serves Carrier's tree (carrying app-queued MyInfinity commands), schedules a forced re-sync at +60 s, then closes the window.
-- **Directive pass-through** — when no local mutations are pending, the thermostat's status response IS Carrier's directive (with `pingRate` forced to 12). This is what surfaces Carrier's `serverHasChanges=true` to the thermostat so it actually fetches config.
+- **Implicit bridge**: every thermostat-bound POST (`/systems/{serial}/status`, `/notifications`, `/idu_config`, `/odu_config`, fallback metadata) is mirrored to `https://www.api.ing.carrier.com/...` (no per-call throttle — Carrier's pingRate signal handles device-side rate-limiting natively). Non-status mirrors fire-and-forget so a slow Carrier never makes the thermostat wait. Single boolean `carrier_bridge` (default `true`) toggles the entire bridge off for offline-first deployments.
+- **Pull-through on `serverHasChanges`** — when Carrier responds to a status mirror with `serverHasChanges=true`, the bridge latches a flag; the next thermostat `/systems/{serial}/config` GET is relayed upstream (using the thermostat's own fresh OAuth signature — the only auth Carrier accepts), Carrier's tree is merged into local state, and the merged tree is served back. This is the **only** mechanism by which Carrier-app changes reach HA — see [`design/LIMITATIONS.md`](../design/LIMITATIONS.md) for why we can't push.
+- **Directive pass-through** — when no local mutations are pending, the thermostat's status response IS Carrier's directive (Carrier's `pingRate` forwarded verbatim — pre-alpha.48 we forced 12 s and defeated Carrier's authoritative rate-limit). This is what surfaces Carrier's `serverHasChanges=true` so the thermostat actually fetches config.
 - **Per-request access log** at INFO: `relay POST https://www.api.ing.carrier.com/systems/.../status -> 200 (143ms, 287 B)` mirrors uvicorn's access-log shape so outbound traffic sits alongside inbound in the same log stream.
+- **Resilience**: 3 s outbound timeout + circuit breaker (opens after 3 consecutive failures; exponential cooldown to 5 min cap). Thermostat-facing endpoints stay sub-second when Carrier is unreachable.
 
 ### Debug
 
@@ -92,7 +99,7 @@ The thermostat's existing XML endpoints are terminated internally and shape the 
 
 Write model: northbound PATCHes edit the retained `<config>` tree in place, enqueue a typed `pending_writes` row, and flip the `config_dirty` flag. The next status-POST directive signals `configHasChanges=true`; the thermostat then issues `GET /config` and we serve the mutated bytes. Pending rows are marked applied on that GET. See [`design/DESIGN.md`](../design/DESIGN.md) §4.3 / §4.4.2.
 
-Replay: if the proxy restarts or the thermostat reboots with stale state, pending rows are re-applied onto the incoming config tree via `REPLAY_REGISTRY` before we persist it, so nothing the user wrote is lost.
+Replay: if the proxy restarts or the thermostat reboots with stale state, unapplied pending rows are re-applied onto the incoming config tree via `REPLAY_REGISTRY` before we persist it, so nothing the user wrote is lost. Pull-through from Carrier (`serverHasChanges` path) goes through the same replay so a concurrent HA mutation isn't reverted by Carrier's stale view.
 
 ## Local development
 

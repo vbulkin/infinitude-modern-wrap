@@ -281,29 +281,17 @@ def create_app(
     if forward_proxy is None:
         forward_proxy = ForwardProxy(capture_control=control)
     fproxy = forward_proxy
-    # CarrierBridge is the implicit-relay path — mirrors thermostat
-    # status posts up to Carrier (so MyInfinity sees fresh state),
-    # detects `serverHasChanges=true` and proactively pulls /config
-    # so app-initiated changes flow into our local tree, and pushes
-    # HA mutations upstream so Carrier's tree never drifts (alpha.47).
-    # Single boolean toggle: `Settings.carrier_bridge`. False makes
-    # the bridge fully inert — useful for offline-first deployments
-    # or when debugging upstream-related behavior. As of alpha.48
-    # there's no per-call throttle (`pass_reqs` removed); Carrier's
-    # own pingRate signal handles device-side rate limiting natively.
+    # CarrierBridge mirrors thermostat-originated traffic to Carrier so
+    # the MyInfinity cloud sees fresh telemetry, and pulls Carrier's
+    # /config when the cloud signals `serverHasChanges=true` (piggy-
+    # backed on the thermostat's next /config GET — we have no auth of
+    # our own; see the bridge module docstring). Single boolean toggle:
+    # `Settings.carrier_bridge`. False makes the bridge fully inert.
     if carrier_bridge is None:
         carrier_bridge = CarrierBridge(
             enabled=settings.carrier_bridge, capture_control=control,
         )
     cbridge = carrier_bridge
-    # Wire the bridge into the state store so HA-originated mutations
-    # synthesize an upstream POST /systems/{serial} after they apply
-    # locally. See CarrierBridge module docstring + state_store
-    # `attach_carrier_bridge` for *why* — closes the asymmetry where
-    # panel changes propagate to Carrier naturally but HA changes
-    # don't. Re-attached on every create_app() so tests get a fresh
-    # binding.
-    store.attach_carrier_bridge(cbridge)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -370,28 +358,6 @@ def create_app(
     register_error_handlers(app)
     app.include_router(create_southbound_router(store, cbridge))
     app.include_router(create_debug_router(control))
-
-    @app.post(
-        "/v1/debug/perturb-next-status",
-        include_in_schema=False,
-        tags=["debug"],
-    )
-    def perturb_next_status() -> dict:
-        """alpha.54 diagnostic — Phase 3 Test 1. Arms a one-shot
-        latch on the bridge: the next status-POST relay to Carrier
-        will have its body modified (one extra form param appended)
-        while the OAuth header stays the thermostat's original. The
-        carrier_out capture row will show how Carrier responded —
-        200 means body isn't part of the OAuth signature check (path
-        forward exists); 401 with a signature error means it is
-        (mechanism dead). Single-use; auto-cleared on consumption.
-        Remove this endpoint and its bridge field after the test
-        decision is made.
-        """
-        if cbridge is None:
-            return {"armed": False, "reason": "bridge not configured"}
-        cbridge.signal_perturb_next_status()
-        return {"armed": True}
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     async def root_landing() -> str:

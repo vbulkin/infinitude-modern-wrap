@@ -39,7 +39,6 @@ from .parser import (
     parse_system_config_with_tree,
     reparse_config_tree,
     serialize_config_tree,
-    serialize_system_post_body,
 )
 from .persistence import Persistence
 
@@ -187,13 +186,6 @@ class StateStore:
         self._persistence = persistence
         self.events = EventPublisher()
         self.drift = DriftTracker()
-        # Optional CarrierBridge handle — used to push HA-originated
-        # config mutations upstream (`bridge.push_config`). The bridge
-        # is built at create_app() time and attached here via
-        # `attach_carrier_bridge` after the lifespan opens its httpx
-        # client. None means push is disabled (offline-only mode); the
-        # rest of the store works regardless.
-        self._carrier_bridge: object | None = None
 
     def attach_persistence(self, persistence: Persistence | None) -> None:
         """Attach (or detach) the persistence handle after construction.
@@ -204,20 +196,6 @@ class StateStore:
         to detach (e.g. when persistence open fails and we degrade to
         in-memory-only mode)."""
         self._persistence = persistence
-
-    def attach_carrier_bridge(self, bridge: object | None) -> None:
-        """Wire a CarrierBridge for upstream-push on HA mutations.
-
-        Lazy attachment matches `attach_persistence`: the bridge is
-        constructed at create_app() time but its httpx client opens in
-        the lifespan. After attachment, every successful
-        `mutate_config` fires a fire-and-forget `bridge.push_config`
-        carrying the post-mutation tree, so Carrier's cloud-side view
-        catches up to HA's changes the same way it would after a
-        panel touch — see CarrierBridge module docstring for the
-        asymmetry this works around. Pass None to detach (tests +
-        offline-only deployments)."""
-        self._carrier_bridge = bridge
 
     async def restore_from_persistence(self) -> None:
         """Rehydrate in-memory state from the most recent DB snapshot.
@@ -369,11 +347,12 @@ class StateStore:
         how to replay it can still catch up. `config` is re-derived
         from the mutated tree when any replay actually ran.
 
-        Replay covers BOTH unapplied rows AND recently-applied rows
-        within the persistence-layer grace window (`pending_for_replay`).
-        Without the grace window, an HA mutation that was already
-        cleared via pull-observed-clear could be silently reverted by
-        a slightly-stale Carrier tree arriving moments later.
+        Replay covers unapplied rows only — once a write is observed
+        applied (the thermostat pulled the served tree, see
+        `mark_all_applied` in southbound `get_system_config`) we trust
+        the propagation. Carrier-app pull-through merges Carrier's tree
+        into local; any HA mutation made before that pull is already
+        applied locally and replays on top of Carrier's view.
 
         Pending fetch + replay + tree swap all run under `self._lock`
         so a racing `mutate_config` cannot enqueue between fetch and
@@ -384,7 +363,7 @@ class StateStore:
             mutated = False
             pending: list = []
             if self._persistence is not None:
-                pending = await self._persistence.pending_for_replay(serial)
+                pending = await self._persistence.pending(serial)
                 for pw in pending:
                     fn = REPLAY_REGISTRY.get(pw.kind)
                     if fn is None:
@@ -509,38 +488,6 @@ class StateStore:
                         kind, target,
                     )
             result = self._config
-            # Snapshot the post-mutation tree as the wire-shape that
-            # the thermostat would send after a panel-originated
-            # change. We build this *under the lock* so the body
-            # bytes are consistent with the tree we just persisted —
-            # subsequent mutate_config calls are queued behind the
-            # lock and won't race the serialization. The actual push
-            # to Carrier happens after release (network I/O off the
-            # lock).
-            push_body = (
-                serialize_system_post_body(self._config.tree)
-                if self._carrier_bridge is not None
-                else None
-            )
-        # Fire the upstream push as a fire-and-forget background task.
-        # Reasoning:
-        #   * HA's mutation has already been applied to the local tree
-        #     and persisted; the user-visible action is done. Carrier
-        #     sync is a consistency layer, not a success criterion.
-        #   * push_config is a network call (5-10 s in worst case);
-        #     blocking the HTTP response would punish HA users for
-        #     Carrier's latency and would re-introduce the
-        #     mutate-under-lock contention we just fixed.
-        #   * Failures inside push_config are logged but never raise,
-        #     so the discarded task can't surface an unhandled
-        #     exception even on a swallowed network error.
-        # See CarrierBridge module docstring for *why* this push is
-        # necessary at all (the device-vs-server origin asymmetry).
-        if push_body is not None and self._carrier_bridge is not None:
-            asyncio.create_task(
-                self._carrier_bridge.push_config(serial, push_body),
-                name=f"carrier_push_{kind}",
-            )
         resource = _target_to_resource(target)
         await self.events.publish(
             "state.update",

@@ -31,7 +31,6 @@ from .parser import (
     parse_system_config_with_tree,
     parse_telemetry,
     serialize_config_tree,
-    serialize_system_post_body,
 )
 from .state_store import StateStore
 
@@ -124,29 +123,13 @@ def create_southbound_router(
         snapshot = parse_telemetry(_unwrap_form(body))
         await store.apply_telemetry(serial, snapshot)
         local_changes = await store.take_config_dirty()
-        # alpha.54 diagnostic — Phase 3 Test 1: if armed, append a
-        # junk form parameter to the body before relaying so the
-        # OAuth base-string body params differ from what the
-        # thermostat signed. Headers are still the thermostat's
-        # original (fresh nonce, fresh signature). Carrier's response
-        # tells us whether body is part of OAuth's signed base string.
-        # See `CarrierBridge._perturb_next_status_post` for full
-        # rationale. Cleared on first consumption.
-        relay_body = body
-        if bridge is not None and bridge.consume_perturb_next_status():
-            relay_body = body + b"&debug_perturb=alpha54"
-            logger.warning(
-                "alpha.54 diagnostic: perturbing next status-POST relay "
-                "body (+%d bytes) — observe carrier_out result",
-                len(relay_body) - len(body),
-            )
-        # Mirror status post to Carrier (every tick — no throttle as of
-        # alpha.48; Carrier's pingRate handles device-side rate limiting
-        # natively). Skip the relay only when HA has a write queued —
-        # the thermostat will pull our local tree next, and Carrier's
-        # stale view shouldn't race that. Otherwise we always relay so
-        # Carrier's view of telemetry stays current and we get to see
-        # `serverHasChanges=true` as soon as Carrier flips it.
+        # Mirror status post to Carrier (every tick — Carrier's pingRate
+        # directive handles device-side rate limiting natively). Skip
+        # only when HA has a write queued: the thermostat will pull our
+        # local tree next, and Carrier's stale view shouldn't race that.
+        # Otherwise we relay so Carrier's view of telemetry stays current
+        # and we observe `serverHasChanges=true` the moment Carrier flips
+        # it.
         relayed: CachedRelay | None = None
         if bridge is not None:
             relayed = await bridge.relay(
@@ -154,30 +137,17 @@ def create_southbound_router(
                 f"/systems/{serial}/status",
                 query=str(request.url.query) or None,
                 headers=dict(request.headers),
-                body=relay_body,
+                body=body,
                 local_changes_pending=local_changes,
             )
-        # Carrier signalled `serverHasChanges=true` — the MyInfinity
-        # app has queued a config change. Two propagation paths
-        # depending on whether the per-route auth cache for /config
-        # GET is warm (alpha.52 architecture):
-        #
-        #   A) Warm cache: proactive pull as a background task so
-        #      Carrier's tree merges into local within one telemetry
-        #      tick, then the thermostat's next /config GET serves
-        #      the merged tree (we mark dirty inside pull_and_apply).
-        #
-        #   B) Cold cache (thermostat hasn't done a /config GET since
-        #      restart, so we have no auth Carrier accepts on that
-        #      route): defer to the cold-start fallback in
-        #      `get_system_config` — we just latch the
-        #      `pending_carrier_pull` flag and let the thermostat's
-        #      next /config GET drive the relay (with the inbound
-        #      request's actual /config-GET headers, which we then
-        #      cache for future cycles).
-        #
-        # Either way we set the latch so the cold-cache path is the
-        # last-resort safety net even if the proactive pull failed.
+        # Carrier signalled `serverHasChanges=true` → the MyInfinity app
+        # queued a config change. We can't pull from Carrier ourselves
+        # (no auth: Carrier OAuth requires single-use nonces signed by
+        # firmware-resident secrets — see carrier_bridge module
+        # docstring). Instead we latch the signal: the thermostat's next
+        # /config GET goes through the cold-start fallback in
+        # `get_system_config`, which relays the GET to Carrier using the
+        # thermostat's own auth headers and merges the result.
         if (
             bridge is not None
             and not local_changes
@@ -185,41 +155,7 @@ def create_southbound_router(
             and relayed.status_code == 200
             and bridge.has_server_changes(relayed.body)
         ):
-            if bridge.has_route_auth("GET", f"/systems/{serial}/config"):
-                # Warm cache → proactive pull as background task.
-                # pull_and_apply_config marks store dirty on success,
-                # so the thermostat's next /config GET serves the
-                # already-merged local tree without further relay.
-                asyncio.create_task(
-                    bridge.pull_and_apply_config(serial, store),
-                    name=f"carrier_pull_{serial}",
-                )
-            else:
-                # Cold cache → can't proactively pull (no auth for
-                # /config GET yet). Latch the signal so the
-                # thermostat's next /config GET handler relays it
-                # (with the inbound headers, populating the cache
-                # for the next cycle's proactive pull).
-                bridge.signal_carrier_has_changes()
-
-        # Catch-up push on bridge recovery. If the bridge just
-        # transitioned from failing → succeeding, fire one synthetic
-        # push_config carrying the current local tree so any HA
-        # mutations that occurred during the outage propagate to
-        # Carrier without operator intervention. take_just_recovered
-        # is consume-on-read so this only fires once per recovery.
-        if bridge is not None and bridge.take_just_recovered():
-            stored = store.get_config()
-            if stored is not None:
-                catchup_body = serialize_system_post_body(stored.tree)
-                asyncio.create_task(
-                    bridge.push_config(serial, catchup_body),
-                    name=f"carrier_catchup_{serial}",
-                )
-                logger.info(
-                    "carrier_bridge: firing catch-up push_config after "
-                    "recovery (serial=%s, %d B)", serial, len(catchup_body),
-                )
+            bridge.signal_carrier_has_changes()
         # Directive selection:
         #   - Local changes pending: send configHasChanges=true with
         #     our DIRTY pingRate so the thermostat re-polls fast and
@@ -349,28 +285,19 @@ def create_southbound_router(
         after we signal configHasChanges, and it won't pull without
         then saving the payload.
 
-        Cold-start fallback for Carrier-app changes (alpha.52): if the
-        bridge has `pending_carrier_pull` latched (Carrier signalled
-        serverHasChanges=true but the per-route auth cache for /config
-        GET was cold), this handler relays the inbound thermostat /config
-        GET to Carrier with the request's actual headers — populating
-        the cache as a side effect — applies the result to the local
-        store, and serves the merged tree. After this round-trip the
-        cache is warm; subsequent serverHasChanges signals get the
-        proactive-pull path (see post_telemetry).
-
-        Steady state (warm cache): the proactive pull in post_telemetry
-        already merged Carrier's tree into local; this handler just
-        serves it. No relay attempted.
+        Carrier-app pull-through: when Carrier signalled
+        `serverHasChanges=true` on the previous status POST, the bridge
+        latched a `pending_carrier_pull` flag. We can't pull on our own
+        — Carrier OAuth uses single-use nonces signed by firmware-
+        resident secrets, so the proxy has no way to mint a request
+        Carrier will accept (see carrier_bridge module docstring). What
+        we CAN do: piggy-back on this thermostat-originated /config GET,
+        which carries auth Carrier accepts on this route, relay it
+        upstream, and merge the response into the local tree before
+        serving it back. This is the only path by which Carrier-app-
+        originated changes reach HA.
         """
         if bridge is not None and bridge.take_pending_carrier_pull():
-            # Cold-start fallback: relay this GET to Carrier with the
-            # thermostat's actual /config-GET headers (auth Carrier
-            # accepts on this route), apply the result, populate the
-            # per-route cache for next time. apply_config also runs
-            # the alpha.45 grace-window pending-write replay so any
-            # queued HA mutations merge onto Carrier's tree before
-            # we serve the result back.
             relayed = await bridge.relay(
                 "GET", f"/systems/{serial}/config",
                 query=str(request.url.query) or None,
@@ -382,21 +309,19 @@ def create_southbound_router(
                     tree, config = parse_system_config_with_tree(relayed.body)
                     await store.apply_config(serial, config, tree)
                     logger.info(
-                        "carrier_bridge: cold-start pull applied "
-                        "(serial=%s, %d B); per-route auth cache now "
-                        "warm for GET /config", serial, len(relayed.body),
+                        "carrier_bridge: pull-through applied "
+                        "(serial=%s, %d B)", serial, len(relayed.body),
                     )
                 except Exception as e:
                     logger.warning(
-                        "carrier_bridge: cold-start pull parse failed "
+                        "carrier_bridge: pull-through parse failed "
                         "(serial=%s): %s — falling through to local tree",
                         serial, e,
                     )
             elif relayed is not None:
                 logger.warning(
-                    "carrier_bridge: cold-start pull non-200 from Carrier "
-                    "(serial=%s, status=%d) — serving local tree; cache is "
-                    "now populated and next cycle should succeed",
+                    "carrier_bridge: pull-through non-200 from Carrier "
+                    "(serial=%s, status=%d) — serving local tree",
                     serial, relayed.status_code,
                 )
 
