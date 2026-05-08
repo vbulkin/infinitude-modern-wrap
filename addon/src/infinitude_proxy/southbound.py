@@ -124,6 +124,22 @@ def create_southbound_router(
         snapshot = parse_telemetry(_unwrap_form(body))
         await store.apply_telemetry(serial, snapshot)
         local_changes = await store.take_config_dirty()
+        # alpha.54 diagnostic — Phase 3 Test 1: if armed, append a
+        # junk form parameter to the body before relaying so the
+        # OAuth base-string body params differ from what the
+        # thermostat signed. Headers are still the thermostat's
+        # original (fresh nonce, fresh signature). Carrier's response
+        # tells us whether body is part of OAuth's signed base string.
+        # See `CarrierBridge._perturb_next_status_post` for full
+        # rationale. Cleared on first consumption.
+        relay_body = body
+        if bridge is not None and bridge.consume_perturb_next_status():
+            relay_body = body + b"&debug_perturb=alpha54"
+            logger.warning(
+                "alpha.54 diagnostic: perturbing next status-POST relay "
+                "body (+%d bytes) — observe carrier_out result",
+                len(relay_body) - len(body),
+            )
         # Mirror status post to Carrier (every tick — no throttle as of
         # alpha.48; Carrier's pingRate handles device-side rate limiting
         # natively). Skip the relay only when HA has a write queued —
@@ -138,7 +154,7 @@ def create_southbound_router(
                 f"/systems/{serial}/status",
                 query=str(request.url.query) or None,
                 headers=dict(request.headers),
-                body=body,
+                body=relay_body,
                 local_changes_pending=local_changes,
             )
         # Carrier signalled `serverHasChanges=true` — the MyInfinity

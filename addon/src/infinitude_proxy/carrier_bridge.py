@@ -285,6 +285,17 @@ class CarrierBridge:
         # intervention. Single-use semantics: set on transition,
         # cleared by `take_just_recovered()`.
         self._just_recovered: bool = False
+        # alpha.54 diagnostic: when set, the next status-POST relay
+        # appends a junk form parameter to the body before forwarding
+        # to Carrier. The thermostat's OAuth header is unchanged so
+        # nonce/timestamp are fresh — but the OAuth base-string body
+        # parameters DIFFER from what was signed. Carrier's response
+        # answers Phase 3 Test 1: does Carrier verify the body in the
+        # signature? 200 → no (path forward exists for HA→Carrier
+        # propagation via in-flight telemetry rewriting); 401 with a
+        # signature error → yes (mechanism dead). Single-use; cleared
+        # on consumption.
+        self._perturb_next_status_post: bool = False
         # Circuit breaker state. `_circuit_open_until` is the wall
         # time after which we'll attempt another relay. While open we
         # short-circuit `relay()` to None without touching httpx.
@@ -442,6 +453,21 @@ class CarrierBridge:
         subsequent calls return False until the next failure streak."""
         if self._just_recovered:
             self._just_recovered = False
+            return True
+        return False
+
+    def signal_perturb_next_status(self) -> None:
+        """alpha.54 diagnostic — see `_perturb_next_status_post` field
+        comment. Caller fires this via the debug endpoint to arm the
+        next status-POST relay for body perturbation."""
+        self._perturb_next_status_post = True
+
+    def consume_perturb_next_status(self) -> bool:
+        """alpha.54 diagnostic — atomic check-and-clear. Called by
+        southbound.post_telemetry on every relay; returns True ONCE
+        if the latch is armed."""
+        if self._perturb_next_status_post:
+            self._perturb_next_status_post = False
             return True
         return False
 

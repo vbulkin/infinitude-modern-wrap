@@ -371,6 +371,28 @@ def create_app(
     app.include_router(create_southbound_router(store, cbridge))
     app.include_router(create_debug_router(control))
 
+    @app.post(
+        "/v1/debug/perturb-next-status",
+        include_in_schema=False,
+        tags=["debug"],
+    )
+    def perturb_next_status() -> dict:
+        """alpha.54 diagnostic — Phase 3 Test 1. Arms a one-shot
+        latch on the bridge: the next status-POST relay to Carrier
+        will have its body modified (one extra form param appended)
+        while the OAuth header stays the thermostat's original. The
+        carrier_out capture row will show how Carrier responded —
+        200 means body isn't part of the OAuth signature check (path
+        forward exists); 401 with a signature error means it is
+        (mechanism dead). Single-use; auto-cleared on consumption.
+        Remove this endpoint and its bridge field after the test
+        decision is made.
+        """
+        if cbridge is None:
+            return {"armed": False, "reason": "bridge not configured"}
+        cbridge.signal_perturb_next_status()
+        return {"armed": True}
+
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     async def root_landing() -> str:
         return (

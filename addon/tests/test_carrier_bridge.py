@@ -1083,6 +1083,8 @@ def test_status_post_fires_proactive_pull_on_serverHasChanges():
             pass
         def take_pending_carrier_pull(self):
             return False
+        def consume_perturb_next_status(self):
+            return False  # alpha.54 diagnostic: not armed in this test
         def health(self):
             return {"status": "healthy", "last_success_at": None,
                     "last_attempt_at": None, "last_error": None,
@@ -1149,6 +1151,8 @@ def test_status_post_latches_pending_pull_when_route_auth_cold():
             return False
         def take_just_recovered(self):
             return False
+        def consume_perturb_next_status(self):
+            return False  # alpha.54 diagnostic: not armed
         def health(self):
             return {"status": "healthy", "last_success_at": None,
                     "last_attempt_at": None, "last_error": None,
