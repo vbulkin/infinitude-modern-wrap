@@ -36,9 +36,19 @@ def _read(name: str) -> bytes:
     return (FIXTURES / name).read_bytes()
 
 
-def _bridge_with_handler(handler, **kw) -> CarrierBridge:
+def _bridge_with_handler(handler, *, seed_auth: bool = True, **kw) -> CarrierBridge:
     """A CarrierBridge whose httpx client is wired to a MockTransport
-    so tests don't hit the real internet."""
+    so tests don't hit the real internet.
+
+    `seed_auth=True` (default) pre-populates `_latest_auth_headers`
+    with a placeholder Authorization header so background-path tests
+    (push_config, pull_and_apply_config) can run without an explicit
+    priming `relay()` call. Pass `seed_auth=False` to test the
+    cold-start refusal path explicitly. The single-chokepoint
+    `_outbound` method (alpha.51) refuses requests when no auth is
+    available, so without seeding, every test that previously got
+    away with empty headers now hits the cold-start guard.
+    """
     kw.setdefault("enabled", True)
     cb = CarrierBridge(**kw)
     cb._client = httpx.AsyncClient(  # type: ignore[attr-defined]
@@ -46,6 +56,11 @@ def _bridge_with_handler(handler, **kw) -> CarrierBridge:
         timeout=cb._timeout,
         follow_redirects=False,
     )
+    if seed_auth:
+        cb._latest_auth_headers = {  # type: ignore[attr-defined]
+            "authorization": "Basic test-seed",
+            "host": "www.api.ing.carrier.com",
+        }
     return cb
 
 
@@ -665,7 +680,7 @@ async def test_relay_caches_auth_headers_for_later_push():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=b"")
 
-    cb = _bridge_with_handler(handler)
+    cb = _bridge_with_handler(handler, seed_auth=False)
     assert cb._latest_auth_headers is None  # type: ignore[attr-defined]
     await cb.relay(
         "POST", "/systems/2013W000855/status",
@@ -695,7 +710,7 @@ async def test_push_config_noop_when_no_auth_cached():
         seen.append(request)
         return httpx.Response(200, content=b"")
 
-    cb = _bridge_with_handler(handler)
+    cb = _bridge_with_handler(handler, seed_auth=False)
     ok = await cb.push_config("2013W000855", b"data=fake")
     assert ok is False
     assert seen == [], "no upstream request should have been made"
@@ -1111,6 +1126,125 @@ async def test_status_post_fires_catchup_push_on_recovery():
         "catch-up push must fire on first success after a failure streak"
     )
     assert push_calls[0][0] == "2013W000855"
+
+
+@pytest.mark.asyncio
+async def test_every_public_outbound_method_routes_through_outbound():
+    """Architectural invariant (alpha.51): every public method that
+    makes a Carrier-bound HTTP call must go through `_outbound`. This
+    test wraps `_outbound` with a spy and exercises each public
+    method, asserting the spy was called for every one.
+
+    Without this invariant, a future contributor adding a new
+    outbound feature could write `await self._client.request(...)`
+    directly, bypassing the auth resolver / circuit breaker / health
+    update / capture insertion. That's exactly what produced the
+    alpha.48 bug where `pull_and_apply_config` shipped without auth
+    forwarding and silently 401'd every Carrier-app change.
+    """
+    from infinitude_proxy.parser import parse_system_config_with_tree
+    from infinitude_proxy.state_store import StateStore
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Return a minimal valid <config> for pull_and_apply_config's
+        # parse step. Auth presence is what we're locking down — any
+        # 200 with a parseable body is fine.
+        return httpx.Response(
+            200,
+            content=(
+                b'<?xml version="1.0"?>\n<config>'
+                b'<wholeHouse><hold>off</hold><holdActivity>none</holdActivity><otmr/></wholeHouse>'
+                b'</config>'
+            ),
+            headers={"content-type": "application/xml"},
+        )
+
+    cb = _bridge_with_handler(handler)
+    calls: list[tuple[str, str]] = []
+    original = cb._outbound  # type: ignore[attr-defined]
+
+    async def spy(method, path, **kw):
+        calls.append((method, path))
+        return await original(method, path, **kw)
+
+    cb._outbound = spy  # type: ignore[attr-defined]
+
+    # 1) relay (request-scoped path).
+    await cb.relay(
+        "POST", "/systems/X/status",
+        headers={"Authorization": "Basic test="},
+        body=b"data=...",
+    )
+    assert any("/systems/X/status" in p for _, p in calls), (
+        "relay() must route through _outbound"
+    )
+    calls.clear()
+
+    # 2) push_config (background path, cached auth).
+    await cb.push_config("X", b"data=fake")
+    assert any(p == "/systems/X" for _, p in calls), (
+        "push_config() must route through _outbound"
+    )
+    calls.clear()
+
+    # 3) pull_and_apply_config (background path, cached auth).
+    # Seed local store first so apply_config has something to work on.
+    store = StateStore()
+    boot = _read("boot_01_system_config.xml")
+    tree, config = parse_system_config_with_tree(boot)
+    await store.apply_config("X", config, tree)
+    await cb.pull_and_apply_config("X", store)
+    assert any(p == "/systems/X/config" for _, p in calls), (
+        "pull_and_apply_config() must route through _outbound"
+    )
+
+
+@pytest.mark.asyncio
+async def test_outbound_refuses_cold_start_without_auth():
+    """The chokepoint must refuse to call Carrier when no auth is
+    available — no source_headers and no cache. Returns None and
+    does not increment the failure counter (a guaranteed-401 isn't
+    the bridge's fault and shouldn't flap the circuit breaker)."""
+    seen: list = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, content=b"")
+
+    cb = _bridge_with_handler(handler, seed_auth=False)
+    result = await cb._outbound("GET", "/systems/X/config")  # type: ignore[attr-defined]
+    assert result is None
+    assert seen == []
+    assert cb._consecutive_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_outbound_caches_auth_only_when_source_headers_provided():
+    """Cache discipline: `_outbound` updates `_latest_auth_headers`
+    ONLY when called with `source_headers` (a real thermostat-
+    originated relay). Background calls that fall back to cached
+    auth must NOT re-cache themselves — that would be a no-op at
+    best and could mask staleness at worst."""
+    def handler(request):
+        return httpx.Response(200, content=b"")
+
+    cb = _bridge_with_handler(handler, seed_auth=False)
+    assert cb._latest_auth_headers is None
+
+    # source_headers provided → cache populates.
+    await cb._outbound(  # type: ignore[attr-defined]
+        "POST", "/systems/X/status",
+        body=b"data=...",
+        source_headers={"Authorization": "Basic real="},
+    )
+    assert cb._latest_auth_headers is not None
+    cached_before = dict(cb._latest_auth_headers)
+
+    # Background call (no source_headers) — cache unchanged.
+    await cb._outbound(  # type: ignore[attr-defined]
+        "GET", "/systems/X/config",
+    )
+    assert cb._latest_auth_headers == cached_before
 
 
 def test_resilience_endpoints_respond_under_1s_when_carrier_blackholed():

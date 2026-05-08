@@ -1,5 +1,44 @@
 """Bidirectional bridge between the thermostat and Carrier's cloud.
 
+────────────────────────────────────────────────────────────────────
+Single-chokepoint outbound architecture (alpha.51)
+────────────────────────────────────────────────────────────────────
+
+Every outbound HTTP call this module makes — `relay` for
+thermostat-originated mirrors, `push_config` for HA-mutation upstream
+sync, `pull_and_apply_config` for proactive Carrier-app pickups —
+routes through one private method, `_outbound`. That method is the
+ONLY place that:
+
+  * resolves auth (explicit `source_headers` if the caller has the
+    inbound request's headers in hand, else the cached
+    `_latest_auth_headers` from the most recent thermostat-originated
+    relay, else refuses with a canonical warning);
+  * applies the circuit breaker;
+  * issues the httpx call with a bounded timeout;
+  * updates `_latest_auth_headers` (only when source_headers is
+    provided — i.e., when a real thermostat request just succeeded
+    against Carrier with these creds);
+  * updates the consecutive-failures counter / circuit breaker;
+  * emits the per-request access-log line;
+  * inserts a row into the capture-traffic table.
+
+Why a single chokepoint: the alpha.48 refactor introduced two
+independent ways to produce an outbound — `relay()` taking explicit
+headers and `push_config()` reading from a cached field — and the
+divergence let `pull_and_apply_config` (alpha.48) ship without auth
+forwarding. Carrier returned 401 on every proactive pull, silently,
+and Carrier-app changes never reached HA. That class of bug is
+gone: any new outbound call must call `_outbound`, and `_outbound`
+resolves auth without the caller having to remember.
+
+The public methods (`relay`, `push_config`, `pull_and_apply_config`)
+are thin wrappers over `_outbound`. They handle path/body composition
+and method-specific concerns (e.g. `relay`'s `local_changes_pending`
+short-circuit) but cannot bypass auth.
+
+
+
 Companion to `forward_proxy.ForwardProxy`. The forward proxy handles
 explicit URL-encoded requests (`/http%3A//host/...`) one-shot. This
 bridge implements the *implicit* relay the legacy Perl Infinitude has
@@ -389,173 +428,40 @@ class CarrierBridge:
                 method.upper(), path,
             )
             return None
-        if self._circuit_open():
-            logger.debug(
-                "carrier_bridge: skip %s %s — circuit open",
-                method.upper(), path,
-            )
-            return None
-        if self._client is None:
-            logger.debug(
-                "carrier_bridge: skip %s %s — client not initialized",
-                method.upper(), path,
-            )
-            return None
-
-        url = f"https://{self._upstream_host}{path}"
-        if query:
-            url = f"{url}?{query}"
-
-        outgoing_headers = self._sanitize_request_headers(headers or {})
-
-        # Cache the sanitized auth set for `push_config`. We rotate on
-        # every relay (every status POST = every 12-30 s during normal
-        # operation) so Carrier never sees auth older than one cadence
-        # tick. Cached BEFORE we send so a 401 here doesn't blank the
-        # last known-good set — push_config will discover the same 401
-        # and log; the next status POST gives us fresh auth.
-        self._latest_auth_headers = dict(outgoing_headers)
-
-        start = time.monotonic()
-        self._last_attempt_at = datetime.now(timezone.utc)
-        try:
-            response = await self._client.request(
-                method.upper(), url,
-                headers=outgoing_headers,
-                content=body or None,
-            )
-        except httpx.RequestError as e:
-            duration_ms = int((time.monotonic() - start) * 1000)
-            self._record_failure(f"{type(e).__name__}: {e}")
-            logger.warning(
-                'relay %s %s -> error %s (%dms)',
-                method.upper(), url, type(e).__name__, duration_ms,
-            )
-            await self._capture_failure(method, path, query, body, str(e), start)
-            return None
-
-        # 5xx from Carrier is also a failure for health purposes (their
-        # API is up but returning errors); 4xx is application-level
-        # (we sent something they didn't like) and counts as success
-        # since the round-trip itself worked.
-        if response.status_code >= 500:
-            self._record_failure(f"HTTP {response.status_code}")
-        else:
-            self._record_success()
-
-        duration_ms = int((time.monotonic() - start) * 1000)
-        relay_response = CachedRelay(
-            status_code=response.status_code,
-            body=response.content,
-            content_type=response.headers.get("content-type"),
-            cached_at=datetime.now(timezone.utc),
+        return await self._outbound(
+            method, path,
+            query=query, body=body,
+            source_headers=headers,
         )
-
-        # Per-request access-log — INFO level, formatted like uvicorn's
-        # access log so outbound Carrier traffic is visible in the
-        # same `journalctl`/Apps log stream as inbound thermostat
-        # traffic.
-        logger.info(
-            'relay %s %s -> %d (%dms, %d B)',
-            method.upper(), url,
-            response.status_code, duration_ms, len(relay_response.body),
-        )
-
-        await self._capture_success(method, path, query, body, response, start)
-        return relay_response
 
     async def push_config(self, serial: str, body: bytes) -> bool:
         """Synthesize a thermostat-style boot POST so Carrier learns
         about an HA-originated config change.
 
-        See the module docstring for *why* this exists. In short: when
-        a config change is initiated at the thermostat panel, the
-        thermostat naturally re-POSTs `/systems/{serial}` upstream and
-        our `_bridge_mirror` carries that to Carrier. When the change
-        is initiated in HA, the thermostat consumes our local tree via
-        `GET /config` and (correctly, from its perspective) does NOT
-        re-POST upstream — it can't distinguish HA-served bytes from
-        Carrier-served bytes, so it treats both as already-known to
-        Carrier. This method plugs that gap by emitting the wire-shape
-        the panel-originated POST would have produced.
+        See the module docstring for *why* this exists. Short version:
+        the thermostat re-POSTs `/systems/{serial}` upstream after a
+        panel-originated change, and our bridge mirrors that to
+        Carrier. HA-originated changes don't trigger that re-POST
+        because the thermostat can't tell HA-served bytes from
+        Carrier-served bytes. `push_config` synthesizes the
+        equivalent wire shape using cached thermostat auth so
+        Carrier's tree stays current after every HA mutation.
 
         Body is the form-encoded `<system version="1.7"><config>...
-        </config></system>` shape that the thermostat sends — see
+        </config></system>` shape — see
         `parser.serialize_system_post_body`.
 
-        Returns True iff Carrier replied 2xx. Failures (network errors,
-        4xx auth, 5xx) are logged but never propagated to the caller —
-        HA's mutation has already landed locally; the upstream sync
-        is a best-effort consistency layer, not the success criterion
-        for the user-visible action.
-
-        No-ops in four cases:
-          * bridge disabled by operator (`enabled=False`).
-          * httpx client not yet opened (lifespan hasn't run).
-          * circuit breaker is open (recent failures).
-          * No thermostat auth headers cached yet (cold start before
-            the first inbound thermostat request).
-        Each is logged so the operator can tell why a push didn't
-        happen.
+        Returns True iff Carrier replied 2xx. Failures (network,
+        4xx auth, 5xx) are logged in `_outbound` but never propagated
+        — HA's mutation has already landed locally; the upstream sync
+        is best-effort.
         """
-        if not self._enabled:
-            logger.debug("push_config: bridge disabled")
-            return False
-        if self._client is None:
-            logger.debug("push_config: httpx client not initialized")
-            return False
-        if self._circuit_open():
-            logger.debug("push_config: circuit open; deferring upstream sync")
-            return False
-        if self._latest_auth_headers is None:
-            # This is genuinely common during the first ~30 s of
-            # process lifetime, before the thermostat's first status
-            # POST. Once the cache populates, every subsequent push
-            # works. WARNING (not DEBUG) so a *persistent* miss is
-            # visible — that would mean the thermostat isn't reaching
-            # us at all, which is a bigger problem than a delayed push.
-            logger.warning(
-                "push_config: no thermostat auth headers cached yet "
-                "(serial=%s, body=%d B); deferring upstream sync",
-                serial, len(body),
-            )
-            return False
-
-        path = f"/systems/{serial}"
-        url = f"https://{self._upstream_host}{path}"
-        outgoing_headers = self._sanitize_request_headers(self._latest_auth_headers)
-        outgoing_headers["content-type"] = "application/x-www-form-urlencoded"
-
-        start = time.monotonic()
-        self._last_attempt_at = datetime.now(timezone.utc)
-        try:
-            response = await self._client.request(
-                "POST", url,
-                headers=outgoing_headers,
-                content=body,
-            )
-        except httpx.RequestError as e:
-            duration_ms = int((time.monotonic() - start) * 1000)
-            self._record_failure(f"push_config {type(e).__name__}: {e}")
-            logger.warning(
-                "push_config %s -> error %s (%dms)",
-                url, type(e).__name__, duration_ms,
-            )
-            await self._capture_failure("POST", path, None, body, str(e), start)
-            return False
-
-        duration_ms = int((time.monotonic() - start) * 1000)
-        if 200 <= response.status_code < 300:
-            self._record_success()
-        elif response.status_code >= 500:
-            self._record_failure(f"push_config HTTP {response.status_code}")
-
-        logger.info(
-            "push %s %s -> %d (%dms, %d B body)",
-            "POST", url, response.status_code, duration_ms, len(body),
+        response = await self._outbound(
+            "POST", f"/systems/{serial}",
+            body=body,
+            extra_headers={"content-type": "application/x-www-form-urlencoded"},
         )
-        await self._capture_success("POST", path, None, body, response, start)
-        return 200 <= response.status_code < 300
+        return response is not None and 200 <= response.status_code < 300
 
     async def pull_and_apply_config(self, serial: str, store) -> bool:
         """Proactively fetch Carrier's `/config` tree and apply it
@@ -583,13 +489,8 @@ class CarrierBridge:
         propagated — HA's view of state stays whatever it was; the
         thermostat keeps running on its existing tree.
         """
-        if not self._enabled or self._client is None:
-            return False
-        # Re-use the same relay machinery (circuit breaker, auth
-        # capture, capture-traffic insertion all consistent).
-        relayed = await self.relay(
+        relayed = await self._outbound(
             "GET", f"/systems/{serial}/config",
-            local_changes_pending=False,
         )
         if relayed is None or relayed.status_code != 200 or not relayed.body:
             return False
@@ -618,6 +519,141 @@ class CarrierBridge:
             "store (serial=%s, %d B)", serial, len(relayed.body),
         )
         return True
+
+    # ── Single-chokepoint outbound ────────────────────────────────────
+
+    async def _outbound(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: bytes | None = None,
+        query: str | None = None,
+        source_headers: Mapping[str, str] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+    ) -> CachedRelay | None:
+        """The single point through which every Carrier-bound HTTP
+        call flows. Public methods (`relay`, `push_config`,
+        `pull_and_apply_config`) are thin wrappers — none of them
+        touch httpx directly. See module docstring for the rationale.
+
+        Auth resolution:
+
+          * `source_headers` provided (a real thermostat request just
+            handed us its headers): sanitize, use, AND update
+            `_latest_auth_headers` so subsequent background tasks
+            have a known-good cred set. Cached BEFORE the call so a
+            transient 401 doesn't blank the last known-good copy.
+          * `source_headers=None` (background task): fall back to
+            `_latest_auth_headers` from the most recent inbound relay.
+          * Neither available (cold start, no thermostat traffic
+            yet): refuse with a canonical WARNING and return None.
+            Calling Carrier with no auth would just 401 and waste a
+            consecutive-failure tick.
+
+        Other guards (in order, all return None):
+          * bridge disabled (`enabled=False`)
+          * httpx client not initialized (lifespan hasn't run)
+          * circuit breaker open (recent failures)
+
+        `extra_headers` (e.g. content-type for `push_config`) layer on
+        top of the resolved auth set — they are NOT subject to the
+        sanitizer (the sanitizer protects against thermostat-supplied
+        headers leaking the proxy's local hop, but extras are
+        bridge-supplied and trusted).
+
+        Health updates: 5xx → record_failure (real upstream issue);
+        anything else → record_success (round-trip itself worked).
+        4xx is treated as success because the network path is healthy
+        even if Carrier rejected the specific request — flapping the
+        circuit breaker on a single 401 (e.g. token-rotation race)
+        would mask the working state.
+        """
+        if not self._enabled:
+            return None
+        if self._client is None:
+            logger.debug(
+                "carrier_bridge: skip %s %s — client not initialized",
+                method.upper(), path,
+            )
+            return None
+        if self._circuit_open():
+            logger.debug(
+                "carrier_bridge: skip %s %s — circuit open",
+                method.upper(), path,
+            )
+            return None
+
+        # ── Auth resolution ──
+        if source_headers is not None:
+            outgoing = self._sanitize_request_headers(source_headers)
+            # Cache BEFORE the request so a 401 doesn't blank the
+            # last known-good set; thermostat-originated relays bring
+            # fresh auth on every status POST (~12-30 s cadence) so
+            # the cache stays current.
+            self._latest_auth_headers = dict(outgoing)
+        elif self._latest_auth_headers is not None:
+            # Background path (push_config, pull_and_apply_config).
+            # Re-sanitize defensively — idempotent.
+            outgoing = self._sanitize_request_headers(self._latest_auth_headers)
+        else:
+            # Cold start: no thermostat request has landed yet, so we
+            # have no auth Carrier will accept. Don't burn a
+            # consecutive-failure tick on a guaranteed-401; warn so
+            # a *persistent* miss is visible (would mean the
+            # thermostat isn't reaching us at all, which is a bigger
+            # problem than a delayed background sync).
+            logger.warning(
+                "carrier_bridge: skip %s %s — no thermostat auth "
+                "headers cached yet (cold start)", method.upper(), path,
+            )
+            return None
+
+        if extra_headers:
+            for k, v in extra_headers.items():
+                outgoing[k] = v
+
+        url = f"https://{self._upstream_host}{path}"
+        if query:
+            url = f"{url}?{query}"
+
+        start = time.monotonic()
+        self._last_attempt_at = datetime.now(timezone.utc)
+        try:
+            response = await self._client.request(
+                method.upper(), url,
+                headers=outgoing,
+                content=body or None,
+            )
+        except httpx.RequestError as e:
+            duration_ms = int((time.monotonic() - start) * 1000)
+            self._record_failure(f"{type(e).__name__}: {e}")
+            logger.warning(
+                "relay %s %s -> error %s (%dms)",
+                method.upper(), url, type(e).__name__, duration_ms,
+            )
+            await self._capture_failure(method, path, query, body, str(e), start)
+            return None
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+        if response.status_code >= 500:
+            self._record_failure(f"HTTP {response.status_code}")
+        else:
+            self._record_success()
+
+        wrapped = CachedRelay(
+            status_code=response.status_code,
+            body=response.content,
+            content_type=response.headers.get("content-type"),
+            cached_at=datetime.now(timezone.utc),
+        )
+        logger.info(
+            "relay %s %s -> %d (%dms, %d B)",
+            method.upper(), url,
+            response.status_code, duration_ms, len(wrapped.body),
+        )
+        await self._capture_success(method, path, query, body, response, start)
+        return wrapped
 
     # ── Internal helpers ─────────────────────────────────────────────
 
