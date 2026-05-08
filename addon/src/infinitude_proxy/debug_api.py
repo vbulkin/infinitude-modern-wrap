@@ -15,6 +15,7 @@ against a fake persistence/control pair.
 from __future__ import annotations
 
 import base64
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -51,6 +52,12 @@ class CaptureEntryMeta(BaseModel):
     respContentType: str | None
     respBytes: int
     durationMs: int | None
+    # alpha.53 (v4 schema) — full request/response header dicts so the
+    # diagnostic comparator can diff thermostat-real-time vs addon-
+    # replay calls without theorizing. NULL on pre-v4 entries or when
+    # capture was off mid-request.
+    reqHeaders: dict[str, str] | None = None
+    respHeaders: dict[str, str] | None = None
 
 
 class CaptureEntry(CaptureEntryMeta):
@@ -68,6 +75,19 @@ def _iso(ts: float | None) -> datetime | None:
     if ts is None:
         return None
     return datetime.fromtimestamp(ts, tz=timezone.utc)
+
+
+def _headers_from_row(headers_json: str | None) -> dict[str, str] | None:
+    """Decode a JSON-string header column into a dict for the API
+    response. Returns None for NULL columns (pre-v4 entries or
+    capture-off mid-request)."""
+    if headers_json is None:
+        return None
+    try:
+        decoded = json.loads(headers_json)
+    except (TypeError, ValueError):
+        return None
+    return decoded if isinstance(decoded, dict) else None
 
 
 def _is_textual(content_type: str | None) -> bool:
@@ -193,6 +213,8 @@ def create_debug_router(control: CaptureControl) -> APIRouter:
                 respContentType=r["resp_content_type"],
                 respBytes=int(r["resp_bytes"] or 0),
                 durationMs=r["duration_ms"],
+                reqHeaders=_headers_from_row(r.get("req_headers_json")),
+                respHeaders=_headers_from_row(r.get("resp_headers_json")),
             )
             for r in rows
         ]
@@ -222,6 +244,8 @@ def create_debug_router(control: CaptureControl) -> APIRouter:
             reqBodyEncoding=req_enc,
             respBody=resp_str,
             respBodyEncoding=resp_enc,
+            reqHeaders=_headers_from_row(row.get("req_headers_json")),
+            respHeaders=_headers_from_row(row.get("resp_headers_json")),
         )
 
     @router.delete("", response_model=FlushResult)

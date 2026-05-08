@@ -214,6 +214,9 @@ class ForwardProxy:
             resp_content_type=upstream.headers.get("content-type"),
             resp_body=upstream.content,
             duration_ms=duration_ms,
+            resp_headers={
+                k.lower(): v for k, v in upstream.headers.items()
+            },
         )
 
     async def _capture_failure(
@@ -235,6 +238,7 @@ class ForwardProxy:
             resp_content_type="text/plain",
             resp_body=error.encode("utf-8"),
             duration_ms=int((time.monotonic() - start) * 1000),
+            resp_headers=None,
         )
 
     def _should_capture(self) -> bool:
@@ -255,6 +259,7 @@ class ForwardProxy:
         resp_content_type: str | None,
         resp_body: bytes,
         duration_ms: int,
+        resp_headers: dict[str, str] | None = None,
     ) -> None:
         assert self._capture is not None
         persistence = self._capture.persistence
@@ -281,6 +286,10 @@ class ForwardProxy:
                 resp_body=resp_body or None,
                 duration_ms=duration_ms,
                 max_rows=self._capture.max_rows,
+                req_headers={k.lower(): v for k, v in req_headers.items()},
+                resp_headers=(
+                    dict(resp_headers) if resp_headers else None
+                ),
             )
         except Exception:
             self._capture.errors += 1

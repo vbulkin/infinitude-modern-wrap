@@ -30,7 +30,7 @@ import aiosqlite
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -100,6 +100,24 @@ CREATE INDEX IF NOT EXISTS idx_capture_path ON capture_traffic(path);
 _SCHEMA_V3_ADD = """
 ALTER TABLE state_cache ADD COLUMN odu_status_xml BLOB;
 ALTER TABLE state_cache ADD COLUMN idu_status_xml BLOB;
+"""
+
+# v4 (alpha.53): full request + response header capture, for the
+# investigation into why our synthetic Carrier-bound POSTs sometimes
+# 401 while the thermostat's real-time calls succeed. Pre-v4 we only
+# stored req_content_type — useless for diffing thermostat-real-time
+# vs addon-replay headers. With v4 the capture_traffic table stores
+# the raw header dict (JSON-encoded) for both directions, so the
+# investigation can compare what's actually different on the wire
+# without theorizing about route scope, TTLs, etc.
+#
+# `req_headers_json` and `resp_headers_json` are TEXT (JSON object
+# {name: value}). NULL when the emitter didn't capture them (pre-v4
+# entries, or when capture is disabled mid-request). Capture
+# middleware + CarrierBridge + ForwardProxy all populate these.
+_SCHEMA_V4_ADD = """
+ALTER TABLE capture_traffic ADD COLUMN req_headers_json TEXT;
+ALTER TABLE capture_traffic ADD COLUMN resp_headers_json TEXT;
 """
 
 
@@ -173,6 +191,7 @@ class Persistence:
             # stamping the version row.
             await self._conn.executescript(_SCHEMA_V2_ADD)
             await self._conn.executescript(_SCHEMA_V3_ADD)
+            await self._conn.executescript(_SCHEMA_V4_ADD)
             await self._conn.execute(
                 "INSERT INTO schema_version (version) VALUES (?)",
                 (SCHEMA_VERSION,),
@@ -209,6 +228,21 @@ class Persistence:
                 if "idu_status_xml" not in cols:
                     await self._conn.execute(
                         "ALTER TABLE state_cache ADD COLUMN idu_status_xml BLOB"
+                    )
+            if current < 4:
+                # Same idempotent ALTER pattern: check table_info on
+                # capture_traffic, add the header columns if missing.
+                async with self._conn.execute(
+                    "PRAGMA table_info(capture_traffic)"
+                ) as cur:
+                    cols = {r[1] for r in await cur.fetchall()}
+                if "req_headers_json" not in cols:
+                    await self._conn.execute(
+                        "ALTER TABLE capture_traffic ADD COLUMN req_headers_json TEXT"
+                    )
+                if "resp_headers_json" not in cols:
+                    await self._conn.execute(
+                        "ALTER TABLE capture_traffic ADD COLUMN resp_headers_json TEXT"
                     )
             await self._conn.execute(
                 "UPDATE schema_version SET version = ?", (SCHEMA_VERSION,)
@@ -522,6 +556,8 @@ class Persistence:
         resp_body: bytes | None,
         duration_ms: int | None,
         max_rows: int | None = None,
+        req_headers: dict[str, str] | None = None,
+        resp_headers: dict[str, str] | None = None,
     ) -> int:
         """Insert one traffic row and, when max_rows is set, trim the
         oldest rows down to the cap in the same transaction.
@@ -530,19 +566,29 @@ class Persistence:
         can't observe a window where the table exceeds the cap. Cost of
         the extra DELETE on every insert is negligible at expected
         cadences (~10/minute sustained).
+
+        v4 (alpha.53): `req_headers` / `resp_headers` are JSON-encoded
+        and stored on the row so the diagnostic "what's different
+        between thermostat-real-time and addon-replay" investigation
+        has actual data to compare against. None preserved as NULL —
+        consistent with capture-disabled or pre-v4 entries.
         """
+        req_h_json = json.dumps(req_headers) if req_headers is not None else None
+        resp_h_json = json.dumps(resp_headers) if resp_headers is not None else None
         cursor = await self._conn.execute(
             """
             INSERT INTO capture_traffic
                 (captured_at, direction, method, path, query,
                  status_code, req_content_type, req_body,
-                 resp_content_type, resp_body, duration_ms)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 resp_content_type, resp_body, duration_ms,
+                 req_headers_json, resp_headers_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 captured_at, direction, method, path, query,
                 status_code, req_content_type, req_body,
                 resp_content_type, resp_body, duration_ms,
+                req_h_json, resp_h_json,
             ),
         )
         assert cursor.lastrowid is not None
@@ -603,7 +649,8 @@ class Persistence:
             "SELECT id, captured_at, direction, method, path, query, "
             "       status_code, req_content_type, "
             "       LENGTH(req_body) AS req_bytes, resp_content_type, "
-            "       LENGTH(resp_body) AS resp_bytes, duration_ms "
+            "       LENGTH(resp_body) AS resp_bytes, duration_ms, "
+            "       req_headers_json, resp_headers_json "
             f"FROM capture_traffic {where} "
             "ORDER BY id DESC LIMIT ?"
         )
@@ -613,6 +660,7 @@ class Persistence:
             "id", "captured_at", "direction", "method", "path", "query",
             "status_code", "req_content_type", "req_bytes",
             "resp_content_type", "resp_bytes", "duration_ms",
+            "req_headers_json", "resp_headers_json",
         ]
         return [dict(zip(cols, r)) for r in rows]
 
@@ -622,7 +670,8 @@ class Persistence:
         async with self._conn.execute(
             "SELECT id, captured_at, direction, method, path, query, "
             "       status_code, req_content_type, req_body, "
-            "       resp_content_type, resp_body, duration_ms "
+            "       resp_content_type, resp_body, duration_ms, "
+            "       req_headers_json, resp_headers_json "
             "FROM capture_traffic WHERE id = ?",
             (row_id,),
         ) as cursor:
@@ -633,6 +682,7 @@ class Persistence:
             "id", "captured_at", "direction", "method", "path", "query",
             "status_code", "req_content_type", "req_body",
             "resp_content_type", "resp_body", "duration_ms",
+            "req_headers_json", "resp_headers_json",
         ]
         return dict(zip(cols, row))
 

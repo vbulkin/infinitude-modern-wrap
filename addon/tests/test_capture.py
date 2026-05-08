@@ -91,6 +91,76 @@ async def test_capture_insert_and_get(persistence: Persistence):
     assert row["duration_ms"] == 7
 
 
+async def test_capture_round_trips_headers(persistence: Persistence):
+    """v4 (alpha.53) — full request/response header dicts persist
+    through capture_insert and come back verbatim from capture_get +
+    capture_list. This is the diagnostic data the investigation into
+    Carrier 401s relies on; if headers don't round-trip we can't
+    diff thermostat-real-time vs addon-replay."""
+    req_headers = {
+        "authorization": "Basic abcdef",
+        "content-type": "application/x-www-form-urlencoded",
+        "user-agent": "Carrier-Stat/14",
+        "x-carrier-something": "opaque-token",
+    }
+    resp_headers = {
+        "content-type": "application/xml",
+        "x-carrier-trace": "id-123",
+    }
+    row_id = await persistence.capture_insert(
+        captured_at=1700000000.0,
+        direction="carrier_out",
+        method="POST",
+        path="https://www.api.ing.carrier.com/systems/X/status",
+        query=None,
+        status_code=200,
+        req_content_type="application/x-www-form-urlencoded",
+        req_body=b"data=<status/>",
+        resp_content_type="application/xml",
+        resp_body=b"<status_response/>",
+        duration_ms=11,
+        req_headers=req_headers,
+        resp_headers=resp_headers,
+    )
+    # capture_get returns the raw JSON columns — caller decodes.
+    import json as _json
+    got = await persistence.capture_get(row_id)
+    assert got is not None
+    assert _json.loads(got["req_headers_json"]) == req_headers
+    assert _json.loads(got["resp_headers_json"]) == resp_headers
+    # capture_list also surfaces the JSON columns so the API layer
+    # can decode them.
+    rows = await persistence.capture_list(limit=5)
+    matching = [r for r in rows if r["id"] == row_id]
+    assert matching
+    assert _json.loads(matching[0]["req_headers_json"]) == req_headers
+    assert _json.loads(matching[0]["resp_headers_json"]) == resp_headers
+
+
+async def test_capture_headers_optional(persistence: Persistence):
+    """Pre-v4 entries (or capture-off mid-request) leave the header
+    columns NULL. capture_get/list should pass that through as None
+    so the API layer can render `null`/missing without errors."""
+    row_id = await persistence.capture_insert(
+        captured_at=1700000000.0,
+        direction="northbound",
+        method="GET",
+        path="/v1/state",
+        query=None,
+        status_code=200,
+        req_content_type=None,
+        req_body=None,
+        resp_content_type="application/json",
+        resp_body=b"{}",
+        duration_ms=2,
+        # No req_headers / resp_headers passed — defaults to None.
+    )
+    got = await persistence.capture_get(row_id)
+    assert got is not None
+    assert got["req_headers_json"] is None
+    assert got["resp_headers_json"] is None
+
+
 async def test_capture_trim_caps_rows(persistence: Persistence):
     for i in range(25):
         await persistence.capture_insert(

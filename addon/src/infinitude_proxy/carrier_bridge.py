@@ -730,7 +730,10 @@ class CarrierBridge:
                 "relay %s %s -> error %s (%dms)",
                 method.upper(), url, type(e).__name__, duration_ms,
             )
-            await self._capture_failure(method, path, query, body, str(e), start)
+            await self._capture_failure(
+                method, path, query, body, str(e), start,
+                req_headers=outgoing,
+            )
             return None
 
         duration_ms = int((time.monotonic() - start) * 1000)
@@ -750,7 +753,10 @@ class CarrierBridge:
             method.upper(), url,
             response.status_code, duration_ms, len(wrapped.body),
         )
-        await self._capture_success(method, path, query, body, response, start)
+        await self._capture_success(
+            method, path, query, body, response, start,
+            req_headers=outgoing,
+        )
         return wrapped
 
     # ── Internal helpers ─────────────────────────────────────────────
@@ -785,9 +791,17 @@ class CarrierBridge:
         req_body: bytes | None,
         response: httpx.Response,
         start: float,
+        *,
+        req_headers: Mapping[str, str] | None = None,
     ) -> None:
         if not self._should_capture():
             return
+        # Response headers as plain dict — same lower-cased shape the
+        # ASGI capture middleware uses, so diffing rows from both
+        # directions doesn't have to deal with case/typing differences.
+        resp_headers = {
+            k.lower(): v for k, v in (response.headers.items() if response else [])
+        }
         await self._capture_insert(
             method=method, path=path, query=query,
             req_body=req_body,
@@ -795,6 +809,11 @@ class CarrierBridge:
             resp_content_type=response.headers.get("content-type"),
             resp_body=response.content,
             duration_ms=int((time.monotonic() - start) * 1000),
+            req_headers=(
+                {k.lower(): v for k, v in dict(req_headers).items()}
+                if req_headers is not None else None
+            ),
+            resp_headers=resp_headers,
         )
 
     async def _capture_failure(
@@ -805,6 +824,8 @@ class CarrierBridge:
         req_body: bytes | None,
         error: str,
         start: float,
+        *,
+        req_headers: Mapping[str, str] | None = None,
     ) -> None:
         if not self._should_capture():
             return
@@ -815,6 +836,11 @@ class CarrierBridge:
             resp_content_type="text/plain",
             resp_body=error.encode("utf-8"),
             duration_ms=int((time.monotonic() - start) * 1000),
+            req_headers=(
+                {k.lower(): v for k, v in dict(req_headers).items()}
+                if req_headers is not None else None
+            ),
+            resp_headers=None,
         )
 
     def _should_capture(self) -> bool:
@@ -835,6 +861,8 @@ class CarrierBridge:
         resp_content_type: str | None,
         resp_body: bytes | None,
         duration_ms: int,
+        req_headers: Mapping[str, str] | None = None,
+        resp_headers: Mapping[str, str] | None = None,
     ) -> None:
         assert self._capture is not None
         persistence = self._capture.persistence
@@ -850,12 +878,17 @@ class CarrierBridge:
                 path=f"https://{self._upstream_host}{path}",
                 query=query,
                 status_code=status_code,
-                req_content_type=None,
+                req_content_type=(
+                    dict(req_headers).get("content-type")
+                    if req_headers else None
+                ),
                 req_body=req_body or None,
                 resp_content_type=resp_content_type,
                 resp_body=resp_body,
                 duration_ms=duration_ms,
                 max_rows=self._capture.max_rows,
+                req_headers=dict(req_headers) if req_headers else None,
+                resp_headers=dict(resp_headers) if resp_headers else None,
             )
         except Exception:
             self._capture.errors += 1

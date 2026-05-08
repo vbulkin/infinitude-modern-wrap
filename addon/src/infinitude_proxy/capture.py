@@ -286,6 +286,17 @@ class CaptureMiddleware:
             req_ct = f"{req_ct}; truncated=true"
         if resp_truncated and resp_ct is not None:
             resp_ct = f"{resp_ct}; truncated=true"
+        # Decode header tuples (bytes, bytes) → {str: str} for the
+        # JSON column in capture_traffic. Lower-case names so any
+        # downstream comparator doesn't have to handle case.
+        req_headers_dict = {
+            name.decode("latin-1").lower(): value.decode("latin-1")
+            for (name, value) in req_headers
+        }
+        resp_headers_dict = {
+            name.decode("latin-1").lower(): value.decode("latin-1")
+            for (name, value) in resp_headers
+        }
         try:
             await persistence.capture_insert(
                 captured_at=time.time(),
@@ -300,6 +311,8 @@ class CaptureMiddleware:
                 resp_body=resp_body or None,
                 duration_ms=duration_ms,
                 max_rows=self.control.max_rows,
+                req_headers=req_headers_dict,
+                resp_headers=resp_headers_dict,
             )
         except Exception:
             self.control.errors += 1
