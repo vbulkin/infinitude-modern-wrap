@@ -40,14 +40,15 @@ def _bridge_with_handler(handler, *, seed_auth: bool = True, **kw) -> CarrierBri
     """A CarrierBridge whose httpx client is wired to a MockTransport
     so tests don't hit the real internet.
 
-    `seed_auth=True` (default) pre-populates `_latest_auth_headers`
-    with a placeholder Authorization header so background-path tests
-    (push_config, pull_and_apply_config) can run without an explicit
-    priming `relay()` call. Pass `seed_auth=False` to test the
-    cold-start refusal path explicitly. The single-chokepoint
-    `_outbound` method (alpha.51) refuses requests when no auth is
-    available, so without seeding, every test that previously got
-    away with empty headers now hits the cold-start guard.
+    `seed_auth=True` (default) pre-populates `_auth_by_route` for the
+    routes most tests care about (status POST, /config GET, boot POST)
+    so background-path tests (push_config, pull_and_apply_config) can
+    run without an explicit priming `relay()` call. Pass
+    `seed_auth=False` to test the cold-start refusal path explicitly.
+    The single-chokepoint `_outbound` method (alpha.51) refuses
+    requests when no auth is cached for the requested route, and the
+    cache became per-route in alpha.52 (Carrier validates auth
+    per-(method, path)).
     """
     kw.setdefault("enabled", True)
     cb = CarrierBridge(**kw)
@@ -57,10 +58,17 @@ def _bridge_with_handler(handler, *, seed_auth: bool = True, **kw) -> CarrierBri
         follow_redirects=False,
     )
     if seed_auth:
-        cb._latest_auth_headers = {  # type: ignore[attr-defined]
+        seed = {
             "authorization": "Basic test-seed",
             "host": "www.api.ing.carrier.com",
         }
+        # Seed the routes most tests touch. Tests that need a specific
+        # cold-start route can clear individual entries or use
+        # seed_auth=False.
+        for serial in ("X", "2013W000855"):
+            cb._auth_by_route[("POST", f"/systems/{serial}/status")] = dict(seed)
+            cb._auth_by_route[("GET", f"/systems/{serial}/config")] = dict(seed)
+            cb._auth_by_route[("POST", f"/systems/{serial}")] = dict(seed)
     return cb
 
 
@@ -602,7 +610,13 @@ async def test_health_4xx_counts_as_success():
         return httpx.Response(404, content=b"not found")
 
     cb = _bridge_with_handler(handler)
-    await cb.relay("GET", "/some-unknown-path")
+    # Pass headers explicitly so the per-route cache (alpha.52)
+    # accepts the request — _bridge_with_handler seeds common routes
+    # but not arbitrary test paths like "/some-unknown-path".
+    await cb.relay(
+        "GET", "/some-unknown-path",
+        headers={"Authorization": "Basic test-explicit="},
+    )
     h = cb.health()
     assert h["status"] == "healthy"
     assert h["consecutive_failures"] == 0
@@ -681,13 +695,16 @@ async def test_relay_caches_auth_headers_for_later_push():
         return httpx.Response(200, content=b"")
 
     cb = _bridge_with_handler(handler, seed_auth=False)
-    assert cb._latest_auth_headers is None  # type: ignore[attr-defined]
+    assert cb._auth_by_route == {}  # type: ignore[attr-defined]
     await cb.relay(
         "POST", "/systems/2013W000855/status",
         headers={"Authorization": "Basic abc=", "User-Agent": "carrier"},
         body=b"data=...",
     )
-    cached = cb._latest_auth_headers  # type: ignore[attr-defined]
+    # Per-route cache (alpha.52): keyed on (method, path).
+    cached = cb._auth_by_route.get(  # type: ignore[attr-defined]
+        ("POST", "/systems/2013W000855/status")
+    )
     assert cached is not None
     # The sanitizer preserves header-name case as supplied; lookup
     # case-insensitively here (httpx normalizes on the wire).
@@ -719,21 +736,27 @@ async def test_push_config_noop_when_no_auth_cached():
 @pytest.mark.asyncio
 async def test_push_config_uses_cached_auth_and_correct_target():
     """push_config posts to /systems/{serial} on the upstream host
-    using the cached thermostat auth, with the supplied body and
-    form-urlencoded content-type — same wire shape Carrier accepts
-    from a real device boot/sync POST."""
+    using the cached thermostat auth FOR THAT EXACT ROUTE (alpha.52
+    per-route cache), with the supplied body and form-urlencoded
+    content-type — same wire shape Carrier accepts from a real
+    device boot/sync POST.
+
+    Prime the boot-POST route (`POST /systems/{serial}`) — same
+    route push_config uses. Status-POST auth would NOT satisfy
+    push_config's lookup; that's exactly the per-route discipline.
+    """
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
         return httpx.Response(200, content=b"")
 
-    cb = _bridge_with_handler(handler)
-    # Prime the auth cache via a normal status relay.
+    cb = _bridge_with_handler(handler, seed_auth=False)
+    # Prime auth for the boot-POST route — push_config's exact route.
     await cb.relay(
-        "POST", "/systems/2013W000855/status",
+        "POST", "/systems/2013W000855",
         headers={"Authorization": "Basic xyz="},
-        body=b"data=...",
+        body=b"data=initial-boot",
     )
     seen.clear()
     body = b"data=" + b"%3Csystem%20version%3D%221.7%22%3E..."
@@ -798,6 +821,16 @@ async def test_mutate_config_triggers_carrier_push():
             return False
 
         def take_just_recovered(self) -> bool:
+            return False
+
+        # alpha.52 surface — stubs need these to satisfy southbound.
+        def has_route_auth(self, method, path):
+            return False
+
+        def signal_carrier_has_changes(self):
+            pass
+
+        def take_pending_carrier_pull(self):
             return False
 
         async def open(self): pass
@@ -1041,6 +1074,15 @@ def test_status_post_fires_proactive_pull_on_serverHasChanges():
             return b"<serverHasChanges>true</serverHasChanges>" in (body or b"")
         def take_just_recovered(self):
             return False
+        def has_route_auth(self, method, path):
+            # Test setup: pretend the cache is warm for /config GET
+            # so the proactive-pull path fires (this test specifically
+            # asserts pull_and_apply_config gets called).
+            return True
+        def signal_carrier_has_changes(self):
+            pass
+        def take_pending_carrier_pull(self):
+            return False
         def health(self):
             return {"status": "healthy", "last_success_at": None,
                     "last_attempt_at": None, "last_error": None,
@@ -1070,6 +1112,149 @@ def test_status_post_fires_proactive_pull_on_serverHasChanges():
         "status handler must fire pull_and_apply_config when Carrier "
         "signals serverHasChanges=true"
     )
+
+
+def test_status_post_latches_pending_pull_when_route_auth_cold():
+    """Cold-cache fallback (alpha.52): when /config GET auth is NOT
+    yet cached and Carrier signals serverHasChanges=true, the status
+    handler must NOT fire a proactive pull (it would 401). Instead
+    it latches `signal_carrier_has_changes()` so the next thermostat
+    /config GET handles the relay with the inbound request's
+    headers.
+    """
+    pull_calls: list[str] = []
+    signaled: list[bool] = []
+
+    class StubBridge:
+        enabled = True
+        async def open(self): pass
+        async def close(self): pass
+        async def relay(self, *a, **kw):
+            return CachedRelay(
+                status_code=200,
+                body=b"<status><serverHasChanges>true</serverHasChanges></status>",
+                content_type="application/xml",
+                cached_at=datetime.now(timezone.utc),
+            )
+        async def pull_and_apply_config(self, serial, store):
+            pull_calls.append(serial); return True
+        @staticmethod
+        def has_server_changes(body):
+            return b"<serverHasChanges>true</serverHasChanges>" in (body or b"")
+        def has_route_auth(self, method, path):
+            return False  # cold cache for this route
+        def signal_carrier_has_changes(self):
+            signaled.append(True)
+        def take_pending_carrier_pull(self):
+            return False
+        def take_just_recovered(self):
+            return False
+        def health(self):
+            return {"status": "healthy", "last_success_at": None,
+                    "last_attempt_at": None, "last_error": None,
+                    "consecutive_failures": 0, "circuit_open": False,
+                    "circuit_cooldown_s": 0, "pass_reqs": 0}
+
+    store = StateStore()
+    app = create_app(store=store, carrier_bridge=StubBridge())
+    client = TestClient(app)
+    client.post(
+        "/systems/2013W000855",
+        content=_read("boot_01_system_config.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    pull_calls.clear()
+    signaled.clear()
+    r = client.post(
+        "/systems/2013W000855/status",
+        content=_read("boot_05_status_telemetry.xml"),
+        headers={"content-type": "application/xml"},
+    )
+    assert r.status_code == 200
+    assert pull_calls == [], (
+        "cold-cache path must NOT fire proactive pull (would 401)"
+    )
+    assert signaled == [True], (
+        "cold-cache path must latch signal_carrier_has_changes so the "
+        "next thermostat /config GET drives the relay"
+    )
+
+
+def test_config_get_cold_start_relays_thermostat_request_to_carrier():
+    """Cold-start fallback end-to-end: bridge has pending_carrier_pull
+    latched, thermostat does /config GET. The southbound handler must
+    relay the GET to Carrier with the inbound request's headers,
+    apply the response to local store, and serve the merged tree.
+    The relay also populates the per-route auth cache so subsequent
+    serverHasChanges signals can use the proactive-pull path.
+    """
+    relay_calls: list[tuple[str, str]] = []
+    seen_auths: list[str | None] = []
+    # Carrier returns a tree with a hold engaged — represents the
+    # Carrier-app-set state we need to merge into local.
+    from lxml import etree as _et
+    boot = _read("boot_01_system_config.xml")
+    root = _et.fromstring(boot)
+    wh = root.find(".//wholeHouse")
+    wh.find("hold").text = "on"
+    wh.find("holdActivity").text = "manual"
+    otmr = wh.find("otmr")
+    if otmr is None:
+        otmr = _et.SubElement(wh, "otmr")
+    otmr.text = "21:30"
+    carrier_body = _et.tostring(root, xml_declaration=True, encoding="UTF-8")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        relay_calls.append((request.method, request.url.path))
+        seen_auths.append(request.headers.get("authorization"))
+        return httpx.Response(
+            200, content=carrier_body,
+            headers={"content-type": "application/xml"},
+        )
+
+    cb = _bridge_with_handler(handler, seed_auth=False)
+    store = StateStore()
+    app = create_app(store=store, carrier_bridge=cb)
+    client = TestClient(app)
+    # Boot — populates store, primes the boot-POST route auth.
+    client.post(
+        "/systems/2013W000855",
+        content=boot,
+        headers={"content-type": "application/xml"},
+    )
+    # Latch the pending-pull signal as if a status post had just
+    # observed serverHasChanges=true.
+    cb.signal_carrier_has_changes()
+    relay_calls.clear()
+    seen_auths.clear()
+
+    # Thermostat does /config GET with its own headers — these will
+    # be forwarded to Carrier.
+    r = client.get(
+        "/systems/2013W000855/config",
+        headers={
+            "Authorization": "Basic config-get-real=",
+            "User-Agent": "Carrier-Stat/14",
+        },
+    )
+    assert r.status_code == 200
+    # Relay must have fired with the inbound /config-GET auth.
+    assert any(
+        m == "GET" and "/config" in p for m, p in relay_calls
+    ), "cold-start fallback must relay /config GET to Carrier"
+    assert "Basic config-get-real=" in seen_auths, (
+        "the relay must forward the inbound thermostat headers, not "
+        "any cached cross-route auth"
+    )
+    # Per-route cache must be warm now for /config GET so the next
+    # serverHasChanges signal can use the proactive-pull path.
+    assert ("GET", "/systems/2013W000855/config") in cb._auth_by_route, (
+        "cold-start fallback must populate the cache as a side effect"
+    )
+    # Local store reflects Carrier's tree (hold-on landed).
+    stored = store.get_config()
+    assert stored is not None
+    assert stored.tree.find(".//wholeHouse/hold").text == "on"
 
 
 @pytest.mark.asyncio
@@ -1220,31 +1405,72 @@ async def test_outbound_refuses_cold_start_without_auth():
 
 @pytest.mark.asyncio
 async def test_outbound_caches_auth_only_when_source_headers_provided():
-    """Cache discipline: `_outbound` updates `_latest_auth_headers`
-    ONLY when called with `source_headers` (a real thermostat-
-    originated relay). Background calls that fall back to cached
-    auth must NOT re-cache themselves — that would be a no-op at
-    best and could mask staleness at worst."""
+    """Cache discipline: `_outbound` updates `_auth_by_route` ONLY
+    when called with `source_headers` (a real thermostat-originated
+    relay for THIS route). Background calls that fall back to cached
+    auth must NOT re-cache themselves."""
     def handler(request):
         return httpx.Response(200, content=b"")
 
     cb = _bridge_with_handler(handler, seed_auth=False)
-    assert cb._latest_auth_headers is None
+    assert cb._auth_by_route == {}  # type: ignore[attr-defined]
 
-    # source_headers provided → cache populates.
+    # source_headers provided → entry populates for THIS route.
     await cb._outbound(  # type: ignore[attr-defined]
         "POST", "/systems/X/status",
         body=b"data=...",
         source_headers={"Authorization": "Basic real="},
     )
-    assert cb._latest_auth_headers is not None
-    cached_before = dict(cb._latest_auth_headers)
+    status_key = ("POST", "/systems/X/status")
+    assert status_key in cb._auth_by_route
+    cached_before = dict(cb._auth_by_route[status_key])
 
-    # Background call (no source_headers) — cache unchanged.
-    await cb._outbound(  # type: ignore[attr-defined]
+    # Background call for a DIFFERENT route. Cache miss expected
+    # (per-route discipline) — no cross-route fallback. The original
+    # status entry is unchanged; no /config GET entry is added.
+    result = await cb._outbound(  # type: ignore[attr-defined]
         "GET", "/systems/X/config",
     )
-    assert cb._latest_auth_headers == cached_before
+    assert result is None, "background call without route-specific auth must refuse"
+    assert cb._auth_by_route[status_key] == cached_before
+    assert ("GET", "/systems/X/config") not in cb._auth_by_route
+
+
+@pytest.mark.asyncio
+async def test_outbound_per_route_isolation_status_auth_does_not_satisfy_config():
+    """Architectural invariant (alpha.52): cached status-POST headers
+    must NOT satisfy a /config GET lookup. This is the entire reason
+    we have the per-route cache — Carrier validates per-route and
+    cross-route reuse causes the 401s observed live alpha.48-51."""
+    def handler(request):
+        return httpx.Response(200, content=b"")
+
+    cb = _bridge_with_handler(handler, seed_auth=False)
+
+    # Populate ONLY the status route.
+    await cb.relay(
+        "POST", "/systems/X/status",
+        headers={"Authorization": "Basic status="},
+        body=b"data=...",
+    )
+    assert ("POST", "/systems/X/status") in cb._auth_by_route
+    assert ("GET", "/systems/X/config") not in cb._auth_by_route
+
+    # push_config (POST /systems/X) and pull_and_apply_config
+    # (GET /systems/X/config) are DIFFERENT routes from the populated
+    # status entry. Both must refuse — pre-alpha.52 the single cache
+    # would have satisfied them and produced the live 401s.
+    push_ok = await cb.push_config("X", b"data=...")
+    assert push_ok is False, (
+        "push_config must NOT use status-POST auth — different route, "
+        "Carrier rejects it (verified live)."
+    )
+    from infinitude_proxy.state_store import StateStore
+    pull_ok = await cb.pull_and_apply_config("X", StateStore())
+    assert pull_ok is False, (
+        "pull_and_apply_config must NOT use status-POST auth on "
+        "/config GET — different route, Carrier rejects it."
+    )
 
 
 def test_resilience_endpoints_respond_under_1s_when_carrier_blackholed():

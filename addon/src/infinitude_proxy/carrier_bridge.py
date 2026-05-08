@@ -1,7 +1,7 @@
 """Bidirectional bridge between the thermostat and Carrier's cloud.
 
 ────────────────────────────────────────────────────────────────────
-Single-chokepoint outbound architecture (alpha.51)
+Single-chokepoint outbound architecture (alpha.51 → alpha.52)
 ────────────────────────────────────────────────────────────────────
 
 Every outbound HTTP call this module makes — `relay` for
@@ -11,26 +11,60 @@ routes through one private method, `_outbound`. That method is the
 ONLY place that:
 
   * resolves auth (explicit `source_headers` if the caller has the
-    inbound request's headers in hand, else the cached
-    `_latest_auth_headers` from the most recent thermostat-originated
-    relay, else refuses with a canonical warning);
+    inbound request's headers in hand, else the per-route cache
+    `_auth_by_route[(METHOD, path)]` populated by previous thermostat
+    requests for the same route, else refuses with a canonical
+    warning);
   * applies the circuit breaker;
   * issues the httpx call with a bounded timeout;
-  * updates `_latest_auth_headers` (only when source_headers is
-    provided — i.e., when a real thermostat request just succeeded
-    against Carrier with these creds);
+  * updates `_auth_by_route` (only when source_headers is provided
+    — i.e., when a real thermostat request just succeeded against
+    Carrier with these creds for this exact route);
   * updates the consecutive-failures counter / circuit breaker;
   * emits the per-request access-log line;
   * inserts a row into the capture-traffic table.
+
+────────────────────────────────────────────────────────────────────
+Per-route auth cache (alpha.52)
+────────────────────────────────────────────────────────────────────
+
+alpha.51's chokepoint kept ONE `_latest_auth_headers` dict, populated
+by every inbound thermostat relay regardless of route. Live testing
+on 2026-05-08 surfaced that this is wrong: Carrier validates auth
+PER (method, path). Cached status-POST auth → 200 against Carrier's
+status endpoint, 401 against /config GET. So a `pull_and_apply_config`
+call after a status POST burned the cached headers and got 401'd.
+
+Replacement: `_auth_by_route: dict[tuple[str, str], dict[str, str]]`,
+keyed on (method, path). Every inbound thermostat-originated relay
+populates the entry for ITS route. Background-call paths
+(`push_config`, `pull_and_apply_config`) look up the (method, path)
+they're about to make. The cache contains literally "the headers
+that worked the last time the thermostat made this same call" — no
+assumption that headers transfer across routes.
+
+Cold-start fallback: if the cache is empty for a route (the thermostat
+hasn't done that exact call yet — common for /config GETs which only
+fire when configHasChanges=true), the background path declines and
+`southbound.get_system_config` instead handles a "Carrier has changes
+pending" flag the bridge sets. On the next thermostat /config GET,
+that handler relays the request to Carrier with the inbound request's
+ACTUAL headers, applies the result, and populates the cache so the
+NEXT cycle can do a true proactive pull.
+
+Steady state matches alpha.48's intent (proactive pull within one
+status tick); cold start gracefully degrades to alpha.45's "relay
+the thermostat's GET" mechanism, with the same code paths populating
+the cache for future use.
 
 Why a single chokepoint: the alpha.48 refactor introduced two
 independent ways to produce an outbound — `relay()` taking explicit
 headers and `push_config()` reading from a cached field — and the
 divergence let `pull_and_apply_config` (alpha.48) ship without auth
 forwarding. Carrier returned 401 on every proactive pull, silently,
-and Carrier-app changes never reached HA. That class of bug is
-gone: any new outbound call must call `_outbound`, and `_outbound`
-resolves auth without the caller having to remember.
+and Carrier-app changes never reached HA. That class of bug is gone:
+any new outbound call must call `_outbound`, and `_outbound` resolves
+auth without the caller having to remember.
 
 The public methods (`relay`, `push_config`, `pull_and_apply_config`)
 are thin wrappers over `_outbound`. They handle path/body composition
@@ -261,16 +295,36 @@ class CarrierBridge:
         self._circuit_failure_threshold = circuit_failure_threshold
         self._circuit_cooldown_initial_s = circuit_cooldown_initial_s
         self._circuit_cooldown_max_s = circuit_cooldown_max_s
-        # Latest auth-relevant request headers seen on a thermostat-
-        # originated relay. Used by `push_config` so HA-driven config
-        # updates can be POSTed upstream as if they came from the
-        # device itself. Headers are stale-tolerant: Carrier accepts
-        # them as long as the most recent thermostat request landed
-        # within their TTL (which is at least the status-POST cadence,
-        # 12-30 s — far less than any reasonable token lifetime). On
-        # cold start there is no cache and `push_config` is a no-op
-        # until the thermostat's first relayed request lands.
-        self._latest_auth_headers: dict[str, str] | None = None
+        # Per-route auth cache (alpha.52). Keyed on (METHOD, path),
+        # populated by every inbound thermostat-originated relay with
+        # the headers that just succeeded against Carrier for THIS
+        # route. Background-call paths (`push_config`, the proactive
+        # pull in `pull_and_apply_config`) look up the (method, path)
+        # they're about to make.
+        #
+        # Why per-route, not a single dict: Carrier validates auth
+        # per (method, path). Cached status-POST headers ARE NOT
+        # accepted on a /config GET — observed live alpha.48-51,
+        # carrier_out GET /config returned 401 every time the
+        # background pull tried to use status-POST auth. Replaying
+        # the SAME headers the thermostat last used for the SAME
+        # route is the only universally correct strategy.
+        #
+        # Cold start: cache empty for a route until the thermostat
+        # first calls it. /status posts every 12-30 s so its entry
+        # populates fast; /config GET fires only on configHasChanges,
+        # so it may be uncached for hours. The cold-start fallback
+        # for /config GET lives in `southbound.get_system_config` —
+        # see that handler + the `pending_carrier_pull` flag below.
+        self._auth_by_route: dict[tuple[str, str], dict[str, str]] = {}
+        # Set by `signal_carrier_has_changes` when a relayed status
+        # response carried `serverHasChanges=true`. Consumed by
+        # `southbound.get_system_config` (next thermostat /config GET)
+        # which then either does a proactive pull (warm cache) or
+        # relays the inbound request to Carrier (cold cache,
+        # populating the cache as a side effect). Single-use:
+        # consumed on first `take_pending_carrier_pull()`.
+        self._pending_carrier_pull: bool = False
 
     @property
     def enabled(self) -> bool:
@@ -287,6 +341,35 @@ class CarrierBridge:
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+
+    # ── Carrier-side change signal (alpha.52) ───────────────────────
+
+    def signal_carrier_has_changes(self) -> None:
+        """Latch that Carrier reported `serverHasChanges=true` in a
+        relayed status response. Consumed by
+        `southbound.get_system_config` on the next thermostat /config
+        GET, which then either does a proactive pull (if the per-route
+        cache for /config GET is warm) or relays the inbound request
+        to Carrier (cold cache, populates the cache as a side effect).
+        Single-use: cleared on first `take_pending_carrier_pull()`."""
+        self._pending_carrier_pull = True
+
+    def take_pending_carrier_pull(self) -> bool:
+        """Consume-on-read latch for `signal_carrier_has_changes`.
+        Returns True once when changes are pending; subsequent calls
+        return False until the bridge re-signals."""
+        if self._pending_carrier_pull:
+            self._pending_carrier_pull = False
+            return True
+        return False
+
+    def has_route_auth(self, method: str, path: str) -> bool:
+        """True iff `_outbound` would be able to authenticate a
+        background call for this (method, path). Used by
+        `southbound.get_system_config` to decide between a proactive
+        pull (warm cache) and a relay-the-thermostat's-GET fallback
+        (cold cache)."""
+        return (method.upper(), path) in self._auth_by_route
 
     # ── Health / circuit breaker ────────────────────────────────────
 
@@ -537,19 +620,26 @@ class CarrierBridge:
         `pull_and_apply_config`) are thin wrappers — none of them
         touch httpx directly. See module docstring for the rationale.
 
-        Auth resolution:
+        Auth resolution (per-route, alpha.52):
 
           * `source_headers` provided (a real thermostat request just
-            handed us its headers): sanitize, use, AND update
-            `_latest_auth_headers` so subsequent background tasks
-            have a known-good cred set. Cached BEFORE the call so a
-            transient 401 doesn't blank the last known-good copy.
-          * `source_headers=None` (background task): fall back to
-            `_latest_auth_headers` from the most recent inbound relay.
-          * Neither available (cold start, no thermostat traffic
-            yet): refuse with a canonical WARNING and return None.
-            Calling Carrier with no auth would just 401 and waste a
-            consecutive-failure tick.
+            handed us its headers for THIS route): sanitize, use,
+            AND store in `_auth_by_route[(method, path)]` so future
+            background calls for the same route can replay them.
+            Cached BEFORE the call so a transient 401 doesn't blank
+            the last known-good copy.
+          * `source_headers=None` (background task): look up
+            `_auth_by_route[(method, path)]` — the headers the
+            thermostat last used for THIS exact route. No fallback
+            to "any other route's auth" because Carrier validates
+            per-route (status-POST auth → 401 on /config GET,
+            verified live alpha.48-51).
+          * Neither available (cold-start cache miss for this
+            specific route): refuse with a canonical WARNING and
+            return None. The cold-start fallback in
+            `southbound.get_system_config` populates the /config GET
+            entry on the next thermostat /config GET, so this miss
+            is self-healing within one config-pull cycle.
 
         Other guards (in order, all return None):
           * bridge disabled (`enabled=False`)
@@ -584,28 +674,36 @@ class CarrierBridge:
             )
             return None
 
-        # ── Auth resolution ──
+        # ── Auth resolution (per-route, alpha.52) ──
+        route_key = (method.upper(), path)
         if source_headers is not None:
             outgoing = self._sanitize_request_headers(source_headers)
-            # Cache BEFORE the request so a 401 doesn't blank the
-            # last known-good set; thermostat-originated relays bring
-            # fresh auth on every status POST (~12-30 s cadence) so
-            # the cache stays current.
-            self._latest_auth_headers = dict(outgoing)
-        elif self._latest_auth_headers is not None:
+            # Cache for this exact (method, path) BEFORE the request
+            # so a 401 doesn't blank the last known-good set;
+            # thermostat-originated relays bring fresh auth on every
+            # call (status every 12-30 s, /config on configHasChanges,
+            # boot POST on panel changes) so each route's entry stays
+            # current as long as the thermostat hits it.
+            self._auth_by_route[route_key] = dict(outgoing)
+        elif route_key in self._auth_by_route:
             # Background path (push_config, pull_and_apply_config).
             # Re-sanitize defensively — idempotent.
-            outgoing = self._sanitize_request_headers(self._latest_auth_headers)
+            outgoing = self._sanitize_request_headers(self._auth_by_route[route_key])
         else:
-            # Cold start: no thermostat request has landed yet, so we
-            # have no auth Carrier will accept. Don't burn a
-            # consecutive-failure tick on a guaranteed-401; warn so
-            # a *persistent* miss is visible (would mean the
-            # thermostat isn't reaching us at all, which is a bigger
-            # problem than a delayed background sync).
+            # Cold start for this route: the thermostat hasn't done
+            # this exact (method, path) call yet. Carrier validates
+            # per route, so headers cached from a different route
+            # won't authenticate here (verified live alpha.48-51:
+            # status-POST auth → 401 on /config GET). Refuse rather
+            # than guess; the cold-start fallback in
+            # `southbound.get_system_config` will populate this entry
+            # the next time the thermostat hits the route itself.
             logger.warning(
-                "carrier_bridge: skip %s %s — no thermostat auth "
-                "headers cached yet (cold start)", method.upper(), path,
+                "carrier_bridge: skip %s %s — no auth cached for this "
+                "route yet (per-route cache cold for %s); the "
+                "thermostat must hit this route at least once before "
+                "we can replay its auth in background calls",
+                method.upper(), path, route_key,
             )
             return None
 
