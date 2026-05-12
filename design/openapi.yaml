@@ -948,7 +948,13 @@ components:
     HvacAction:
       type: string
       enum: ["idle", "heating", "cooling", "dehumidifying", "fan", "off"]
-      description: What the zone is actively doing right now.
+      description: |
+        What the zone is actively doing right now. Derived from the
+        thermostat's `<zoneconditioning>` element, with one operational
+        override: when system telemetry `<mode>` is `dehumidify`, zones
+        reporting `active_cool` / `staged{1,2}_cool` are relabeled as
+        `dehumidifying` — the compressor is mechanically cooling but the
+        intent is moisture removal. Idle zones stay `idle`.
 
     FanSpeed:
       type: string

@@ -573,6 +573,9 @@ def parse_telemetry(xml_bytes: bytes) -> TelemetrySnapshot:
     parse_idu_config / parse_odu_config.
     """
     root = etree.fromstring(xml_bytes)
+    system_mode = _coerce_hvac_mode(
+        _text(root, "mode") or "off", where="telemetry.mode"
+    )
     zones: list[TelemetryZone] = []
     zones_el = root.find("zones")
     if zones_el is not None:
@@ -580,6 +583,7 @@ def parse_telemetry(xml_bytes: bytes) -> TelemetrySnapshot:
             if _text(z, "enabled") != "on":
                 continue
             damper_raw = _int(z, "damperposition") or 0
+            raw_cond = _text(z, "zoneconditioning") or ""
             zones.append(
                 TelemetryZone(
                     id=z.get("id") or "",
@@ -591,12 +595,8 @@ def parse_telemetry(xml_bytes: bytes) -> TelemetrySnapshot:
                     coolSetpoint=_float_round(z, "clsp") or 0,
                     fan=FanSpeed(_text(z, "fan") or "off"),
                     damperPercent=round(damper_raw * 100 / 15),
-                    conditioning=_CONDITIONING_MAP.get(
-                        _text(z, "zoneconditioning") or "idle", HvacAction.IDLE
-                    ),
-                    conditioningStage=_extract_stage(
-                        _text(z, "zoneconditioning") or ""
-                    ),
+                    conditioning=_resolve_zone_action(raw_cond, system_mode),
+                    conditioningStage=_extract_stage(raw_cond),
                     currentActivity=ActivityId(_text(z, "currentActivity") or "home"),
                     holdActive=_text(z, "hold") == "on",
                 )
@@ -608,9 +608,7 @@ def parse_telemetry(xml_bytes: bytes) -> TelemetrySnapshot:
         outdoorTemperature=_int(root, "oat") or 0,
         operatingStatusMessage=_text(root, "oprstsmsg") or "",
         humidifierOn=_text(root, "humid") == "on",
-        systemMode=_coerce_hvac_mode(
-            _text(root, "mode") or "off", where="telemetry.mode"
-        ),
+        systemMode=system_mode,
         vacationRunning=_text(root, "vacatrunning") == "on",
         zones=zones,
         filterLevelPercent=_int(root, "filtrlvl"),
@@ -629,6 +627,28 @@ def _extract_stage(zoneconditioning: str) -> int | None:
     if zoneconditioning.startswith("staged2_"):
         return 2
     return None
+
+
+# Cool-cycle <zoneconditioning> variants. During telemetry <mode>dehumidify
+# the compressor is mechanically cooling, but the *intent* is moisture
+# removal — we relabel the zone action so HA/UI show "drying" instead of
+# "cooling". Stage information is preserved via _extract_stage (the
+# "Stage N" badge still rides on the staged1_/staged2_ prefix).
+_COOL_ZONE_RAWS = frozenset({"active_cool", "staged1_cool", "staged2_cool"})
+
+
+def _resolve_zone_action(raw_zonecond: str, system_mode: HvacMode) -> HvacAction:
+    """Map raw <zoneconditioning> to an HvacAction, with a single override:
+    when the system is in operational `dehumidify` mode, cool-cycle zones
+    are dehumidifying, not cooling. Idle zones stay idle (the override
+    only applies to zones whose damper is actually open to the running
+    compressor)."""
+    if (
+        system_mode == HvacMode.DEHUMIDIFY
+        and raw_zonecond in _COOL_ZONE_RAWS
+    ):
+        return HvacAction.DEHUMIDIFYING
+    return _CONDITIONING_MAP.get(raw_zonecond or "idle", HvacAction.IDLE)
 
 
 # ── Energy (per-mode runtime hours + efficiency ratings) ─────────────

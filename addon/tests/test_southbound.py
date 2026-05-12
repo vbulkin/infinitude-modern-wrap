@@ -58,6 +58,51 @@ def test_parse_telemetry_accepts_heat_pump_modes():
     assert snap.systemMode == "hpheat"
 
 
+def test_parse_telemetry_dehumidify_relabels_cool_zones():
+    """During telemetry `<mode>dehumidify</mode>` the compressor is
+    mechanically cooling, but the intent is moisture removal. Per-zone
+    `<zoneconditioning>active_cool</zoneconditioning>` must surface as
+    DEHUMIDIFYING so HA's `hvac_action` and the HVAC card both render
+    "drying" instead of "cooling". Idle zones stay idle — the override
+    only applies where the damper is actually open to the running
+    compressor. Stage information is preserved independently.
+    """
+    raw = _read("heatpump_status_telemetry.xml")
+    raw = raw.replace(b"<mode>hpheat</mode>", b"<mode>dehumidify</mode>", 1)
+    raw = raw.replace(
+        b"<zoneconditioning>active_heat</zoneconditioning>",
+        b"<zoneconditioning>staged2_cool</zoneconditioning>",
+        1,
+    )
+    snap = parse_telemetry(raw)
+    assert snap.systemMode == "dehumidify"
+    z1 = next(z for z in snap.zones if z.id == "1")
+    assert z1.conditioning == "dehumidifying"
+    # Stage suffix on the staged*_cool variant still feeds the
+    # "Stage N" badge — orthogonal to the action override.
+    assert z1.conditioningStage == 2
+    # Closed-damper zone stays idle; we don't fabricate per-zone
+    # activity from system-wide intent.
+    z2 = next(z for z in snap.zones if z.id == "2")
+    assert z2.conditioning == "idle"
+
+
+def test_parse_telemetry_cool_mode_keeps_cool_action():
+    """Sanity check: without the dehumidify operational mode, the same
+    raw `active_cool` zone reads as COOLING. Guards against the override
+    leaking into ordinary cooling cycles."""
+    raw = _read("heatpump_status_telemetry.xml")
+    raw = raw.replace(b"<mode>hpheat</mode>", b"<mode>hpcool</mode>", 1)
+    raw = raw.replace(
+        b"<zoneconditioning>active_heat</zoneconditioning>",
+        b"<zoneconditioning>active_cool</zoneconditioning>",
+        1,
+    )
+    snap = parse_telemetry(raw)
+    z1 = next(z for z in snap.zones if z.id == "1")
+    assert z1.conditioning == "cooling"
+
+
 def test_parse_telemetry_unknown_mode_falls_back_to_off():
     """An unfamiliar <mode> value must not break the entire status path —
     parser falls through to OFF so the rest of the snapshot lands. The
