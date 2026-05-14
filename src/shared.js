@@ -5,7 +5,7 @@ import { LitElement, html, css, nothing } from 'lit';
 
 export { LitElement, html, css, nothing };
 
-export const CARD_VERSION = '2.0.0-alpha.60';
+export const CARD_VERSION = '2.0.0-alpha.62';
 export const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 export const JS_DAY_MAP = [6,0,1,2,3,4,5];
 export const ACTIVITIES = ['home','away','sleep','wake'];
@@ -136,6 +136,7 @@ export class InfinitudeBase extends LitElement {
         else if (uid.includes('humidifier'))  system.humidifier = eid;
         else if (uid.includes('oat'))         system.oat = eid;
         else if (uid.includes('op_status'))   system.opStatus = eid;
+        else if (uid.includes('compressor_stage')) system.compressor = eid;
         else if (uid.includes('system_info')) system.info = eid;
       }
     }
@@ -152,6 +153,74 @@ export class InfinitudeBase extends LitElement {
 
   _st(eid) { return eid ? this.hass?.states[eid] ?? null : null; }
   _at(eid, a) { return this._st(eid)?.attributes?.[a]; }
+
+  // Outdoor-unit `opmode` → HA hvac_action equivalent. The thermostat's
+  // per-zone <zoneconditioning> lags the actual compressor state at
+  // cycle boundaries (zone XML can read `idle` while the compressor is
+  // mid-cool, or `active_cool` while the compressor has already shut
+  // down). The ODU's opmode is the authoritative system-level signal.
+  _opmodeToAction(opmode) {
+    if (!opmode || opmode === 'off') return null;
+    if (opmode === 'cooling' || opmode === 'hpcool') return 'cooling';
+    if (opmode === 'hpheat' || opmode === 'eheat' || opmode === 'emheat'
+        || opmode === 'defrost') return 'heating';
+    if (opmode === 'dehumidify') return 'drying';
+    return null;
+  }
+
+  // Effective system status for the summary pill. Returns { action, label,
+  // stage, cls } where action ∈ {heating|cooling|drying|null} and stage
+  // is null when no compressor stage info is available.
+  //
+  // Priority:
+  //   1. compressor.opmode  — system-level truth, immune to zone-XML lag
+  //   2. any zone with hvac_action ∈ {heating, cooling, drying}
+  //   3. opStatus sensor (operatingStatusMessage)
+  //   4. literal "Idle"
+  //
+  // Stage falls through compressor.state → first matching zone's
+  // conditioning_stage attribute. Guarded on > 0 so the at-setpoint
+  // state doesn't render as "Stage 0".
+  _effectiveSystemStatus(climates, system) {
+    const compS = system.compressor ? this._st(system.compressor) : null;
+    const opmodeAction = this._opmodeToAction(compS?.attributes?.opmode);
+
+    const anyHeating = climates.some(eid => this._at(eid, 'hvac_action') === 'heating');
+    const anyCooling = climates.some(eid => this._at(eid, 'hvac_action') === 'cooling');
+    const anyDrying  = climates.some(eid => this._at(eid, 'hvac_action') === 'drying');
+    const zoneAction = anyHeating ? 'heating' : anyCooling ? 'cooling' : anyDrying ? 'drying' : null;
+
+    const action = opmodeAction || zoneAction;
+
+    const opS = system.opStatus ? this._st(system.opStatus) : null;
+    const opStatus = opS?.state && opS.state !== 'unavailable' ? opS.state : '';
+
+    const label = action === 'heating' ? 'Heating'
+                : action === 'cooling' ? 'Cooling'
+                : action === 'drying'  ? 'Dehumidifying'
+                : (opStatus || 'Idle');
+    const cls = action === 'heating' ? 'heat'
+              : action === 'cooling' ? 'cool'
+              : '';
+
+    let stage = null;
+    const compStageRaw = compS?.state;
+    const compStage = compStageRaw != null && compStageRaw !== 'unavailable'
+      ? parseInt(compStageRaw)
+      : NaN;
+    if (action && !Number.isNaN(compStage) && compStage > 0) {
+      stage = compStage;
+    }
+    if (action && stage == null) {
+      for (const eid of climates) {
+        if (this._at(eid, 'hvac_action') !== action) continue;
+        const s = this._at(eid, 'conditioning_stage');
+        if (s != null) { stage = s; break; }
+      }
+    }
+
+    return { action, label, stage, cls };
+  }
 
   _getScheduleData() {
     const { system } = this._findEntities();

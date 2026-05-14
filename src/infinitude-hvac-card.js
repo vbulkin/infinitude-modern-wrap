@@ -280,33 +280,14 @@ class InfinitudeHVACCard extends InfinitudeBase {
     if (os?.state && os.state !== 'unavailable') oat = `${Math.round(Number(os.state))}°`;
     else if (climates.length) { const v = this._at(climates[0], 'outdoor_temperature'); if (v != null) oat = `${Math.round(Number(v))}°`; }
 
-    const opS = this._st(system.opStatus);
-    const opStatus = opS?.state && opS.state !== 'unavailable' ? opS.state : '';
     const humid = this._st(system.humidifier)?.state === 'on';
     const whS = this._st(selects.wholeHouse);
     const whHold = whS && whS.state !== 'off';
     const whOtmr = climates.length ? this._at(climates[0], 'whole_house_hold_until') : null;
     const rh = climates.length ? this._at(climates[0], 'current_humidity') : null;
 
-    const anyHeating = climates.some(eid => this._at(eid, 'hvac_action') === 'heating');
-    const anyCooling = climates.some(eid => this._at(eid, 'hvac_action') === 'cooling');
-    const anyDrying  = climates.some(eid => this._at(eid, 'hvac_action') === 'drying');
-    const activeAction = anyHeating ? 'heating' : anyCooling ? 'cooling' : anyDrying ? 'drying' : null;
-    const statusLabel = anyHeating ? 'Heating' : anyCooling ? 'Cooling' : anyDrying ? 'Dehumidifying' : (opStatus || 'Idle');
-    // Pull the stage off the first zone currently running the active
-    // action — multi-stage HP/AC capacity (1 or 2). Per-zone
-    // `conditioning_stage` already falls back to `odu_status.operatingStage`
-    // for `drying` zones whose XML drops the stage suffix.
-    let stage = null;
-    if (activeAction) {
-      for (const eid of climates) {
-        if (this._at(eid, 'hvac_action') !== activeAction) continue;
-        const s = this._at(eid, 'conditioning_stage');
-        if (s != null) { stage = s; break; }
-      }
-    }
+    const { label: statusLabel, stage, cls: statusCls } = this._effectiveSystemStatus(climates, system);
     const effectiveStatus = stage != null ? `${statusLabel} · Stage ${stage}` : statusLabel;
-    const statusCls = anyHeating ? 'heat' : anyCooling ? 'cool' : '';
 
     const reg = this._registryEntities || [];
     let maxReport = 0;

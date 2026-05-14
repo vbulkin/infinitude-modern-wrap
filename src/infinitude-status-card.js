@@ -50,8 +50,8 @@ class InfinitudeStatusCard extends InfinitudeBase {
     if (os?.state && os.state !== 'unavailable') oat = `${Math.round(Number(os.state))}°`;
     else if (climates.length) { const v = this._at(climates[0], 'outdoor_temperature'); if (v != null) oat = `${Math.round(Number(v))}°`; }
 
-    const opS = this._st(system.opStatus);
-    const opStatus = opS?.state && opS.state !== 'unavailable' ? opS.state : '';
+    const { label: statusLabel, stage, cls: statusCls } = this._effectiveSystemStatus(climates, system);
+    const effectiveStatus = stage != null ? `${statusLabel} · Stage ${stage}` : statusLabel;
     const humid = this._st(system.humidifier)?.state === 'on';
     const whS = this._st(selects.wholeHouse);
     const whHold = whS && whS.state !== 'off';
@@ -86,7 +86,7 @@ class InfinitudeStatusCard extends InfinitudeBase {
           <div class="summary-stats">
             <div class="summary-stat">
               <span class="summary-stat-label">Status</span>
-              <span class="summary-stat-val ${opStatus.toLowerCase().includes('heat') ? 'heat' : opStatus.toLowerCase().includes('cool') ? 'cool' : ''}">${opStatus || 'Idle'}</span>
+              <span class="summary-stat-val ${statusCls}">${effectiveStatus}</span>
             </div>
             <div class="summary-divider"></div>
             <div class="summary-stat">
