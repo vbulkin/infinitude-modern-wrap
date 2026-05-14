@@ -197,16 +197,23 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
             if hold.get("until"):
                 attrs["hold_until"] = hold["until"]
             # Multi-stage capacity. Zone XML carries `staged{1|2}_{cool|heat}`
-            # for active heat/cool, so `conditioningStage` is set there.
-            # During `dehumidifying` the zone-level XML drops stage suffix,
-            # but the compressor is still running on shared ODU capacity —
-            # fall back to the system-wide `operatingStage` from odu_status
-            # so the card can render "Stage 1/2" consistently across all
-            # three active actions (heat, cool, dry).
+            # for some heat/cool cycles, surfaced via `conditioningStage`.
+            # When the zone reports bare `active_heat`/`active_cool` (or
+            # `dehumidifying`, where the stage suffix is dropped entirely),
+            # the actual compressor stage lives on the system-wide
+            # `operatingStage` from odu_status. Fall back to that for any
+            # active action so the card renders "Stage 1/2" consistently.
+            # Guard on stage > 0: odu reports `operatingStage: 0` /
+            # `opmode: "off"` between cycles, which is "not staged", not
+            # stage zero.
             stage = z.get("conditioningStage")
-            if stage is None and z.get("conditioning") == "dehumidifying":
+            if stage is None and z.get("conditioning") in (
+                "heating", "cooling", "dehumidifying"
+            ):
                 odu = self.coordinator.data.get("odu_status") or {}
-                stage = odu.get("operatingStage")
+                odu_stage = odu.get("operatingStage")
+                if odu_stage is not None and odu_stage > 0:
+                    stage = odu_stage
             if stage is not None:
                 attrs["conditioning_stage"] = stage
         system = self.coordinator.data.get("system", {})
