@@ -4,8 +4,8 @@
   "codeowners": ["@vbulkin"],
   "config_flow": true,
   "documentation": "https://github.com/vbulkin/infinitude-modern-wrap",
-  "iot_class": "local_polling",
+  "iot_class": "local_push",
   "issue_tracker": "https://github.com/vbulkin/infinitude-modern-wrap/issues",
   "requirements": [],
-  "version": "2.0.0-alpha.65"
+  "version": "2.0.0-alpha.66"
 }

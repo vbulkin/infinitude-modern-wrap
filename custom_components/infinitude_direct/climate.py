@@ -30,6 +30,7 @@ from .const import (
     PRESET_MODES,
 )
 from .coordinator import InfinitudeDataCoordinator
+from .entity_setup import setup_zone_entities
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -50,11 +51,12 @@ async def async_setup_entry(
 ) -> None:
     coordinator: InfinitudeDataCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    entities = [
-        InfinitudeClimate(coordinator, zone["id"])
-        for zone in coordinator.data.get("zones", [])
-    ]
-    async_add_entities(entities)
+    setup_zone_entities(
+        entry,
+        coordinator,
+        async_add_entities,
+        lambda zone_id: [InfinitudeClimate(coordinator, zone_id)],
+    )
 
 
 class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
@@ -278,10 +280,13 @@ class InfinitudeClimate(CoordinatorEntity, ClimateEntity):
         else:
             return
 
-        await self.coordinator.async_set_activity_temps(
-            self._zone_id, "manual", new_htsp, new_clsp
+        # One combined write+overlay: setpoints AND the manual hold in a
+        # single optimistic patch, so the hold overlay doesn't clobber
+        # the setpoint overlay (which would snap the card back to the
+        # pre-write value until the next poll).
+        await self.coordinator.async_set_manual_setpoints(
+            self._zone_id, new_htsp, new_clsp, "auto"
         )
-        await self.coordinator.async_set_hold(self._zone_id, "manual", "auto")
         await self.coordinator.async_request_refresh()
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:

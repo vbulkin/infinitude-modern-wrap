@@ -388,6 +388,39 @@ class InfinitudeDataCoordinator(DataUpdateCoordinator):
             "coolSetpoint": int(clsp),
         })
 
+    async def async_set_manual_setpoints(
+        self, zone_id: str, htsp: int, clsp: int, until: str | None = "auto"
+    ) -> None:
+        """Set a zone's manual setpoints AND hold it on 'manual', as one
+        optimistic update.
+
+        `climate.set_temperature` is a two-write operation: PATCH the
+        manual activity's setpoints, then hold the zone on 'manual'.
+        Issuing two *separate* optimistic patches doesn't work —
+        `_set_optimistic` REPLACES the per-zone overlay (see its
+        docstring), so a second call would drop the first's fields. The
+        prior code stashed setpoints, then immediately stashed the hold,
+        which discarded the setpoint overlay and let the card snap back
+        to the pre-write setpoint until the next poll. Combine both
+        intents into a single overlay so neither is lost.
+        """
+        await self._patch(
+            f"/v1/zones/{zone_id}/activities/manual",
+            {"heat": int(htsp), "cool": int(clsp)},
+        )
+        body = self._build_hold_body("manual", until)
+        await self._put(f"/v1/zones/{zone_id}/hold", body)
+        self._set_optimistic(zone_id, {
+            "heatSetpoint": int(htsp),
+            "coolSetpoint": int(clsp),
+            "hold": {
+                "active": True,
+                "activity": "manual",
+                "until": body.get("until"),
+            },
+            "currentActivity": "manual",
+        })
+
     async def async_set_activity_fan(
         self, zone_id: str, activity: str, fan: str
     ) -> None:

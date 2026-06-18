@@ -23,6 +23,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, MANUFACTURER, MODEL
 from .coordinator import InfinitudeDataCoordinator
+from .entity_setup import setup_zone_entities
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,11 +55,19 @@ async def async_setup_entry(
         InfinitudeHspfSensor(coordinator),
         InfinitudeFaultCountSensor(coordinator),
     ]
-    for zone in coordinator.data.get("zones", []):
-        zid = zone["id"]
-        entities.append(InfinitudeDamperSensor(coordinator, zid))
-        entities.append(InfinitudeFanSensor(coordinator, zid))
     async_add_entities(entities)
+    # Per-zone sensors are added dynamically so zones appearing after
+    # setup (cold-start window, or a zone enabled later on the panel)
+    # get their entities without an integration reload.
+    setup_zone_entities(
+        entry,
+        coordinator,
+        async_add_entities,
+        lambda zone_id: [
+            InfinitudeDamperSensor(coordinator, zone_id),
+            InfinitudeFanSensor(coordinator, zone_id),
+        ],
+    )
 
 
 class InfinitudeHumidifierSensor(CoordinatorEntity, SensorEntity):
