@@ -3,7 +3,7 @@
   "scripts": {
     "build": "esbuild src/infinitude-hvac-card.js --bundle --minify --format=esm --outfile=custom_components/infinitude_direct/www/infinitude-hvac-card.js",
     "release": "node release.js",
-    "gh-release": "node -e \"const{version:v}=require('./custom_components/infinitude_direct/manifest.json');const{execSync:r}=require('child_process');r(`gh release create v${v} --title v${v} --generate-notes`,{stdio:'inherit'})\""
+    "gh-release": "node -e \"const{version:v}=require('./custom_components/infinitude_direct/manifest.json');const{execSync:r}=require('child_process');const pre=/-(alpha|beta|rc)\\./.test(v)?' --prerelease':'';r(`gh release create v${v} --title v${v}${pre} --generate-notes`,{stdio:'inherit'})\""
   },
   "devDependencies": {
     "esbuild": "^0.25.0",

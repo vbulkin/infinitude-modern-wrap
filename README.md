@@ -200,10 +200,10 @@ The Python add-on and the HACS integration share a single version number; four f
 
 Hooks and scripts:
 
-- **Pre-commit hook** — On `main` only, and only for stable releases (no `-alpha.N` / `-beta.N` / `-rc.N` suffix), bumps the patch version in `addon/config.yaml`, `custom_components/infinitude_direct/manifest.json`, and `src/shared.js`; rebuilds the Lovelace card via `npm run build`; stages everything. Pre-release versions are bumped manually (including `addon/pyproject.toml`, which the hook does not touch).
+- **Pre-commit hook** — On `main` only, auto-bumps the version on **every** commit and stages all four files plus the rebuilt Lovelace card. Stable versions bump the patch (`2.0.0` → `2.0.1`); pre-release versions bump the numeric suffix (`2.0.0-beta.1` → `2.0.0-beta.2`, with `addon/pyproject.toml` synced to PEP 440 `2.0.0b2`). The hook only increments the number — it does **not** change the pre-release *kind*, so an `alpha` → `beta` → `rc` → stable transition is done by editing the four files by hand in one commit (the hook then bumps that committed value by one). Do not bump manually otherwise; it double-increments.
 - **Post-commit hook** — Creates an annotated git tag `v{version}` from the manifest version.
 - **`npm run release`** — Pushes commits and tags to remote.
-- **`npm run gh-release`** — Creates a GitHub Release with auto-generated notes (manual, separate step).
+- **`npm run gh-release`** — Creates a GitHub Release with auto-generated notes (manual, separate step). Automatically passes `--prerelease` when the version carries an `-alpha`/`-beta`/`-rc` suffix, so pre-releases reach only HACS users who opted into betas.
 
 ## License
 
