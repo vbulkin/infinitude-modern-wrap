@@ -153,6 +153,13 @@ def create_southbound_router(
 ) -> APIRouter:
     router = APIRouter(tags=["southbound"])
 
+    # Strong references to in-flight fire-and-forget mirror tasks. The
+    # event loop only holds a weak reference to a bare create_task()
+    # result, so without this set a mirror can be garbage-collected
+    # mid-flight and the Carrier relay silently dropped. Tasks remove
+    # themselves on completion.
+    mirror_tasks: set[asyncio.Task] = set()
+
     @router.post("/systems/{serial}/status")
     async def post_telemetry(serial: str, request: Request) -> Response:
         body = await _read_capped_body(request)
@@ -251,7 +258,7 @@ def create_southbound_router(
         """
         if bridge is None:
             return
-        asyncio.create_task(
+        task = asyncio.create_task(
             bridge.relay(
                 method, path,
                 query=str(request.url.query) or None,
@@ -261,6 +268,9 @@ def create_southbound_router(
             ),
             name=f"carrier_mirror_{method}_{path}",
         )
+        # Retain a strong ref until the task finishes (see mirror_tasks).
+        mirror_tasks.add(task)
+        task.add_done_callback(mirror_tasks.discard)
 
     async def _bridge_relay_or_local(
         method: str, path: str, request: Request,

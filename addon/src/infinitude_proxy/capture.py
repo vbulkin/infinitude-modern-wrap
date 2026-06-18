@@ -145,6 +145,10 @@ class CaptureMiddleware:
     ) -> None:
         self.app = app
         self.control = control
+        # Strong refs to in-flight capture-insert tasks. asyncio only
+        # weakly references a bare create_task() result, so without this
+        # a capture row could be lost to GC before the insert runs.
+        self._insert_tasks: set[asyncio.Task] = set()
 
     async def __call__(
         self, scope: Scope, receive: Receive, send: Send
@@ -235,8 +239,9 @@ class CaptureMiddleware:
             duration_ms = int((time.monotonic() - start) * 1000)
             # Fire-and-forget the DB insert so capture overhead never
             # stretches the response path. Exceptions are logged in the
-            # task body; the control counters surface silent drops.
-            asyncio.create_task(
+            # task body; the control counters surface silent drops. Hold
+            # a strong ref until done so the task isn't GC'd mid-flight.
+            task = asyncio.create_task(
                 self._record(
                     path=path,
                     query=scope.get("query_string", b"").decode("latin-1") or None,
@@ -252,6 +257,8 @@ class CaptureMiddleware:
                     duration_ms=duration_ms,
                 )
             )
+            self._insert_tasks.add(task)
+            task.add_done_callback(self._insert_tasks.discard)
 
     @staticmethod
     def _request_headers(scope: Scope) -> list[tuple[bytes, bytes]]:

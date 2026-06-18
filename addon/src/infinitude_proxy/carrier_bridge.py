@@ -242,6 +242,18 @@ class CarrierBridge:
         return False
 
     # ── Health / circuit breaker ────────────────────────────────────
+    #
+    # Concurrency: `_outbound` is awaited inline by the status relay
+    # while fire-and-forget mirrors run concurrently, so several relays
+    # overlap on the event loop. The breaker/latch mutators below
+    # (`_circuit_open`, `_record_success`, `_record_failure`,
+    # `take_pending_carrier_pull`) are each safe under this overlap ONLY
+    # because they contain NO `await` — under asyncio's single-threaded
+    # cooperative scheduling, an await-free read-modify-write runs to
+    # completion before any other coroutine resumes, so there is no
+    # lost-update or double-consume window. INVARIANT: keep these
+    # methods await-free. If one ever needs to await, guard the shared
+    # state with an asyncio.Lock instead.
 
     def health(self) -> dict:
         """Snapshot the bridge's reachability state for /v1/healthz.

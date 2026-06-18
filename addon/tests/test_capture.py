@@ -501,3 +501,62 @@ async def test_capture_truncates_body_over_cap(persistence: Persistence):
     assert row is not None
     assert row["req_body"] == big
     assert "truncated=true" in row["req_content_type"]
+
+
+# ── Fire-and-forget task retention ────────────────────────────────────
+
+
+class _GatedPersistence:
+    """Stand-in whose capture_insert blocks until released, so a test
+    can observe the insert task while it's still in flight."""
+
+    def __init__(self) -> None:
+        self.gate = asyncio.Event()
+        self.inserted = 0
+
+    async def capture_insert(self, **_kwargs) -> int:
+        await self.gate.wait()
+        self.inserted += 1
+        return self.inserted
+
+
+async def test_capture_insert_task_is_strongly_referenced_in_flight():
+    """Regression for the GC-mid-flight bug: the middleware must keep a
+    strong reference to the fire-and-forget insert task so the event
+    loop's weak reference can't let it be collected before it runs."""
+    gated = _GatedPersistence()
+    control = CaptureControl()
+    control.attach_persistence(gated)  # type: ignore[arg-type]
+    control.enabled = True
+
+    async def inner(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    mw = CaptureMiddleware(inner, control=control)
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/systems/x/status",
+        "query_string": b"",
+        "headers": [],
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": b"<x/>", "more_body": False}
+
+    async def send(_msg):
+        pass
+
+    await mw(scope, receive, send)
+    # capture_insert is gated, so the task is still running and MUST be
+    # held in the retention set (not awaiting GC).
+    assert len(mw._insert_tasks) == 1
+    task = next(iter(mw._insert_tasks))
+
+    gated.gate.set()
+    await task
+    await asyncio.sleep(0)  # let the done-callback run
+
+    assert mw._insert_tasks == set()
+    assert gated.inserted == 1
