@@ -17,10 +17,11 @@ import os
 from pathlib import Path
 from urllib.parse import unquote_to_bytes
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from .carrier_bridge import CachedRelay, CarrierBridge
 from .parser import (
+    SouthboundParseError,
     parse_energy,
     parse_equipment_events,
     parse_idu_config,
@@ -35,6 +36,41 @@ from .parser import (
 from .state_store import StateStore
 
 logger = logging.getLogger(__name__)
+
+# Ingress body-size ceiling for thermostat-facing routes. The largest
+# legitimate southbound body is the full system config (~30 KB in live
+# captures); 256 KB leaves generous headroom while keeping a runaway or
+# malicious upload from being buffered into memory and handed to lxml.
+# Anything over the cap is rejected with 413 before it is fully read.
+# (Belt-and-suspenders with capture.py's 1 MB cap, which only bounds
+# what gets *stored*, not what reaches the parser.)
+MAX_SOUTHBOUND_BODY_BYTES = 256 * 1024
+
+
+async def _read_capped_body(request: Request) -> bytes:
+    """Read the request body, rejecting bodies over
+    ``MAX_SOUTHBOUND_BODY_BYTES`` with a 413 before buffering them whole.
+
+    Content-Length is honored as a fast reject when present, but the cap
+    is also enforced while streaming because Content-Length can be absent
+    (chunked transfer-encoding) or simply lie.
+    """
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            if int(declared) > MAX_SOUTHBOUND_BODY_BYTES:
+                raise HTTPException(status_code=413, detail="request body too large")
+        except ValueError:
+            pass  # unparseable Content-Length — fall through to streamed cap
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > MAX_SOUTHBOUND_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="request body too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
 
 # Telemetry poll cadence hint (seconds) returned in the directive.
 # Clean state: Carrier's own server returned 12 in our captures; we
@@ -119,8 +155,23 @@ def create_southbound_router(
 
     @router.post("/systems/{serial}/status")
     async def post_telemetry(serial: str, request: Request) -> Response:
-        body = await request.body()
-        snapshot = parse_telemetry(_unwrap_form(body))
+        body = await _read_capped_body(request)
+        try:
+            snapshot = parse_telemetry(_unwrap_form(body))
+        except SouthboundParseError as exc:
+            # Status is the highest-frequency southbound path and it
+            # carries the directive channel. A malformed/garbage body
+            # must not 500 (the firmware would retry-storm and desync) —
+            # discard the telemetry and answer with a clean CLEAN-cadence
+            # directive so the device keeps polling normally. The next
+            # well-formed status POST self-heals the snapshot.
+            logger.warning(
+                "telemetry parse failed serial=%s: %s — serving clean directive",
+                serial, exc,
+            )
+            return Response(
+                content=_directive_xml(False), media_type="application/xml"
+            )
         await store.apply_telemetry(serial, snapshot)
         local_changes = await store.take_config_dirty()
         # Mirror status post to Carrier (every tick — Carrier's pingRate
@@ -258,7 +309,7 @@ def create_southbound_router(
         alpha.46 capture: panel POST #2 silently skipped because
         apply_config's replay had set config_dirty).
         """
-        body = await request.body()
+        body = await _read_capped_body(request)
         tree, config = parse_system_config_with_tree(_unwrap_form(body))
         await store.apply_config(serial, config, tree)
         _bridge_mirror_fire_and_forget(
@@ -342,7 +393,7 @@ def create_southbound_router(
 
     @router.post("/systems/{serial}/notifications")
     async def post_notifications(serial: str, request: Request) -> Response:
-        body = await request.body()
+        body = await _read_capped_body(request)
         events = parse_notifications(_unwrap_form(body))
         await store.append_notifications(serial, events)
         # Mirror notifications to Carrier so the MyInfinity app can
@@ -354,7 +405,7 @@ def create_southbound_router(
 
     @router.post("/systems/{serial}/idu_config")
     async def post_idu_config(serial: str, request: Request) -> Response:
-        body = await request.body()
+        body = await _read_capped_body(request)
         raw = _unwrap_form(body)
         config = parse_idu_config(raw)
         await store.apply_idu(serial, config, raw_xml=raw)
@@ -367,7 +418,7 @@ def create_southbound_router(
 
     @router.post("/systems/{serial}/odu_config")
     async def post_odu_config(serial: str, request: Request) -> Response:
-        body = await request.body()
+        body = await _read_capped_body(request)
         raw = _unwrap_form(body)
         config = parse_odu_config(raw)
         await store.apply_odu(serial, config, raw_xml=raw)
@@ -381,7 +432,7 @@ def create_southbound_router(
         """Per-mode runtime hours + efficiency ratings — feeds the
         MyInfinity app's energy dashboard. Posted ~daily by the
         thermostat. Surfaces northbound at `GET /v1/system/energy`."""
-        body = await request.body()
+        body = await _read_capped_body(request)
         energy = parse_energy(_unwrap_form(body))
         await store.apply_energy(serial, energy)
         _bridge_mirror_fire_and_forget(
@@ -400,7 +451,7 @@ def create_southbound_router(
         `GET /v1/system/odu_status`. Raw XML is persisted (alpha.50)
         so HA stage/RPM/pressure sensors don't go `unavailable` for
         hours after an addon restart on an idle system."""
-        body = await request.body()
+        body = await _read_capped_body(request)
         raw = _unwrap_form(body)
         status = parse_odu_status(raw)
         await store.apply_odu_status(serial, status, raw_xml=raw)
@@ -420,7 +471,7 @@ def create_southbound_router(
         static pressure, coil temp. Surfaces northbound at
         `GET /v1/system/idu_status`. Raw XML is persisted (alpha.50);
         same rationale as odu_status."""
-        body = await request.body()
+        body = await _read_capped_body(request)
         raw = _unwrap_form(body)
         status = parse_idu_status(raw)
         await store.apply_idu_status(serial, status, raw_xml=raw)
@@ -439,7 +490,7 @@ def create_southbound_router(
         """Thermostat fault history. POSTed when the unit observes a
         new fault or cycles its event list. Surfaces northbound at
         `GET /v1/system/events`."""
-        body = await request.body()
+        body = await _read_capped_body(request)
         events = parse_equipment_events(_unwrap_form(body))
         await store.apply_equipment_events(serial, events)
         _bridge_mirror_fire_and_forget(
@@ -461,7 +512,7 @@ def create_southbound_router(
     async def post_metadata_fallback(
         serial: str, subpath: str, request: Request
     ) -> Response:
-        body = await request.body()
+        body = await _read_capped_body(request)
         captured = _capture_metadata_sample(subpath, _unwrap_form(body))
         logger.info(
             "unhandled thermostat POST serial=%s subpath=%s bytes=%d%s",

@@ -12,10 +12,16 @@ is stable across minor releases; new statuses fall through to
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.requests import Request
+
+from .parser import SouthboundParseError
+
+logger = logging.getLogger(__name__)
 
 # Status → stable machine-readable code. Covers the responses actually
 # referenced in design/openapi.yaml plus a few common neighbors; anything
@@ -26,7 +32,9 @@ _STATUS_CODE_MAP: dict[int, str] = {
     403: "forbidden",
     404: "not_found",
     409: "conflict",
+    413: "payload_too_large",
     422: "validation_error",
+    500: "internal_error",
     502: "upstream_error",
     503: "upstream_unavailable",
     504: "upstream_timeout",
@@ -93,9 +101,68 @@ async def validation_exception_handler(
     )
 
 
+async def southbound_parse_error_handler(
+    request: Request, exc: SouthboundParseError
+) -> Response:
+    """A southbound body failed to parse — expected adversarial/garbage
+    input, not a server bug.
+
+    The thermostat firmware retries hard on 5xx, and a 500 on the
+    high-frequency status path desyncs the directive channel (the same
+    retry-storm `_try_persist` was written to avoid). So we discard the
+    bad body and return a benign empty 200; the next well-formed POST
+    self-heals. Logged at WARNING (not as a traceback) because malformed
+    input is something to observe, not a crash to debug.
+
+    The status path catches this in-handler and returns a proper
+    directive instead, so this handler only fires for the other
+    southbound POSTs (boot config, idu/odu config + status, energy,
+    equipment events, metadata fallback) — all of which answer a bare
+    200 in the happy path anyway.
+    """
+    logger.warning(
+        "southbound parse failed path=%s: %s — discarding, returning 200",
+        request.url.path, exc,
+    )
+    return Response(status_code=200)
+
+
+async def unhandled_exception_handler(
+    request: Request, exc: Exception
+) -> Response:
+    """True catch-all for unexpected errors no other handler claimed.
+
+    * **Northbound** (`/v1/...`) — return the spec `Error` envelope with
+      a 500 so API clients get a typed body instead of a bare Starlette
+      HTML 500.
+    * **Southbound** (everything not under `/v1`) — still shield the
+      thermostat with a 200 so a server-side bug can't trigger a retry
+      storm, but unlike a parse error this is a genuine fault, so it is
+      logged with a full traceback (ServerErrorMiddleware re-raises after
+      we respond) for diagnosis.
+
+    `HTTPException` (incl. the 413 body-size reject) and
+    `SouthboundParseError` are handled by their own handlers, so
+    intentional status codes and expected parse failures don't land here.
+    """
+    path = request.url.path
+    if not path.startswith("/v1"):
+        logger.exception("southbound handler error on %s %s", request.method, path)
+        return Response(status_code=200)
+    logger.exception("unhandled error on %s %s", request.method, path)
+    return JSONResponse(
+        status_code=500,
+        content=_error_body("internal_error", "internal server error"),
+    )
+
+
 def register_error_handlers(app: FastAPI) -> None:
-    """Attach both handlers — called once from create_app()."""
+    """Attach all handlers — called once from create_app()."""
     app.add_exception_handler(HTTPException, http_exception_handler)
     app.add_exception_handler(
         RequestValidationError, validation_exception_handler
     )
+    app.add_exception_handler(
+        SouthboundParseError, southbound_parse_error_handler
+    )
+    app.add_exception_handler(Exception, unhandled_exception_handler)

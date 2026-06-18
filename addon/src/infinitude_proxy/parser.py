@@ -16,6 +16,45 @@ from pydantic import BaseModel, ConfigDict
 logger = logging.getLogger(__name__)
 
 
+class SouthboundParseError(ValueError):
+    """A southbound XML body could not be parsed safely.
+
+    Subclasses ``ValueError`` so existing ``except ValueError`` sites
+    (and the persistence-restore guard) keep catching it, and so the
+    FastAPI ingress layer has one exception type covering both
+    malformed XML and wrong-shape bodies.
+    """
+
+
+# One hardened parser shared by every southbound parse. The thermostat
+# is the only legitimate client, but the southbound port is reachable by
+# anything on the LAN, so we parse defensively:
+#   - resolve_entities=False / load_dtd=False / no_network=True — no DTD
+#     loading and no entity expansion, closing billion-laughs and
+#     external-entity (XXE) / DTD-retrieval vectors.
+#   - huge_tree=False — keeps lxml's built-in depth/width limits, so a
+#     pathologically deep or wide document is rejected, not parsed.
+# lxml parsers are not thread-safe, but the proxy parses on the single
+# event-loop thread, so a module-global instance is safe here.
+_SAFE_PARSER = etree.XMLParser(
+    resolve_entities=False,
+    no_network=True,
+    load_dtd=False,
+    dtd_validation=False,
+    huge_tree=False,
+)
+
+
+def _fromstring(xml_bytes: bytes) -> etree._Element:
+    """Parse southbound XML with the hardened parser, normalizing lxml's
+    ``XMLSyntaxError`` into :class:`SouthboundParseError` so callers and
+    the ingress exception handler have a single error type to catch."""
+    try:
+        return etree.fromstring(xml_bytes, parser=_SAFE_PARSER)
+    except etree.XMLSyntaxError as exc:
+        raise SouthboundParseError(f"malformed southbound XML: {exc}") from exc
+
+
 def _coerce_hvac_mode(raw: str, *, where: str) -> "HvacMode":
     """Map a thermostat-reported HVAC mode to our enum, tolerating values
     we haven't catalogued yet.
@@ -361,7 +400,7 @@ def parse_idu_config(xml_bytes: bytes) -> IduConfig:
       <furnstages>             furnace stage count
       <altitudeselect>         elevation preset (paired with <elevation>)
     """
-    root = etree.fromstring(xml_bytes)
+    root = _fromstring(xml_bytes)
     return IduConfig(
         type=_text(root, "idutype") or "",
         elevationFeet=_int(root, "elevation"),
@@ -385,7 +424,7 @@ def parse_odu_config(xml_bytes: bytes) -> OduConfig:
       <vcapfloorcfm>, <vcap…>              variable-capacity CFM envelope
       <flowratesetting>                    hydronic flow config
     """
-    root = etree.fromstring(xml_bytes)
+    root = _fromstring(xml_bytes)
     return OduConfig(
         type=_text(root, "odutype") or "",
         coolAirflowProfile=_text(root, "oducoolafl") or "",
@@ -453,7 +492,7 @@ def parse_system_config_with_tree(
     return the inner <config> element, which is what the GET response
     actually carries over the wire.
     """
-    root = etree.fromstring(xml_bytes)
+    root = _fromstring(xml_bytes)
     # POST body is <system><config>...</config></system>; the serialized
     # form we persist (and serve on GET) is a bare <config>. Accept both
     # so restore-from-DB and live POSTs share one entry point.
@@ -462,7 +501,7 @@ def parse_system_config_with_tree(
     else:
         config = root.find("config")
         if config is None:
-            raise ValueError("system XML missing <config>")
+            raise SouthboundParseError("system XML missing <config>")
     return config, _config_from_element(config)
 
 
@@ -526,7 +565,7 @@ def parse_notifications(xml_bytes: bytes) -> list[NotificationEvent]:
     One <notifications> envelope can carry multiple <notification>
     children; each in turn can list multiple <change> entries.
     """
-    root = etree.fromstring(xml_bytes)
+    root = _fromstring(xml_bytes)
     events: list[NotificationEvent] = []
     for n in root.findall("notification"):
         changes_el = n.find("changes")
@@ -572,7 +611,7 @@ def parse_telemetry(xml_bytes: bytes) -> TelemetrySnapshot:
     POSTs to /systems/{serial}/idu_config and /odu_config, handled by
     parse_idu_config / parse_odu_config.
     """
-    root = etree.fromstring(xml_bytes)
+    root = _fromstring(xml_bytes)
     system_mode = _coerce_hvac_mode(
         _text(root, "mode") or "off", where="telemetry.mode"
     )
@@ -695,7 +734,7 @@ def parse_energy(xml_bytes: bytes) -> Energy:
     Unknown periods are skipped, unknown modes are ignored — keeps
     the parser tolerant of firmware that surfaces additional fields.
     """
-    root = etree.fromstring(xml_bytes)
+    root = _fromstring(xml_bytes)
     modes: dict[str, EnergyModeFlags] = {}
     for name in _ENERGY_MODES:
         el = root.find(name)
@@ -742,7 +781,7 @@ def parse_equipment_events(xml_bytes: bytes) -> EquipmentEvents:
     `ODU` etc.), description (free-text), localtime (thermostat-local
     timestamp, no tz suffix), occurrences (counter), active (`on|off`).
     """
-    root = etree.fromstring(xml_bytes)
+    root = _fromstring(xml_bytes)
     events: list[EquipmentEvent] = []
     events_el = root.find("events")
     if events_el is not None:
@@ -813,7 +852,7 @@ def parse_odu_status(xml_bytes: bytes) -> OduStatus:
     unit — compressor stage + RPM, refrigerant pressures, blower
     state, etc. Idle-state sensors arrive as `na`/`invalid`/empty
     elements; coerced to None."""
-    root = etree.fromstring(xml_bytes)
+    root = _fromstring(xml_bytes)
     opstat = (_text(root, "opstat") or "").strip()
     return OduStatus(
         odutype=_text(root, "odutype") or "",
@@ -859,7 +898,7 @@ def parse_idu_status(xml_bytes: bytes) -> IduStatus:
     On a fancoil it's `"off"` when not locked; some firmware variants
     may emit a duration string when locked. We pass it through verbatim.
     """
-    root = etree.fromstring(xml_bytes)
+    root = _fromstring(xml_bytes)
     opstat = (_text(root, "opstat") or "").strip()
     lockout_raw = _text(root, "lockouttime")
     return IduStatus(
