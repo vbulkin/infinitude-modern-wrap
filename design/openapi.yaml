@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Infinitude Modern Proxy API
-  version: 1.0.0-draft
+  version: 2.0.0
   summary: Northbound HTTP API for the modernized Infinitude proxy.
   description: |
     First-class, OpenAPI-described HTTP API served by the Infinitude add-on
@@ -15,7 +15,7 @@ info:
 
     Out of scope for this API (handled elsewhere in the add-on):
       * The southbound protocol the thermostat uses to POST telemetry and pull changes.
-      * The Carrier cloud passthrough on the `pass_reqs` cadence.
+      * The Carrier cloud passthrough (CarrierBridge + ForwardProxy), gated by the `carrier_bridge` add-on option.
 
     See DESIGN.md for architecture and migration plan.
   license:
@@ -1677,11 +1677,14 @@ components:
 
     CarrierCloudHealth:
       type: object
-      required: [status, passReqsIntervalSeconds, consecutiveFailures]
+      required: [status, consecutiveFailures]
       properties:
         status:
           type: string
-          enum: [healthy, degraded, unreachable, disabled]
+          # `unknown` = bridge enabled but no relay attempted yet
+          # (process just started / no recent thermostat traffic);
+          # neutral, not an error.
+          enum: [healthy, degraded, unreachable, disabled, unknown]
         lastSuccess:
           type: string
           format: date-time
@@ -1693,13 +1696,22 @@ components:
         lastError:
           type: string
           nullable: true
-        passReqsIntervalSeconds:
-          type: integer
-          minimum: 10
-          maximum: 3600
         consecutiveFailures:
           type: integer
           minimum: 0
+        circuitOpen:
+          type: boolean
+          default: false
+          description: >
+            True when the bridge is refusing relays after a failure
+            streak crossed the threshold (alpha.48 circuit breaker).
+        circuitCooldownSeconds:
+          type: integer
+          minimum: 0
+          default: 0
+          description: >
+            Current cooldown duration; grows exponentially up to a cap
+            on each consecutive open→fail cycle.
 
     StateStoreHealth:
       type: object
@@ -1801,12 +1813,14 @@ components:
 
     RuntimeConfig:
       type: object
-      required: [passReqsIntervalSeconds, logLevel]
+      required: [carrierBridge, logLevel]
       properties:
-        passReqsIntervalSeconds:
-          type: integer
-          minimum: 10
-          maximum: 3600
+        carrierBridge:
+          type: boolean
+          description: >
+            Whether the implicit Carrier-cloud bridge runs. Boolean
+            toggle as of alpha.48 — replaced the prior numeric
+            `passReqsIntervalSeconds` per-call throttle.
         logLevel:
           type: string
           enum: [debug, info, warning, error]

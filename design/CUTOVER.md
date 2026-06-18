@@ -16,11 +16,11 @@ Companion to [`DESIGN.md`](./DESIGN.md) §13 (migration phases). This doc answer
 - **The two add-ons live on different ports and coexist.** As of add-on `2.0.0-alpha.5`, the Python add-on binds `3001` (container + host + ingress) and the legacy Perl add-on binds `3000`. Both can run simultaneously; only the thermostat's proxy setting decides which one it actually talks to. This replaces the earlier "swap what's bound to port 3000" plan.
 - **Persistence is local.** The Python add-on's SQLite lives in `/data/` (HA add-on convention). A full rehydrate from scratch takes one `<config>` POST (≤ a few seconds after the first thermostat tick). No data migration from the Perl add-on is required or possible — shapes differ.
 - **Cold-start is now a visible state.** As of alpha.8, `/v1/state` returns HTTP 503 (`error.code: upstream_unavailable`) until the first `<config>` POST arrives. Pre-alpha.8 returned demo/canned data; that is gone. Validation steps must account for the 503 window.
-- **Carrier cloud passthrough is not yet implemented** in the Python proxy. Cutover with passthrough-dependent features (e.g. MyInfinity app → thermostat changes) will delay those commands by up to the next manual hard-refresh. See §"Open items" below.
+- **Carrier cloud passthrough is implemented** (shipped alpha.24–55: `CarrierBridge` + `ForwardProxy`, gated by the `carrier_bridge` add-on option, default on). The thermostat's status posts mirror to Carrier, and MyInfinity-app changes reach HA via the `serverHasChanges` pull-through on the next `/config` GET. Set `carrier_bridge: false` for fully offline-first operation.
 
 ## Prerequisites (must be green before cutover)
 
-- [ ] **Full Python test suite green** (`pytest` in `addon/`). Current: 229 passing.
+- [ ] **Full Python test suite green** (`pytest` in `addon/`). Current: 379 passing.
 - [ ] **Schemathesis contract smoke** against a live Python add-on instance (openapi.yaml round-trip).
 - [ ] **Boot-sequence replay** — the Perl add-on's captured thermostat boot POSTs (`boot_01..06`) drive the Python southbound handler without error; state projects to the expected shape on `GET /v1/state`.
 - [ ] **Steady-state replay** — `telemetry_steady.xml` POSTed 10× in a row; state-store stays internally consistent, SSE emits one `state.update` per POST.
@@ -54,7 +54,7 @@ The smoke check seeds the state store with fixture data (`0000TEST0000`, synthet
 Easiest path in HA (no container shell needed):
 
 1. **Uninstall the Modern Proxy add-on** (Settings → Add-ons → Infinitude Modern Proxy → ⋮ → Uninstall). This removes the add-on's `/data` volume entirely.
-2. **Reinstall from the store** and re-enter `pass_reqs` / `log_level` in Configuration. The add-on slug is stable (`fda963a3_infinitude_modern`), so the ingress URL is unchanged.
+2. **Reinstall from the store** and re-enter `carrier_bridge` / `log_level` in Configuration. The add-on slug is stable (`fda963a3_infinitude_modern`), so the ingress URL is unchanged.
 3. **Start the add-on** and confirm `/v1/state` returns 503 `upstream_unavailable` again (`/v1/healthz` should be `degraded` with `zonesTracked: 0` and `thermostat.status: unreachable`).
 
 Alternative: stop the add-on, delete `/addon_configs/fda963a3_infinitude_modern/state.db` via the File editor or SSH add-on, start it again. Same result, preserves options, but requires another add-on to reach the filesystem. Uninstall/reinstall is shorter when state.db is the only thing you need to clear.

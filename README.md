@@ -14,7 +14,7 @@ Ships as `Infinitude Modern Proxy` in the add-on store, binds port **3001**, and
 - `/v1/events` SSE stream of `state.snapshot` / `state.update` / `hold.changed` / `notifications.received` / `health.changed` with `Last-Event-ID` resume
 - `/systems/{serial}/...` thermostat-facing southbound endpoints (Carrier wire shape preserved)
 - Catch-all forward proxy for `/http%3A//host/...` URL-encoded requests (firmware OTA)
-- Implicit Carrier-cloud bridge: status mirror, `serverHasChanges` window, scheduled-changes flag — full Perl Infinitude parity
+- Implicit Carrier-cloud bridge: per-tick status mirror, proactive config pull-through when Carrier signals `serverHasChanges`, fire-and-forget mirrors for thermostat POSTs, and a circuit breaker that backs off during Carrier outages
 
 OpenAPI spec lives at [`design/openapi.yaml`](design/openapi.yaml). Source lives under [`addon/`](addon/).
 
@@ -50,7 +50,7 @@ All cards extend a shared base with registry-driven auto-discovery, so no manual
 
 | Card type | Description |
 |---|---|
-| `custom:infinitude-hvac-card` | **Composite tabbed dashboard** — Status, Zones, Schedule, Profiles in a single card. |
+| `custom:infinitude-hvac-card` | **Composite tabbed dashboard** — Status, Schedule, Profiles tabs in a single card (per-zone rows render inside the Status tab). |
 | `custom:infinitude-status-card` | System mode, outdoor temp, humidifier, connectivity, and whole-house hold row. |
 | `custom:infinitude-zone-card` | Single zone (takes `entity: climate.xxx` in config). **Visual editor** with a dropdown filtered to Infinitude climate entities. |
 | `custom:infinitude-schedule-card` | Weekly schedule editor per zone with activity/time selectors and save. |
@@ -87,6 +87,8 @@ Features across cards:
 - `infinitude_direct.set_hold` — Set a hold for a zone with activity and optional duration
 - `infinitude_direct.set_whole_house_hold` — Set a whole-house hold with activity and optional duration
 - `infinitude_direct.cancel_whole_house_hold` — Cancel an active whole-house hold
+- `infinitude_direct.set_vacation` — Enter or update vacation mode (active/start/end/heat/cool/fan, sparse)
+- `infinitude_direct.cancel_vacation` — Exit vacation mode (keeps the configured window)
 
 ### Auto-provisioned Frontend
 - Card JS is copied to `/local/community/infinitude_direct/` and registered as a Lovelace resource with cache-busting (`?v={version}`)
@@ -99,7 +101,7 @@ Features across cards:
 
 1. Add this repository to your Home Assistant Add-on Store.
 2. Install the **Infinitude Modern Proxy** add-on.
-3. Configure `pass_reqs` (Carrier passthrough cadence) and `log_level` in the add-on options.
+3. Configure `carrier_bridge` (Carrier passthrough on/off) and `log_level` in the add-on options.
 4. Start the add-on — the proxy will be available on port **3001**, both on the LAN and through HA ingress.
 
 See [design/CUTOVER.md](design/CUTOVER.md) for redirecting the thermostat to the proxy at the LAN layer.
@@ -121,8 +123,8 @@ The integration is configured entirely through the UI. During setup you provide 
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `pass_reqs` | int | 120 | Seconds between Carrier cloud passthrough requests (10–3600). Set to `0` to disable the bridge entirely (offline-first; Carrier-cloud dot stays grey). |
-| `log_level` | enum | `info` | Proxy log verbosity (`debug` / `info` / `warning` / `error`). DEBUG surfaces per-SSE-event flow on the HA-integration side and bridge skip-reasons (cache hit, local-changes-pending). |
+| `carrier_bridge` | bool | `true` | Whether the implicit Carrier-cloud bridge runs. Set to `false` for fully offline-first operation — the addon never reaches out to `api.ing.carrier.com` (MyInfinity-app round-trips disabled, Carrier-cloud dot stays grey). Replaced the numeric `pass_reqs` cadence in alpha.48: the proxy no longer throttles or caches Carrier traffic, since Carrier's own `pingRate` directive handles device-side rate-limiting. |
+| `log_level` | enum | `info` | Proxy log verbosity (`debug` / `info` / `warning` / `error`). DEBUG surfaces per-SSE-event flow on the HA-integration side and bridge skip-reasons. |
 
 ## Architecture
 
@@ -132,7 +134,7 @@ The integration is configured entirely through the UI. During setup you provide 
                        │  www.ota.ing.carrier.com (firmware) │
                        └──────────────▲──────────────────────┘
                                       │ httpx (CarrierBridge + ForwardProxy)
-                                      │ pass_reqs cadence, allowlist-gated
+                                      │ allowlist-gated, circuit-breaker-guarded
                                       │
 Thermostat ◀──xml──▶ Infinitude Modern Proxy (Add-on) ◀──HTTP+SSE──▶ HA Integration
                               :3001                      (event-driven)
@@ -148,7 +150,7 @@ While SSE is connected, scheduled polling is disabled (the addon's 15 s keepaliv
 
 Two paths handle thermostat → Carrier requests:
 - **`ForwardProxy`** for explicit URL-encoded requests (`/http%3A//www.ota.ing.carrier.com/releaseNotes/…`) — firmware update checks. Allowlist-gated against `*.carrier.com` / `*.bryant.com`.
-- **`CarrierBridge`** for implicit thermostat-bound traffic (`/systems/{serial}/status`, `/notifications`, `/idu_config`, `/odu_config`). Mirrors to Carrier with `pass_reqs` cache TTL, opens a 120 s `carrier_changes` window when Carrier signals app-queued commands, gates `/systems/{serial}/config` GET to return Carrier's tree during the window. Full Perl Infinitude parity.
+- **`CarrierBridge`** for implicit thermostat-bound traffic (`/systems/{serial}/status`, `/notifications`, `/idu_config`, `/odu_config`). Mirrors thermostat POSTs to Carrier on every tick — Carrier's own `pingRate` directive handles device-side rate-limiting, so the proxy no longer throttles or caches (the alpha.48 simplification that retired `pass_reqs`). When a relayed status response carries `serverHasChanges=true`, the bridge latches a pull so the thermostat's next `/config` GET is relayed upstream with the device's own auth and merged into the local tree. A circuit breaker (3 consecutive failures → 30 s–5 min exponential cooldown) keeps a sustained Carrier outage from paying a timeout on every call. Every Carrier-bound call routes through a single `_outbound` chokepoint so auth can't be bypassed.
 
 Both directions land in the same SQLite `capture_traffic` table (when `/v1/debug/capture` is on) for symmetric forensic visibility.
 

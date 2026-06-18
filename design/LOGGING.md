@@ -37,9 +37,10 @@ The HA integration's logger (`custom_components.infinitude_direct.*`) follows HA
 - `state_store.append_notifications` — INFO per notification batch with `serial=… count=N first=<class>`; WARNING when an SSE subscriber's queue is full (event dropped for that subscriber).
 - `state_store.apply_telemetry` — INFO on first telemetry / config received.
 - `forward_proxy.ForwardProxy.forward` — INFO per request: `forward GET http://host/path -> 200 (Nms, B)`. WARNING on 504/502/403.
-- `carrier_bridge.CarrierBridge.relay` — INFO per request: `relay POST https://host/path -> 200 (Nms, B)`. INFO on `opened carrier_changes window (120s) on serverHasChanges=true`. WARNING on relay error (transparent to thermostat). DEBUG per `skip` reason (cache hit / local-changes-pending / disabled / window-open).
+- `carrier_bridge.CarrierBridge._outbound` — INFO per request: `relay POST https://host/path -> 200 (Nms, B)`. WARNING on relay error (transparent to thermostat) and on circuit-breaker open/close transitions. DEBUG per `skip` reason (local-changes-pending / disabled / circuit-open).
 - `parser._coerce_hvac_mode` — INFO on unknown HVAC mode coerced to OFF (heat-pump operational modes that the strict enum hadn't catalogued).
-- `southbound.get_system_config` — INFO on `serving Carrier config to thermostat (window consumed, scheduled changes 60s)`.
+- `parser._fromstring` / `errors.southbound_parse_error_handler` — WARNING on a malformed southbound body (discarded; thermostat answered a benign 200 / clean directive, never a 5xx).
+- `southbound.get_system_config` — INFO on `carrier_bridge: pull-through applied (serial=…, N B)` when a `serverHasChanges` pull is merged into the served tree.
 
 ### HA integration (`custom_components.infinitude_direct.*`)
 
